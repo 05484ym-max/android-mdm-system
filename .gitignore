@@ -15,3 +15,5 @@ node_modules/
 # General
 .DS_Store
 backend/data/
+*.jks
+*.b64
