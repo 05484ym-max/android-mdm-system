@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MDM Admin Panel</title>
+<style>
+  :root {
+    --bg: #0b0b0c;
+    --card-bg: #1a1a1c;
+    --card-border: rgba(212, 175, 55, 0.25);
+    --gold: #d4af37;
+    --gold-soft: #e8cf7a;
+    --text: #f2ede1;
+    --text-dim: #a9a49a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Georgia, 'Times New Roman', serif;
+    padding: 20px;
+    direction: rtl;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-size: 1.5rem;
+    color: var(--gold-soft);
+    margin: 0;
+    letter-spacing: 0.5px;
+  }
+  .refresh-btn {
+    background: none;
+    border: 1px solid var(--card-border);
+    color: var(--gold);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 1.1rem;
+    cursor: pointer;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 18px;
+    text-align: center;
+  }
+  .stat-card .label {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+  }
+  .stat-card .value {
+    color: var(--gold);
+    font-size: 1.8rem;
+    font-weight: bold;
+  }
+  .devices-section {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 18px;
+  }
+  .devices-section h2 {
+    color: var(--gold-soft);
+    font-size: 1.1rem;
+    margin-top: 0;
+  }
+  .device-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--card-border);
+  }
+  .device-row:last-child { border-bottom: none; }
+  .device-info { display: flex; flex-direction: column; gap: 4px; }
+  .device-id { color: var(--text); font-size: 1rem; font-weight: bold; }
+  .device-date { color: var(--text-dim); font-size: 0.78rem; }
+  .status-active { color: #7ed957; font-size: 0.85rem; }
+  .status-expired { color: #e05c5c; font-size: 0.85rem; }
+  .status-none { color: var(--text-dim); font-size: 0.85rem; }
+  .device-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .price-input {
+    width: 90px;
+    padding: 7px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: #111;
+    color: var(--text);
+    font-family: inherit;
+  }
+  .renew-btn {
+    background: var(--gold);
+    color: #0b0b0c;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: bold;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .policy-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--gold);
+    color: var(--gold);
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+  .policy-panel {
+    width: 100%;
+    margin-top: 10px;
+    padding: 12px;
+    background: #111113;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+  }
+  .app-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .app-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #1f1f22;
+    border: 1px solid var(--card-border);
+    color: var(--gold-soft);
+    border-radius: 20px;
+    padding: 5px 10px;
+    font-size: 0.8rem;
+  }
+  .remove-app-btn {
+    background: none;
+    border: none;
+    color: #e05c5c;
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0;
+  }
+  .add-app-row { display: flex; gap: 8px; }
+  .package-input {
+    flex: 1;
+    padding: 7px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: #111;
+    color: var(--text);
+    font-family: inherit;
+    direction: ltr;
+    text-align: right;
+  }
+  .add-app-btn {
+    background: var(--gold);
+    color: #0b0b0c;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-weight: bold;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .no-apps { color: var(--text-dim); font-size: 0.8rem; }
+  .empty-state {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 30px 0;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>לוח בקרה — MDM</h1>
+    <button class="refresh-btn" onclick="loadDevices()">⟳</button>
+  </header>
+
+  <div class="stats">
+    <div class="stat-card">
+      <div class="label">סה"כ מכשירים</div>
+      <div class="value" id="totalDevices">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">מנויים פעילים</div>
+      <div class="value" id="activeSubs">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">עדכון אחרון</div>
+      <div class="value" id="lastUpdate" style="font-size:0.9rem;">—</div>
+    </div>
+  </div>
+
+  <div class="devices-section">
+    <h2>מכשירים, מנויים ואפליקציות</h2>
+    <div id="devicesList">
+      <div class="empty-state">טוען...</div>
+    </div>
+  </div>
+
+<script>
+const expandedPolicyPanels = new Set();
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[c]));
+}
+
+function renderSubStatus(d) {
+  if (d.subscriptionStatus === 'active') {
+    const until = new Date(d.subscription.expiryDate).toLocaleDateString('he-IL');
+    return { text: `מנוי פעיל עד ${until} · ${d.subscription.price} ₪`, cls: 'status-active' };
+  }
+  if (d.subscriptionStatus === 'expired') {
+    const until = new Date(d.subscription.expiryDate).toLocaleDateString('he-IL');
+    return { text: `המנוי פג תוקף ב-${until}`, cls: 'status-expired' };
+  }
+  return { text: 'אין מנוי פעיל', cls: 'status-none' };
+}
+
+async function loadDevices() {
+  const listEl = document.getElementById('devicesList');
+  listEl.innerHTML = '<div class="empty-state">טוען...</div>';
+  try {
+    const res = await fetch('/api/devices');
+    const devices = await res.json();
+    document.getElementById('totalDevices').textContent = devices.length;
+    document.getElementById('activeSubs').textContent = devices.filter(d => d.subscriptionStatus === 'active').length;
+    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('he-IL');
+
+    if (devices.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">עוד לא נרשמו מכשירים</div>';
+      return;
+    }
+
+    listEl.innerHTML = devices.map(d => {
+      const status = renderSubStatus(d);
+      const apps = (d.policy && d.policy.allowedApps) || [];
+      const appsHtml = apps.length
+        ? apps.map(a => `<span class="app-chip">${escapeHtml(a)} <button class="remove-app-btn" data-device="${escapeHtml(d.deviceId)}" data-package="${escapeHtml(a)}">✕</button></span>`).join('')
+        : '<span class="no-apps">אין אפליקציות ברשימה — כרגע הכל מותר כברירת מחדל</span>';
+      const isOpen = expandedPolicyPanels.has(d.deviceId);
+      return `
+        <div class="device-row">
+          <div class="device-info">
+            <div class="device-id">${escapeHtml(d.deviceId)}</div>
+            <div class="device-date">נרשם: ${escapeHtml(new Date(d.registeredAt).toLocaleString('he-IL'))}</div>
+            <div class="${status.cls}">${escapeHtml(status.text)}</div>
+          </div>
+          <div class="device-actions">
+            <input type="number" class="price-input" data-price-for="${escapeHtml(d.deviceId)}" placeholder="מחיר ₪" min="0" />
+            <button class="renew-btn" data-renew-for="${escapeHtml(d.deviceId)}">הפעל/חדש מנוי</button>
+            <button class="policy-toggle-btn" data-toggle-for="${escapeHtml(d.deviceId)}">אפליקציות מותרות (${apps.length})</button>
+          </div>
+          <div class="policy-panel" data-policy-panel-for="${escapeHtml(d.deviceId)}" style="display:${isOpen ? 'block' : 'none'};">
+            <div class="app-list">${appsHtml}</div>
+            <div class="add-app-row">
+              <input class="package-input" data-package-input-for="${escapeHtml(d.deviceId)}" placeholder="שם חבילה, למשל com.whatsapp" />
+              <button class="add-app-btn" data-add-for="${escapeHtml(d.deviceId)}">הוסף</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    document.querySelectorAll('.renew-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const deviceId = btn.getAttribute('data-renew-for');
+        const input = document.querySelector(`.price-input[data-price-for="${CSS.escape(deviceId)}"]`);
+        const price = Number(input.value);
+        if (!input.value || isNaN(price) || price < 0) {
+          alert('נא להזין מחיר תקין');
+          return;
+        }
+        await fetch(`/api/devices/${encodeURIComponent(deviceId)}/subscription`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ price }),
+        });
+        loadDevices();
+      });
+    });
+
+    document.querySelectorAll('.policy-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const deviceId = btn.getAttribute('data-toggle-for');
+        const panel = document.querySelector(`.policy-panel[data-policy-panel-for="${CSS.escape(deviceId)}"]`);
+        const isOpen = panel.style.display !== 'none';
+        panel.style.display = isOpen ? 'none' : 'block';
+        if (isOpen) {
+          expandedPolicyPanels.delete(deviceId);
+        } else {
+          expandedPolicyPanels.add(deviceId);
+        }
+      });
+    });
+
+    document.querySelectorAll('.add-app-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const deviceId = btn.getAttribute('data-add-for');
+        const input = document.querySelector(`.package-input[data-package-input-for="${CSS.escape(deviceId)}"]`);
+        const packageName = input.value.trim();
+        if (!packageName) return;
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/apps`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ packageName }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error === 'invalid packageName format'
+            ? 'שם חבילה לא תקין. דוגמה תקינה: com.whatsapp'
+            : 'שגיאה בהוספת האפליקציה');
+          return;
+        }
+        loadDevices();
+      });
+    });
+
+    document.querySelectorAll('.remove-app-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const deviceId = btn.getAttribute('data-device');
+        const packageName = btn.getAttribute('data-package');
+        await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/apps/${encodeURIComponent(packageName)}`, {
+          method: 'DELETE',
+        });
+        loadDevices();
+      });
+    });
+  } catch (err) {
+    listEl.innerHTML = '<div class="empty-state">שגיאה בטעינת הנתונים</div>';
+  }
+}
+
+loadDevices();
+</script>
+</body>
+</html>
