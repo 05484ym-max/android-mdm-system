@@ -8,6 +8,7 @@ object Config {
     private const val PREFS = "dpc_config"
     private const val KEY_SERVER_URL = "server_url"
     private const val KEY_DEVICE_ID = "device_id"
+    private const val KEY_DEVICE_TOKEN = "device_token"
     private const val KEY_ALLOWED_APPS = "allowed_apps"
     private const val KEY_KIOSK = "kiosk_enabled"
     private const val KEY_ADMIN_PIN = "admin_pin_sha256"
@@ -26,6 +27,14 @@ object Config {
         val id = UUID.randomUUID().toString()
         p.edit().putString(KEY_DEVICE_ID, id).apply()
         return id
+    }
+
+    /** Long-lived token issued by the server at enrollment. */
+    fun deviceToken(context: Context): String? =
+        prefs(context).getString(KEY_DEVICE_TOKEN, null)
+
+    fun setDeviceToken(context: Context, token: String) {
+        prefs(context).edit().putString(KEY_DEVICE_TOKEN, token).apply()
     }
 
     /** Last policy pulled from the server, so the kiosk works offline too. */
