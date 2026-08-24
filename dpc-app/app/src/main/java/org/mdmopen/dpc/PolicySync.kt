@@ -9,16 +9,18 @@ object PolicySync {
     const val TAG = "DpcSync"
 
     /**
-     * Registers, pulls and enforces the policy, reports status, then runs any queued
-     * commands. Status is reported before commands so a reboot or wipe cannot swallow it.
+     * Pulls and enforces the policy, reports status, then runs any queued commands.
+     * Status is reported before commands so a reboot or wipe cannot swallow it.
      */
     fun run(context: Context): String {
         val serverUrl = Config.serverUrl(context)
-        require(serverUrl.isNotEmpty()) { "Server URL is not configured" }
+        require(serverUrl.isNotEmpty()) { "לא הוגדרה כתובת שרת" }
+
+        val deviceToken = Config.deviceToken(context)
+            ?: throw IllegalStateException("המכשיר אינו רשום — יש להזין קוד רישום")
 
         val deviceId = Config.deviceId(context)
-        val api = ApiClient(serverUrl)
-        api.register(deviceId)
+        val api = ApiClient(serverUrl, deviceToken)
 
         val policy = api.fetchPolicy(deviceId)
         Config.setAllowedApps(context, policy.allowedApps)

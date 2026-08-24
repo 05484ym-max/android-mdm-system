@@ -18,8 +18,10 @@ class MainActivity : Activity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var serverInput: EditText
+    private lateinit var enrollInput: EditText
     private lateinit var pinInput: EditText
     private lateinit var statusView: TextView
+    private lateinit var enrollStatusView: TextView
     private lateinit var pinStatusView: TextView
     private lateinit var logView: TextView
 
@@ -54,6 +56,16 @@ class MainActivity : Activity() {
         serverInput.inputType = InputType.TYPE_TEXT_VARIATION_URI
         root.addView(serverInput)
 
+        root.addView(sectionLabel("רישום המכשיר"))
+        enrollStatusView = TextView(this).apply {
+            textSize = 12f
+            setPadding(0, 0, 0, 12)
+        }
+        root.addView(enrollStatusView)
+        enrollInput = textField("", "קוד רישום מהפאנל")
+        root.addView(enrollInput)
+        root.addView(goldButton("רישום מכשיר") { enrollDevice() })
+
         root.addView(goldButton("סנכרון עכשיו") { syncNow() })
 
         root.addView(sectionLabel("קוד מנהל ליציאה מקיוסק"))
@@ -80,7 +92,10 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
         )
 
-        return root
+        return ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor(BG))
+            addView(root)
+        }
     }
 
     private fun textField(value: String, hintText: String) = EditText(this).apply {
@@ -119,10 +134,40 @@ class MainActivity : Activity() {
         statusView.text = if (owner) "✓ Device Owner פעיל" else "✕ לא Device Owner"
         statusView.setTextColor(Color.parseColor(if (owner) OK else BAD))
 
+        val enrolled = Config.deviceToken(this) != null
+        enrollStatusView.text = if (enrolled) "✓ המכשיר רשום בשרת" else "✕ המכשיר אינו רשום"
+        enrollStatusView.setTextColor(Color.parseColor(if (enrolled) OK else BAD))
+
         val hasPin = Config.hasAdminPin(this)
         pinStatusView.text =
             if (hasPin) "✓ קוד מנהל מוגדר" else "✕ אין קוד — כל אחד יכול לצאת מהקיוסק"
         pinStatusView.setTextColor(Color.parseColor(if (hasPin) OK else BAD))
+    }
+
+    private fun enrollDevice() {
+        val url = serverInput.text.toString().trim()
+        val code = enrollInput.text.toString().trim()
+        if (url.isEmpty() || code.isEmpty()) {
+            log("נא להזין כתובת שרת וקוד רישום")
+            return
+        }
+        Config.setServerUrl(this, url)
+        log("--- רושם מכשיר ---")
+
+        Thread {
+            try {
+                val token = ApiClient(Config.serverUrl(this@MainActivity))
+                    .enroll(Config.deviceId(this@MainActivity), code)
+                Config.setDeviceToken(this@MainActivity, token)
+                mainHandler.post {
+                    enrollInput.setText("")
+                    refreshStatus()
+                    log("המכשיר נרשם בהצלחה")
+                }
+            } catch (e: Exception) {
+                postLog("רישום נכשל: ${e.message}")
+            }
+        }.start()
     }
 
     private fun saveAdminPin() {

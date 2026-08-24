@@ -16,10 +16,21 @@ data class Policy(
 
 class ApiException(message: String) : Exception(message)
 
-class ApiClient(private val baseUrl: String) {
+class ApiClient(
+    private val baseUrl: String,
+    private val deviceToken: String? = null,
+) {
 
-    fun register(deviceId: String) {
-        request("POST", "/api/devices/register", JSONObject().put("deviceId", deviceId))
+    /** One-time enrollment. Returns the long-lived device token to store. */
+    fun enroll(deviceId: String, enrollmentToken: String): String {
+        val body = request(
+            "POST",
+            "/api/devices/register",
+            JSONObject()
+                .put("deviceId", deviceId)
+                .put("enrollmentToken", enrollmentToken),
+        )
+        return JSONObject(body).getString("deviceToken")
     }
 
     fun fetchPolicy(deviceId: String): Policy {
@@ -51,6 +62,7 @@ class ApiClient(private val baseUrl: String) {
             requestMethod = method
             connectTimeout = 10_000
             readTimeout = 15_000
+            deviceToken?.let { setRequestProperty("Authorization", "Bearer $it") }
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
