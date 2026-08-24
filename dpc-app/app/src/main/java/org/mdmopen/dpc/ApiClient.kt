@@ -14,6 +14,11 @@ data class Policy(
     val kioskEnabled: Boolean,
 )
 
+data class QueuedCommand(
+    val command: String,
+    val params: JSONObject,
+)
+
 class ApiException(message: String) : Exception(message)
 
 class ApiClient(
@@ -44,10 +49,16 @@ class ApiClient(
     }
 
     /** Pulls the queued commands. The server treats them as delivered once fetched. */
-    fun fetchCommands(deviceId: String): List<String> {
+    fun fetchCommands(deviceId: String): List<QueuedCommand> {
         val body = request("GET", "/api/devices/${segment(deviceId)}/commands", null)
         val queued = JSONObject(body).optJSONArray("commands") ?: JSONArray()
-        return (0 until queued.length()).map { queued.getJSONObject(it).getString("command") }
+        return (0 until queued.length()).map { index ->
+            val item = queued.getJSONObject(index)
+            QueuedCommand(
+                command = item.getString("command"),
+                params = item.optJSONObject("params") ?: JSONObject(),
+            )
+        }
     }
 
     fun sendHeartbeat(deviceId: String, status: JSONObject) {

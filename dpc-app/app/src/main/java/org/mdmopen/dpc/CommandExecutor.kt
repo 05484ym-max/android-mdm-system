@@ -9,9 +9,10 @@ class CommandExecutor(context: Context) {
     private val dpm =
         context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     private val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
+    private val installer = AppInstaller(context)
 
     /** Runs one queued command and returns a short description of the outcome. */
-    fun execute(command: String): String = when (command) {
+    fun execute(queued: QueuedCommand): String = when (queued.command) {
         "LOCK" -> {
             dpm.lockNow()
             "נעילה בוצעה"
@@ -25,6 +26,8 @@ class CommandExecutor(context: Context) {
             dpm.wipeData(0)
             "מחיקת המכשיר הופעלה"
         }
-        else -> "פקודה לא מוכרת: $command"
+        "INSTALL_APP" -> installer.installFromUrl(queued.params.getString("apkUrl"))
+        "UNINSTALL_APP" -> installer.uninstall(queued.params.getString("packageName"))
+        else -> "פקודה לא מוכרת: ${queued.command}"
     }
 }
