@@ -18,6 +18,9 @@ object PolicySync {
         api.register(deviceId)
 
         val policy = api.fetchPolicy(deviceId)
+        Config.setAllowedApps(context, policy.allowedApps)
+        Config.setKioskEnabled(context, policy.kioskEnabled)
+
         val enforcer = PolicyEnforcer(context)
         val result = enforcer.apply(policy)
 
@@ -31,6 +34,7 @@ object PolicySync {
 
         return "מותרות ${policy.allowedApps.size} · הושעו ${result.suspended.size} · " +
             "שוחררו ${result.unsuspended.size} · נכשלו ${result.failed.size} · " +
-            "דולגו ${result.systemAppsSkipped} אפליקציות מערכת"
+            "דולגו ${result.systemAppsSkipped} מערכת · " +
+            "קיוסק ${if (result.kioskEnabled) "פעיל" else "כבוי"}"
     }
 }

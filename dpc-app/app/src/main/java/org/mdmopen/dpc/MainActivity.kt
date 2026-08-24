@@ -14,15 +14,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
-private const val BG = "#0B0B0C"
-private const val CARD = "#1A1A1C"
-private const val GOLD = "#D4AF37"
-private const val GOLD_SOFT = "#E8CF7A"
-private const val TEXT = "#F2EDE1"
-private const val DIM = "#A9A49A"
-private const val OK = "#7ED957"
-private const val BAD = "#E05C5C"
-
 class MainActivity : Activity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -76,6 +67,13 @@ class MainActivity : Activity() {
             setOnClickListener { syncNow() }
         })
 
+        root.addView(Button(this).apply {
+            text = "יציאה מקיוסק (מקומי)"
+            setBackgroundColor(Color.parseColor(CARD))
+            setTextColor(Color.parseColor(DIM))
+            setOnClickListener { exitKioskLocally() }
+        })
+
         root.addView(sectionLabel("יומן"))
         logView = TextView(this).apply {
             textSize = 12f
@@ -113,8 +111,7 @@ class MainActivity : Activity() {
 
         Thread {
             try {
-                val summary = PolicySync.run(this@MainActivity)
-                postLog(summary)
+                postLog(PolicySync.run(this@MainActivity))
                 SyncScheduler.schedule(this@MainActivity)
                 postLog("סנכרון אוטומטי מתוזמן כל 15 דקות")
                 postLog("--- הושלם ---")
@@ -122,6 +119,16 @@ class MainActivity : Activity() {
                 postLog("שגיאה: ${e.javaClass.simpleName}: ${e.message}")
             }
         }.start()
+    }
+
+    private fun exitKioskLocally() {
+        try {
+            PolicyEnforcer(this).disableKiosk()
+            Config.setKioskEnabled(this, false)
+            log("קיוסק כובה מקומית — יחזור בסנכרון הבא אם השרת מורה על כך")
+        } catch (e: Exception) {
+            log("שגיאה: ${e.message}")
+        }
     }
 
     private fun postLog(message: String) = mainHandler.post { log(message) }
