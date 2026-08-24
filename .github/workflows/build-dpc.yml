@@ -35,7 +35,14 @@ jobs:
       - name: Decode signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/dpc.jks"
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > "$RUNNER_TEMP/dpc.jks"
+          ls -l "$RUNNER_TEMP/dpc.jks"
+
+      - name: Verify keystore is readable
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: keytool -list -keystore "$RUNNER_TEMP/dpc.jks" -storepass "$KEYSTORE_PASSWORD"
 
       - name: Build debug APK
         working-directory: dpc-app
