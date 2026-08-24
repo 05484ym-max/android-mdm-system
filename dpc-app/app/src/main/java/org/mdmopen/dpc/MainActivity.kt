@@ -2,7 +2,6 @@ package org.mdmopen.dpc
 
 import android.app.Activity
 import android.graphics.Color
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,7 +13,6 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import org.json.JSONObject
 
 private const val BG = "#0B0B0C"
 private const val CARD = "#1A1A1C"
@@ -22,6 +20,8 @@ private const val GOLD = "#D4AF37"
 private const val GOLD_SOFT = "#E8CF7A"
 private const val TEXT = "#F2EDE1"
 private const val DIM = "#A9A49A"
+private const val OK = "#7ED957"
+private const val BAD = "#E05C5C"
 
 class MainActivity : Activity() {
 
@@ -70,11 +70,10 @@ class MainActivity : Activity() {
         root.addView(serverInput)
 
         root.addView(Button(this).apply {
-            text = "רישום וסנכרון מדיניות"
+            text = "סנכרון עכשיו"
             setBackgroundColor(Color.parseColor(GOLD))
             setTextColor(Color.parseColor(BG))
             setOnClickListener { syncNow() }
-            (layoutParams as? LinearLayout.LayoutParams)?.topMargin = 24
         })
 
         root.addView(sectionLabel("יומן"))
@@ -98,10 +97,9 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus() {
-        val enforcer = PolicyEnforcer(this)
-        val owner = enforcer.isDeviceOwner()
+        val owner = PolicyEnforcer(this).isDeviceOwner()
         statusView.text = if (owner) "✓ Device Owner פעיל" else "✕ לא Device Owner"
-        statusView.setTextColor(Color.parseColor(if (owner) "#7ED957" else "#E05C5C"))
+        statusView.setTextColor(Color.parseColor(if (owner) OK else BAD))
     }
 
     private fun syncNow() {
@@ -111,35 +109,15 @@ class MainActivity : Activity() {
             return
         }
         Config.setServerUrl(this, url)
-        val deviceId = Config.deviceId(this)
         log("--- מסנכרן מול $url ---")
 
         Thread {
             try {
-                val api = ApiClient(Config.serverUrl(this@MainActivity))
-                api.register(deviceId)
-                postLog("נרשם בשרת · deviceId=$deviceId")
-
-                val policy = api.fetchPolicy(deviceId)
-                postLog("מדיניות התקבלה · ${policy.allowedApps.size} אפליקציות מותרות")
-
-                val enforcer = PolicyEnforcer(this@MainActivity)
-                val result = enforcer.apply(policy)
-                postLog("חסימת התקנות הופעלה")
-                postLog(
-                    "הושעו ${result.suspended.size} · שוחררו ${result.unsuspended.size} · " +
-                        "נכשלו ${result.failed.size} · דולגו ${result.systemAppsSkipped} אפליקציות מערכת"
-                )
-
-                api.sendHeartbeat(
-                    deviceId,
-                    JSONObject()
-                        .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
-                        .put("androidVersion", Build.VERSION.RELEASE)
-                        .put("isDeviceOwner", enforcer.isDeviceOwner()),
-                )
-                postLog("דיווח מצב נשלח")
-                postLog("--- סנכרון הושלם ---")
+                val summary = PolicySync.run(this@MainActivity)
+                postLog(summary)
+                SyncScheduler.schedule(this@MainActivity)
+                postLog("סנכרון אוטומטי מתוזמן כל 15 דקות")
+                postLog("--- הושלם ---")
             } catch (e: Exception) {
                 postLog("שגיאה: ${e.javaClass.simpleName}: ${e.message}")
             }
