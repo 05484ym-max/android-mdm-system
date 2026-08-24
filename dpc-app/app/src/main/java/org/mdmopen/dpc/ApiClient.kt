@@ -32,6 +32,13 @@ class ApiClient(private val baseUrl: String) {
         )
     }
 
+    /** Pulls the queued commands. The server treats them as delivered once fetched. */
+    fun fetchCommands(deviceId: String): List<String> {
+        val body = request("GET", "/api/devices/${segment(deviceId)}/commands", null)
+        val queued = JSONObject(body).optJSONArray("commands") ?: JSONArray()
+        return (0 until queued.length()).map { queued.getJSONObject(it).getString("command") }
+    }
+
     fun sendHeartbeat(deviceId: String, status: JSONObject) {
         request("POST", "/api/devices/${segment(deviceId)}/heartbeat", status)
     }
