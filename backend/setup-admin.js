@@ -15,16 +15,29 @@ if (password.length < 8) {
 }
 
 const envPath = path.join(__dirname, '.env');
+
+// Keep whatever is already configured (DATABASE_URL and friends).
+const settings = new Map();
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const separator = trimmed.indexOf('=');
+    if (separator === -1) continue;
+    settings.set(trimmed.slice(0, separator), trimmed.slice(separator + 1));
+  }
+}
+
+settings.set('ADMIN_USERNAME', username);
+settings.set('ADMIN_PASSWORD_HASH', bcrypt.hashSync(password, 10));
+if (!settings.get('JWT_SECRET')) {
+  settings.set('JWT_SECRET', crypto.randomBytes(32).toString('hex'));
+}
+
 fs.writeFileSync(
   envPath,
-  [
-    `ADMIN_USERNAME=${username}`,
-    `ADMIN_PASSWORD_HASH=${bcrypt.hashSync(password, 10)}`,
-    `JWT_SECRET=${crypto.randomBytes(32).toString('hex')}`,
-    '',
-  ].join('\n'),
+  [...settings].map(([key, value]) => `${key}=${value}`).join('\n') + '\n',
   { mode: 0o600 },
 );
 
-console.log('Admin credentials written to backend/.env');
-console.log('Restart the server for them to take effect.');
+console.log('Admin credentials saved. Restart the server for them to take effect.');

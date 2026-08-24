@@ -1,40 +1,35 @@
+require('dotenv').config();
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const db = require('./db');
 
 const app = express();
 app.use(express.json());
+app.use(cookieParser());
+
+// Behind a reverse proxy (Render, Caddy) req.ip and secure cookies need this.
+if (process.env.TRUST_PROXY === '1') {
+  app.set('trust proxy', 1);
+}
+const SECURE_COOKIES = process.env.SECURE_COOKIES === '1';
+
 app.use(express.static(path.join(__dirname, '../admin-panel')));
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
-const ENROLLMENTS_FILE = path.join(DATA_DIR, 'enrollments.json');
-
-function load(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-
-function save(file, value) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2));
-}
-
-let devices = load(DEVICES_FILE, []);
-let enrollments = load(ENROLLMENTS_FILE, []);
-
-const saveDevices = () => save(DEVICES_FILE, devices);
-const saveEnrollments = () => save(ENROLLMENTS_FILE, enrollments);
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
+const JWT_SECRET = process.env.JWT_SECRET;
+const AUTH_ENABLED = Boolean(ADMIN_USERNAME && ADMIN_PASSWORD_HASH && JWT_SECRET);
 
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
-const ALLOWED_COMMANDS = ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE'];
+const ALLOWED_COMMANDS =
+  ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP'];
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
-const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 /** Constant-time comparison of two hex digests of equal length. */
 function digestsMatch(a, b) {
@@ -49,19 +44,9 @@ function bearerToken(req) {
   return header.startsWith('Bearer ') ? header.slice(7) : '';
 }
 
-/** Guards the endpoints a managed device calls: the token must match that device. */
-function requireDevice(req, res, next) {
-  const device = devices.find(d => d.deviceId === req.params.deviceId);
-  if (!device || !device.authTokenHash) {
-    return res.status(404).json({ error: 'device not found' });
-  }
-  const token = bearerToken(req);
-  if (!token || !digestsMatch(sha256(token), device.authTokenHash)) {
-    return res.status(401).json({ error: 'invalid device token' });
-  }
-  req.device = device;
-  next();
-}
+/** Lets async handlers reject into the Express error handler. */
+const wrap = handler => (req, res, next) =>
+  Promise.resolve(handler(req, res, next)).catch(next);
 
 function publicDevice(device) {
   const { authTokenHash, ...rest } = device;
@@ -79,40 +64,106 @@ function publicDevice(device) {
   };
 }
 
+// ---------- authentication ----------
+
+/** Guards the admin endpoints. Open when no credentials are configured. */
+function requireAdmin(req, res, next) {
+  if (!AUTH_ENABLED) return next();
+  const token = req.cookies.session;
+  if (!token) {
+    return res.status(401).json({ error: 'not authenticated' });
+  }
+  try {
+    jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'invalid session' });
+  }
+}
+
+/** Guards the endpoints a managed device calls: the token must match that device. */
+const requireDevice = wrap(async (req, res, next) => {
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device || !device.authTokenHash) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+  const token = bearerToken(req);
+  if (!token || !digestsMatch(sha256(token), device.authTokenHash)) {
+    return res.status(401).json({ error: 'invalid device token' });
+  }
+  req.device = device;
+  next();
+});
+
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+
+/** Slows down password guessing against the panel. */
+function loginRateLimited(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (!entry || now - entry.first > LOGIN_WINDOW_MS) {
+    loginAttempts.set(ip, { first: now, count: 1 });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > LOGIN_MAX_ATTEMPTS;
+}
+
+app.post('/api/login', (req, res) => {
+  if (loginRateLimited(req.ip)) {
+    return res.status(429).json({ error: 'too many attempts, try again later' });
+  }
+  if (!AUTH_ENABLED) {
+    return res.status(400).json({ error: 'authentication is not configured' });
+  }
+  const { username, password } = req.body;
+  if (username !== ADMIN_USERNAME ||
+      !bcrypt.compareSync(String(password || ''), ADMIN_PASSWORD_HASH)) {
+    return res.status(401).json({ error: 'invalid credentials' });
+  }
+  const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '7d' });
+  res.cookie('session', token, {
+    httpOnly: true,
+    secure: SECURE_COOKIES,
+    sameSite: 'strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+  res.json({ status: 'ok' });
+});
+
+app.post('/api/logout', (req, res) => {
+  res.clearCookie('session');
+  res.json({ status: 'ok' });
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
 // ---------- enrollment (admin) ----------
 
-app.post('/api/enrollments', (req, res) => {
+app.post('/api/enrollments', requireAdmin, wrap(async (req, res) => {
   const token = crypto.randomBytes(4).toString('hex').toUpperCase();
-  const entry = {
-    id: crypto.randomUUID(),
-    tokenHash: sha256(token),
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + ENROLLMENT_TTL_MS).toISOString(),
-    usedAt: null,
-    deviceId: null,
-  };
-  enrollments.push(entry);
-  saveEnrollments();
-  res.json({ token, expiresAt: entry.expiresAt });
-});
+  const expiresAt = new Date(Date.now() + ENROLLMENT_TTL_MS);
+  await db.createEnrollment(crypto.randomUUID(), sha256(token), expiresAt);
+  res.json({ token, expiresAt: expiresAt.toISOString() });
+}));
 
-app.get('/api/enrollments', (req, res) => {
-  res.json(enrollments.map(({ tokenHash, ...rest }) => rest));
-});
+app.get('/api/enrollments', requireAdmin, wrap(async (req, res) => {
+  res.json(await db.listEnrollments());
+}));
 
 // ---------- device endpoints ----------
 
-app.post('/api/devices/register', (req, res) => {
+app.post('/api/devices/register', wrap(async (req, res) => {
   const { deviceId, enrollmentToken } = req.body;
   if (typeof deviceId !== 'string' || !deviceId) {
     return res.status(400).json({ error: 'deviceId is required' });
   }
 
-  const existing = devices.find(d => d.deviceId === deviceId);
+  const existing = await db.getDevice(deviceId);
   if (existing) {
     const token = bearerToken(req);
     if (token && digestsMatch(sha256(token), existing.authTokenHash)) {
@@ -125,34 +176,18 @@ app.post('/api/devices/register', (req, res) => {
     return res.status(400).json({ error: 'enrollmentToken is required' });
   }
 
-  const now = Date.now();
-  const candidate = sha256(enrollmentToken.trim().toUpperCase());
-  const enrollment = enrollments.find(e =>
-    !e.usedAt &&
-    new Date(e.expiresAt).getTime() > now &&
-    digestsMatch(candidate, e.tokenHash));
-
-  if (!enrollment) {
+  const consumed = await db.consumeEnrollment(
+    sha256(enrollmentToken.trim().toUpperCase()),
+    deviceId,
+  );
+  if (!consumed) {
     return res.status(401).json({ error: 'invalid or expired enrollment token' });
   }
 
   const deviceToken = crypto.randomBytes(32).toString('hex');
-  devices.push({
-    deviceId,
-    registeredAt: new Date().toISOString(),
-    authTokenHash: sha256(deviceToken),
-    subscription: null,
-    policy: { allowedApps: [], kioskEnabled: false },
-    pendingCommands: [],
-    commandHistory: [],
-  });
-  enrollment.usedAt = new Date().toISOString();
-  enrollment.deviceId = deviceId;
-  saveDevices();
-  saveEnrollments();
-
+  await db.createDevice(deviceId, sha256(deviceToken));
   res.json({ status: 'enrolled', deviceId, deviceToken });
-});
+}));
 
 app.get('/api/devices/:deviceId/policy', requireDevice, (req, res) => {
   const policy = req.device.policy || {};
@@ -162,43 +197,35 @@ app.get('/api/devices/:deviceId/policy', requireDevice, (req, res) => {
   });
 });
 
-app.get('/api/devices/:deviceId/commands', requireDevice, (req, res) => {
-  const device = req.device;
-  const delivered = device.pendingCommands || [];
-  if (!device.commandHistory) device.commandHistory = [];
-  device.commandHistory.push(
-    ...delivered.map(c => ({ ...c, deliveredAt: new Date().toISOString() }))
-  );
-  device.pendingCommands = [];
-  saveDevices();
-  res.json({ commands: delivered });
-});
+app.get('/api/devices/:deviceId/commands', requireDevice, wrap(async (req, res) => {
+  res.json({ commands: await db.takePendingCommands(req.params.deviceId) });
+}));
 
-app.post('/api/devices/:deviceId/heartbeat', requireDevice, (req, res) => {
+app.post('/api/devices/:deviceId/heartbeat', requireDevice, wrap(async (req, res) => {
   const { model, androidVersion, isDeviceOwner } = req.body;
-  const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
-  req.device.status = {
+  const str = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
+  await db.setStatus(req.params.deviceId, {
     model: str(model, 100),
     androidVersion: str(androidVersion, 20),
     isDeviceOwner: isDeviceOwner === true,
     lastSeen: new Date().toISOString(),
-  };
-  saveDevices();
+  });
   res.json({ status: 'ok' });
-});
+}));
 
 // ---------- admin endpoints ----------
 
-app.get('/api/devices', (req, res) => {
+app.get('/api/devices', requireAdmin, wrap(async (req, res) => {
+  const devices = await db.listDevices();
   res.json(devices.map(publicDevice));
-});
+}));
 
-app.post('/api/devices/:deviceId/subscription', (req, res) => {
+app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, res) => {
   const { price } = req.body;
   if (typeof price !== 'number' || price < 0) {
     return res.status(400).json({ error: 'price must be a non-negative number' });
   }
-  const device = devices.find(d => d.deviceId === req.params.deviceId);
+  const device = await db.getDevice(req.params.deviceId);
   if (!device) {
     return res.status(404).json({ error: 'device not found' });
   }
@@ -206,80 +233,110 @@ app.post('/api/devices/:deviceId/subscription', (req, res) => {
   const startDate = new Date();
   const expiryDate = new Date(startDate);
   expiryDate.setFullYear(expiryDate.getFullYear() + 1);
-  device.subscription = {
+
+  const updated = await db.setSubscription(req.params.deviceId, {
     price,
     startDate: startDate.toISOString(),
     expiryDate: expiryDate.toISOString(),
-  };
-  saveDevices();
-  res.json(publicDevice(device));
-});
+  });
+  res.json(publicDevice(updated));
+}));
 
-app.post('/api/devices/:deviceId/policy/apps', (req, res) => {
+app.post('/api/devices/:deviceId/policy/apps', requireAdmin, wrap(async (req, res) => {
   const { packageName } = req.body;
   if (typeof packageName !== 'string' || !PACKAGE_NAME_REGEX.test(packageName)) {
     return res.status(400).json({ error: 'invalid packageName format' });
   }
-  const device = devices.find(d => d.deviceId === req.params.deviceId);
+  const device = await db.getDevice(req.params.deviceId);
   if (!device) {
     return res.status(404).json({ error: 'device not found' });
   }
-  if (!device.policy) device.policy = { allowedApps: [], kioskEnabled: false };
-  if (!device.policy.allowedApps.includes(packageName)) {
-    device.policy.allowedApps.push(packageName);
-    saveDevices();
-  }
-  res.json(publicDevice(device));
-});
 
-app.delete('/api/devices/:deviceId/policy/apps/:packageName', (req, res) => {
-  const device = devices.find(d => d.deviceId === req.params.deviceId);
-  if (!device) {
-    return res.status(404).json({ error: 'device not found' });
+  const policy = device.policy || { allowedApps: [], kioskEnabled: false };
+  if (policy.allowedApps.includes(packageName)) {
+    return res.json(publicDevice(device));
   }
-  if (device.policy) {
-    device.policy.allowedApps =
-      device.policy.allowedApps.filter(p => p !== req.params.packageName);
-    saveDevices();
-  }
-  res.json(publicDevice(device));
-});
+  policy.allowedApps = [...policy.allowedApps, packageName];
+  res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+}));
 
-app.post('/api/devices/:deviceId/policy/kiosk', (req, res) => {
+app.delete('/api/devices/:deviceId/policy/apps/:packageName', requireAdmin,
+  wrap(async (req, res) => {
+    const device = await db.getDevice(req.params.deviceId);
+    if (!device) {
+      return res.status(404).json({ error: 'device not found' });
+    }
+    const policy = device.policy || { allowedApps: [], kioskEnabled: false };
+    policy.allowedApps = policy.allowedApps.filter(p => p !== req.params.packageName);
+    res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+  }));
+
+app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, res) => {
   const { enabled } = req.body;
   if (typeof enabled !== 'boolean') {
     return res.status(400).json({ error: 'enabled must be a boolean' });
   }
-  const device = devices.find(d => d.deviceId === req.params.deviceId);
+  const device = await db.getDevice(req.params.deviceId);
   if (!device) {
     return res.status(404).json({ error: 'device not found' });
   }
-  if (!device.policy) device.policy = { allowedApps: [], kioskEnabled: false };
-  device.policy.kioskEnabled = enabled;
-  saveDevices();
-  res.json(publicDevice(device));
-});
+  const policy = device.policy || { allowedApps: [], kioskEnabled: false };
+  policy.kioskEnabled = enabled;
+  res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+}));
 
-app.post('/api/devices/:deviceId/commands', (req, res) => {
+function validateCommandParams(command, params) {
+  if (command === 'INSTALL_APP') {
+    return /^https?:\/\//.test(params.apkUrl || '')
+      ? null
+      : 'apkUrl must be an http(s) URL';
+  }
+  if (command === 'UNINSTALL_APP') {
+    return PACKAGE_NAME_REGEX.test(params.packageName || '')
+      ? null
+      : 'packageName is invalid';
+  }
+  return null;
+}
+
+app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) => {
   const { command } = req.body;
+  const params =
+    req.body.params && typeof req.body.params === 'object' ? req.body.params : {};
   if (!ALLOWED_COMMANDS.includes(command)) {
     return res.status(400).json({ error: 'invalid command' });
   }
-  const device = devices.find(d => d.deviceId === req.params.deviceId);
+  const paramError = validateCommandParams(command, params);
+  if (paramError) {
+    return res.status(400).json({ error: paramError });
+  }
+  const device = await db.getDevice(req.params.deviceId);
   if (!device) {
     return res.status(404).json({ error: 'device not found' });
   }
-  if (!device.pendingCommands) device.pendingCommands = [];
-  device.pendingCommands.push({
-    id: crypto.randomUUID(),
-    command,
-    queuedAt: new Date().toISOString(),
-  });
-  saveDevices();
-  res.json(publicDevice(device));
+  await db.queueCommand(req.params.deviceId, crypto.randomUUID(), command, params);
+  const refreshed = await db.getDevice(req.params.deviceId);
+  res.json(publicDevice(refreshed));
+}));
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'internal error' });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Backend listening on port ${PORT}`);
-});
+
+db.init()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Backend listening on port ${PORT}`);
+      if (!AUTH_ENABLED) {
+        console.warn('WARNING: admin panel is UNPROTECTED.');
+        console.warn('Run "node setup-admin.js <user> <password>" before exposing this server.');
+      }
+    });
+  })
+  .catch(err => {
+    console.error('Failed to initialise the database:', err.message);
+    process.exit(1);
+  });
