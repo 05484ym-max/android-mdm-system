@@ -2,13 +2,16 @@ package org.mdmopen.dpc
 
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -55,7 +58,7 @@ class KioskLauncherActivity : Activity() {
             setTextColor(Color.parseColor(GOLD_SOFT))
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 48)
-            setOnLongClickListener { openAdminScreen(); true }
+            setOnLongClickListener { promptForAdminAccess(); true }
         })
 
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -109,6 +112,29 @@ class KioskLauncherActivity : Activity() {
 
     private fun spacer() = View(this).apply {
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 16)
+    }
+
+    private fun promptForAdminAccess() {
+        if (!Config.hasAdminPin(this)) {
+            openAdminScreen()
+            return
+        }
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            hint = "קוד מנהל"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("גישת מנהל")
+            .setView(input)
+            .setPositiveButton("אישור") { _, _ ->
+                if (Config.checkAdminPin(this, input.text.toString())) {
+                    openAdminScreen()
+                } else {
+                    Toast.makeText(this, "קוד שגוי", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("ביטול", null)
+            .show()
     }
 
     private fun openAdminScreen() {

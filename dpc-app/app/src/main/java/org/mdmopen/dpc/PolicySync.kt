@@ -8,7 +8,10 @@ object PolicySync {
 
     const val TAG = "DpcSync"
 
-    /** Registers, pulls the policy, enforces it and reports status. Throws on failure. */
+    /**
+     * Registers, pulls and enforces the policy, reports status, then runs any queued
+     * commands. Status is reported before commands so a reboot or wipe cannot swallow it.
+     */
     fun run(context: Context): String {
         val serverUrl = Config.serverUrl(context)
         require(serverUrl.isNotEmpty()) { "Server URL is not configured" }
@@ -32,9 +35,29 @@ object PolicySync {
                 .put("isDeviceOwner", enforcer.isDeviceOwner()),
         )
 
-        return "מותרות ${policy.allowedApps.size} · הושעו ${result.suspended.size} · " +
-            "שוחררו ${result.unsuspended.size} · נכשלו ${result.failed.size} · " +
-            "דולגו ${result.systemAppsSkipped} מערכת · " +
-            "קיוסק ${if (result.kioskEnabled) "פעיל" else "כבוי"}"
+        val outcomes = runQueuedCommands(context, api, deviceId)
+
+        return buildString {
+            append("מותרות ${policy.allowedApps.size} · הושעו ${result.suspended.size} · ")
+            append("שוחררו ${result.unsuspended.size} · נכשלו ${result.failed.size} · ")
+            append("דולגו ${result.systemAppsSkipped} מערכת · ")
+            append("קיוסק ${if (result.kioskEnabled) "פעיל" else "כבוי"}")
+            outcomes.forEach { append("\n• $it") }
+        }
+    }
+
+    private fun runQueuedCommands(
+        context: Context,
+        api: ApiClient,
+        deviceId: String,
+    ): List<String> {
+        val executor = CommandExecutor(context)
+        return api.fetchCommands(deviceId).map { command ->
+            try {
+                executor.execute(command)
+            } catch (e: Exception) {
+                "פקודה $command נכשלה: ${e.message}"
+            }
+        }
     }
 }

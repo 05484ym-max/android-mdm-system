@@ -18,7 +18,9 @@ class MainActivity : Activity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var serverInput: EditText
+    private lateinit var pinInput: EditText
     private lateinit var statusView: TextView
+    private lateinit var pinStatusView: TextView
     private lateinit var logView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,31 +50,25 @@ class MainActivity : Activity() {
         root.addView(statusView)
 
         root.addView(sectionLabel("כתובת השרת"))
-        serverInput = EditText(this).apply {
-            setText(Config.serverUrl(this@MainActivity))
-            hint = "http://192.168.1.10:3000"
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
-            setSingleLine()
-            setTextColor(Color.parseColor(TEXT))
-            setHintTextColor(Color.parseColor("#6B6862"))
-            setBackgroundColor(Color.parseColor(CARD))
-            setPadding(24, 24, 24, 24)
-        }
+        serverInput = textField(Config.serverUrl(this), "http://192.168.1.10:3000")
+        serverInput.inputType = InputType.TYPE_TEXT_VARIATION_URI
         root.addView(serverInput)
 
-        root.addView(Button(this).apply {
-            text = "סנכרון עכשיו"
-            setBackgroundColor(Color.parseColor(GOLD))
-            setTextColor(Color.parseColor(BG))
-            setOnClickListener { syncNow() }
-        })
+        root.addView(goldButton("סנכרון עכשיו") { syncNow() })
 
-        root.addView(Button(this).apply {
-            text = "יציאה מקיוסק (מקומי)"
-            setBackgroundColor(Color.parseColor(CARD))
-            setTextColor(Color.parseColor(DIM))
-            setOnClickListener { exitKioskLocally() }
-        })
+        root.addView(sectionLabel("קוד מנהל ליציאה מקיוסק"))
+        pinStatusView = TextView(this).apply {
+            textSize = 12f
+            setPadding(0, 0, 0, 12)
+        }
+        root.addView(pinStatusView)
+        pinInput = textField("", "קוד חדש (4 ספרות ומעלה)")
+        pinInput.inputType =
+            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        root.addView(pinInput)
+        root.addView(goldButton("שמירת קוד") { saveAdminPin() })
+
+        root.addView(quietButton("יציאה מקיוסק (מקומי)") { exitKioskLocally() })
 
         root.addView(sectionLabel("יומן"))
         logView = TextView(this).apply {
@@ -87,6 +83,30 @@ class MainActivity : Activity() {
         return root
     }
 
+    private fun textField(value: String, hintText: String) = EditText(this).apply {
+        setText(value)
+        hint = hintText
+        setSingleLine()
+        setTextColor(Color.parseColor(TEXT))
+        setHintTextColor(Color.parseColor("#6B6862"))
+        setBackgroundColor(Color.parseColor(CARD))
+        setPadding(24, 24, 24, 24)
+    }
+
+    private fun goldButton(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        setBackgroundColor(Color.parseColor(GOLD))
+        setTextColor(Color.parseColor(BG))
+        setOnClickListener { onClick() }
+    }
+
+    private fun quietButton(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        setBackgroundColor(Color.parseColor(CARD))
+        setTextColor(Color.parseColor(DIM))
+        setOnClickListener { onClick() }
+    }
+
     private fun sectionLabel(text: String) = TextView(this).apply {
         this.text = text
         textSize = 13f
@@ -98,6 +118,23 @@ class MainActivity : Activity() {
         val owner = PolicyEnforcer(this).isDeviceOwner()
         statusView.text = if (owner) "✓ Device Owner פעיל" else "✕ לא Device Owner"
         statusView.setTextColor(Color.parseColor(if (owner) OK else BAD))
+
+        val hasPin = Config.hasAdminPin(this)
+        pinStatusView.text =
+            if (hasPin) "✓ קוד מנהל מוגדר" else "✕ אין קוד — כל אחד יכול לצאת מהקיוסק"
+        pinStatusView.setTextColor(Color.parseColor(if (hasPin) OK else BAD))
+    }
+
+    private fun saveAdminPin() {
+        val pin = pinInput.text.toString()
+        if (pin.length < 4) {
+            log("הקוד חייב להיות באורך 4 ספרות לפחות")
+            return
+        }
+        Config.setAdminPin(this, pin)
+        pinInput.setText("")
+        refreshStatus()
+        log("קוד המנהל נשמר")
     }
 
     private fun syncNow() {

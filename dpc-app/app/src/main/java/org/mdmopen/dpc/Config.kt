@@ -1,6 +1,7 @@
 package org.mdmopen.dpc
 
 import android.content.Context
+import java.security.MessageDigest
 import java.util.UUID
 
 object Config {
@@ -9,6 +10,7 @@ object Config {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_ALLOWED_APPS = "allowed_apps"
     private const val KEY_KIOSK = "kiosk_enabled"
+    private const val KEY_ADMIN_PIN = "admin_pin_sha256"
 
     fun serverUrl(context: Context): String =
         prefs(context).getString(KEY_SERVER_URL, "").orEmpty()
@@ -40,6 +42,21 @@ object Config {
     fun setKioskEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_KIOSK, enabled).apply()
     }
+
+    fun hasAdminPin(context: Context): Boolean =
+        prefs(context).getString(KEY_ADMIN_PIN, null) != null
+
+    fun setAdminPin(context: Context, pin: String) {
+        prefs(context).edit().putString(KEY_ADMIN_PIN, sha256(pin)).apply()
+    }
+
+    fun checkAdminPin(context: Context, pin: String): Boolean =
+        prefs(context).getString(KEY_ADMIN_PIN, null) == sha256(pin)
+
+    private fun sha256(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray())
+            .joinToString("") { "%02x".format(it) }
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
