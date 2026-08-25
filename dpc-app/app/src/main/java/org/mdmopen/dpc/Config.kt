@@ -11,7 +11,10 @@ object Config {
     private const val KEY_DEVICE_TOKEN = "device_token"
     private const val KEY_ALLOWED_APPS = "allowed_apps"
     private const val KEY_KIOSK = "kiosk_enabled"
+    private const val KEY_SYNC_MINUTES = "sync_interval_minutes"
     private const val KEY_ADMIN_PIN = "admin_pin_sha256"
+
+    const val DEFAULT_SYNC_MINUTES = 60
 
     fun serverUrl(context: Context): String =
         prefs(context).getString(KEY_SERVER_URL, "").orEmpty()
@@ -50,6 +53,13 @@ object Config {
 
     fun setKioskEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_KIOSK, enabled).apply()
+    }
+
+    fun syncIntervalMinutes(context: Context): Int =
+        prefs(context).getInt(KEY_SYNC_MINUTES, DEFAULT_SYNC_MINUTES)
+
+    fun setSyncIntervalMinutes(context: Context, minutes: Int) {
+        prefs(context).edit().putInt(KEY_SYNC_MINUTES, minutes).apply()
     }
 
     fun hasAdminPin(context: Context): Boolean =

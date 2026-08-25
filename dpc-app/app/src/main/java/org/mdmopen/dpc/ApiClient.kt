@@ -12,11 +12,17 @@ import java.net.URLEncoder
 data class Policy(
     val allowedApps: List<String>,
     val kioskEnabled: Boolean,
+    val syncIntervalMinutes: Int,
 )
 
 data class QueuedCommand(
     val command: String,
     val params: JSONObject,
+)
+
+data class SyncResult(
+    val policy: Policy,
+    val commands: List<QueuedCommand>,
 )
 
 class ApiException(message: String) : Exception(message)
@@ -38,31 +44,35 @@ class ApiClient(
         return JSONObject(body).getString("deviceToken")
     }
 
-    fun fetchPolicy(deviceId: String): Policy {
-        val body = request("GET", "/api/devices/${segment(deviceId)}/policy", null)
+    /**
+     * A whole sync cycle in one round trip: reports status, returns the policy and
+     * any queued commands. The server marks those commands delivered.
+     */
+    fun sync(deviceId: String, status: JSONObject): SyncResult {
+        val body = request("POST", "/api/devices/${segment(deviceId)}/sync", status)
         val json = JSONObject(body)
-        val apps = json.optJSONArray("allowedApps") ?: JSONArray()
-        return Policy(
-            allowedApps = (0 until apps.length()).map { apps.getString(it) },
-            kioskEnabled = json.optBoolean("kioskEnabled", false),
-        )
-    }
 
-    /** Pulls the queued commands. The server treats them as delivered once fetched. */
-    fun fetchCommands(deviceId: String): List<QueuedCommand> {
-        val body = request("GET", "/api/devices/${segment(deviceId)}/commands", null)
-        val queued = JSONObject(body).optJSONArray("commands") ?: JSONArray()
-        return (0 until queued.length()).map { index ->
+        val policyJson = json.getJSONObject("policy")
+        val apps = policyJson.optJSONArray("allowedApps") ?: JSONArray()
+        val policy = Policy(
+            allowedApps = (0 until apps.length()).map { apps.getString(it) },
+            kioskEnabled = policyJson.optBoolean("kioskEnabled", false),
+            syncIntervalMinutes = policyJson.optInt(
+                "syncIntervalMinutes",
+                Config.DEFAULT_SYNC_MINUTES,
+            ),
+        )
+
+        val queued = json.optJSONArray("commands") ?: JSONArray()
+        val commands = (0 until queued.length()).map { index ->
             val item = queued.getJSONObject(index)
             QueuedCommand(
                 command = item.getString("command"),
                 params = item.optJSONObject("params") ?: JSONObject(),
             )
         }
-    }
 
-    fun sendHeartbeat(deviceId: String, status: JSONObject) {
-        request("POST", "/api/devices/${segment(deviceId)}/heartbeat", status)
+        return SyncResult(policy, commands)
     }
 
     private fun segment(value: String): String =
@@ -71,8 +81,9 @@ class ApiClient(
     private fun request(method: String, path: String, body: JSONObject?): String {
         val conn = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = 15_000
+            // A sleeping free-tier instance can take close to a minute to wake up.
+            connectTimeout = 20_000
+            readTimeout = 90_000
             deviceToken?.let { setRequestProperty("Authorization", "Bearer $it") }
             if (body != null) {
                 doOutput = true

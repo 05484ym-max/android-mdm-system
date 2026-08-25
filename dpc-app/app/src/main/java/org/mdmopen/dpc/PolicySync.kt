@@ -9,8 +9,8 @@ object PolicySync {
     const val TAG = "DpcSync"
 
     /**
-     * Pulls and enforces the policy, reports status, then runs any queued commands.
-     * Status is reported before commands so a reboot or wipe cannot swallow it.
+     * A full cycle in one request: status out, policy and commands in. Status reaches
+     * the server before any command runs, so a reboot or wipe cannot swallow it.
      */
     fun run(context: Context): String {
         val serverUrl = Config.serverUrl(context)
@@ -20,16 +20,9 @@ object PolicySync {
             ?: throw IllegalStateException("המכשיר אינו רשום — יש להזין קוד רישום")
 
         val deviceId = Config.deviceId(context)
-        val api = ApiClient(serverUrl, deviceToken)
-
-        val policy = api.fetchPolicy(deviceId)
-        Config.setAllowedApps(context, policy.allowedApps)
-        Config.setKioskEnabled(context, policy.kioskEnabled)
-
         val enforcer = PolicyEnforcer(context)
-        val result = enforcer.apply(policy)
 
-        api.sendHeartbeat(
+        val result = ApiClient(serverUrl, deviceToken).sync(
             deviceId,
             JSONObject()
                 .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
@@ -37,29 +30,31 @@ object PolicySync {
                 .put("isDeviceOwner", enforcer.isDeviceOwner()),
         )
 
-        val outcomes = runQueuedCommands(context, api, deviceId)
+        Config.setAllowedApps(context, result.policy.allowedApps)
+        Config.setKioskEnabled(context, result.policy.kioskEnabled)
+        Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)
+
+        val enforcement = enforcer.apply(result.policy)
+        SyncScheduler.schedule(context)
+
+        val executor = CommandExecutor(context)
+        val outcomes = result.commands.map { queued ->
+            try {
+                executor.execute(queued)
+            } catch (e: Exception) {
+                "פקודה ${queued.command} נכשלה: ${e.message}"
+            }
+        }
 
         return buildString {
-            append("מותרות ${policy.allowedApps.size} · הושעו ${result.suspended.size} · ")
-            append("שוחררו ${result.unsuspended.size} · נכשלו ${result.failed.size} · ")
-            append("דולגו ${result.systemAppsSkipped} מערכת · ")
-            append("קיוסק ${if (result.kioskEnabled) "פעיל" else "כבוי"}")
+            append("מותרות ${result.policy.allowedApps.size} · ")
+            append("הושעו ${enforcement.suspended.size} · ")
+            append("שוחררו ${enforcement.unsuspended.size} · ")
+            append("נכשלו ${enforcement.failed.size} · ")
+            append("דולגו ${enforcement.systemAppsSkipped} מערכת · ")
+            append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
+            append("סנכרון כל ${result.policy.syncIntervalMinutes} דק'")
             outcomes.forEach { append("\n• $it") }
-        }
-    }
-
-    private fun runQueuedCommands(
-        context: Context,
-        api: ApiClient,
-        deviceId: String,
-    ): List<String> {
-        val executor = CommandExecutor(context)
-        return api.fetchCommands(deviceId).map { command ->
-            try {
-                executor.execute(command)
-            } catch (e: Exception) {
-                "פקודה $command נכשלה: ${e.message}"
-            }
         }
     }
 }
