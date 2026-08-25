@@ -31,7 +31,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
 
-        if (Config.deviceToken(this) != null) {
+        val adminMode = intent.getBooleanExtra("admin_mode", false)
+
+        if (Config.deviceToken(this) != null && !adminMode) {
             startActivity(Intent(this, CustomerActivity::class.java))
             finish()
         }

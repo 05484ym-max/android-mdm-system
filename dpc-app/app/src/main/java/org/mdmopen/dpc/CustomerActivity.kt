@@ -1,14 +1,17 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -102,6 +105,11 @@ class CustomerActivity : Activity() {
                 },
                 LinearLayout.LayoutParams(0, 72, 1f)
             )
+
+            addView(
+                navButton("ניהול") { openAdminLogin() },
+                LinearLayout.LayoutParams(0, 72, 1f)
+            )
         }
     }
 
@@ -113,6 +121,31 @@ class CustomerActivity : Activity() {
             setBackgroundColor(Color.TRANSPARENT)
             setOnClickListener { action() }
         }
+    }
+
+    private fun openAdminLogin() {
+        val input = EditText(this).apply {
+            hint = "קוד מנהל"
+            inputType =
+                InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setSingleLine()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("כניסת מנהל")
+            .setMessage("הזן קוד מנהל")
+            .setView(input)
+            .setNegativeButton("ביטול", null)
+            .setPositiveButton("כניסה") { _, _ ->
+                val pin = input.text.toString()
+                if (Config.checkAdminPin(this, pin)) {
+                    startActivity(
+                        Intent(this, MainActivity::class.java)
+                            .putExtra("admin_mode", true)
+                    )
+                }
+            }
+            .show()
     }
 
     private fun showPersonalArea() {
