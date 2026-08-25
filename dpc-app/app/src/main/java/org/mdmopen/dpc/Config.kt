@@ -7,6 +7,7 @@ import java.util.UUID
 object Config {
     private const val PREFS = "dpc_config"
     private const val KEY_SERVER_URL = "server_url"
+    private const val DEFAULT_SERVER_URL = "https://android-mdm-system.onrender.com"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_DEVICE_TOKEN = "device_token"
     private const val KEY_ALLOWED_APPS = "allowed_apps"
@@ -18,7 +19,7 @@ object Config {
     const val DEFAULT_SYNC_MINUTES = 60
 
     fun serverUrl(context: Context): String =
-        prefs(context).getString(KEY_SERVER_URL, "").orEmpty()
+        prefs(context).getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
 
     fun setServerUrl(context: Context, url: String) {
         prefs(context).edit().putString(KEY_SERVER_URL, url.trim().trimEnd('/')).apply()
