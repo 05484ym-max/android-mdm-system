@@ -68,6 +68,10 @@ class MainActivity : Activity() {
         root.addView(enrollInput)
         root.addView(goldButton("רישום מכשיר") { enrollDevice() })
 
+        root.addView(goldButton("חנות אפליקציות") {
+            startActivity(Intent(this@MainActivity, AppStoreActivity::class.java))
+        })
+
         root.addView(goldButton("סנכרון עכשיו") { syncNow() })
 
         root.addView(sectionLabel("קוד מנהל ליציאה מקיוסק"))
