@@ -8,9 +8,13 @@ on:
       - '.github/workflows/build-dpc.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,8 +60,27 @@ jobs:
         working-directory: dpc-app
         run: gradle assembleDebug
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: dpc-app-debug
           path: dpc-app/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Update public MDM APK
+        run: |
+          mkdir -p admin-panel/downloads
+          cp dpc-app/app/build/outputs/apk/debug/app-debug.apk admin-panel/downloads/mdm.apk
+
+      - name: Commit latest MDM APK
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add admin-panel/downloads/mdm.apk
+
+          if git diff --cached --quiet; then
+            echo "APK did not change"
+          else
+            git commit -m "Update MDM APK [skip ci]"
+            git push
+          fi
