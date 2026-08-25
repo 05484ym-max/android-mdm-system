@@ -1,14 +1,13 @@
-const admin = require('firebase-admin');
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getMessaging } = require('firebase-admin/messaging');
 
 let messaging = null;
 
 const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
 if (serviceAccount) {
   try {
-    admin.initializeApp({
-      credential: admin.credential.cert(JSON.parse(serviceAccount)),
-    });
-    messaging = admin.messaging();
+    const app = initializeApp({ credential: cert(JSON.parse(serviceAccount)) });
+    messaging = getMessaging(app);
     console.log('Push notifications enabled.');
   } catch (err) {
     console.error('Push notifications disabled:', err.message);
