@@ -30,6 +30,11 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
+
+        if (Config.deviceToken(this) != null) {
+            startActivity(Intent(this, CustomerActivity::class.java))
+            finish()
+        }
         refreshStatus()
     }
 

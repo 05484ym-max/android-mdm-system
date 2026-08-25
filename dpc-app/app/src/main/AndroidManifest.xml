@@ -74,6 +74,11 @@
             android:name=".AppStoreActivity"
             android:exported="false" />
 
+    
+        <activity
+            android:name=".CustomerActivity"
+            android:exported="false" />
+
     </application>
 
 </manifest>
