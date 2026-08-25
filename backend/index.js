@@ -48,6 +48,18 @@ function bearerToken(req) {
 const wrap = handler => (req, res, next) =>
   Promise.resolve(handler(req, res, next)).catch(next);
 
+const DEFAULT_SYNC_INTERVAL_MINUTES = 60;
+
+/** Fills in policy defaults so older records keep working. */
+function normalizePolicy(policy) {
+  return {
+    allowedApps: (policy && policy.allowedApps) || [],
+    kioskEnabled: Boolean(policy && policy.kioskEnabled),
+    syncIntervalMinutes:
+      (policy && policy.syncIntervalMinutes) || DEFAULT_SYNC_INTERVAL_MINUTES,
+  };
+}
+
 function publicDevice(device) {
   const { authTokenHash, ...rest } = device;
   let subscriptionStatus = 'none';
@@ -58,7 +70,7 @@ function publicDevice(device) {
   return {
     ...rest,
     subscriptionStatus,
-    policy: device.policy || { allowedApps: [], kioskEnabled: false },
+    policy: normalizePolicy(device.policy),
     pendingCommands: device.pendingCommands || [],
     commandHistory: device.commandHistory || [],
   };
@@ -252,7 +264,7 @@ app.post('/api/devices/:deviceId/policy/apps', requireAdmin, wrap(async (req, re
     return res.status(404).json({ error: 'device not found' });
   }
 
-  const policy = device.policy || { allowedApps: [], kioskEnabled: false };
+  const policy = normalizePolicy(device.policy);
   if (policy.allowedApps.includes(packageName)) {
     return res.json(publicDevice(device));
   }
@@ -266,7 +278,7 @@ app.delete('/api/devices/:deviceId/policy/apps/:packageName', requireAdmin,
     if (!device) {
       return res.status(404).json({ error: 'device not found' });
     }
-    const policy = device.policy || { allowedApps: [], kioskEnabled: false };
+    const policy = normalizePolicy(device.policy);
     policy.allowedApps = policy.allowedApps.filter(p => p !== req.params.packageName);
     res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
   }));
@@ -280,7 +292,7 @@ app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, r
   if (!device) {
     return res.status(404).json({ error: 'device not found' });
   }
-  const policy = device.policy || { allowedApps: [], kioskEnabled: false };
+  const policy = normalizePolicy(device.policy);
   policy.kioskEnabled = enabled;
   res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
 }));
@@ -318,6 +330,39 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
   const refreshed = await db.getDevice(req.params.deviceId);
   res.json(publicDevice(refreshed));
 }));
+
+/** One round trip per device: report status, take policy, collect commands. */
+app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => {
+  const { model, androidVersion, isDeviceOwner } = req.body;
+  const str = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
+
+  await db.setStatus(req.params.deviceId, {
+    model: str(model, 100),
+    androidVersion: str(androidVersion, 20),
+    isDeviceOwner: isDeviceOwner === true,
+    lastSeen: new Date().toISOString(),
+  });
+
+  res.json({
+    policy: normalizePolicy(req.device.policy),
+    commands: await db.takePendingCommands(req.params.deviceId),
+  });
+}));
+
+app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,
+  wrap(async (req, res) => {
+    const { minutes } = req.body;
+    if (!Number.isInteger(minutes) || minutes < 15 || minutes > 1440) {
+      return res.status(400).json({ error: 'minutes must be between 15 and 1440' });
+    }
+    const device = await db.getDevice(req.params.deviceId);
+    if (!device) {
+      return res.status(404).json({ error: 'device not found' });
+    }
+    const policy = normalizePolicy(device.policy);
+    policy.syncIntervalMinutes = minutes;
+    res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+  }));
 
 app.use((err, req, res, next) => {
   console.error(err);

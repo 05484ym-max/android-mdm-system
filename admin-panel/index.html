@@ -270,6 +270,10 @@ async function loadDevices() {
             <input class="package-input" data-package-input-for="${id}" placeholder="com.whatsapp" />
             <button class="add-app-btn" data-add-for="${id}">הוסף</button>
           </div>
+          <div class="add-app-row">
+            <input type="number" class="package-input" data-interval-for="${id}" min="15" max="1440" value="${(d.policy && d.policy.syncIntervalMinutes) || 60}" />
+            <button class="add-app-btn" data-setinterval-for="${id}">דקות בין סנכרונים</button>
+          </div>
         </div>
         <div class="side-panel" data-cmd-panel-for="${id}" style="display:${openCommandPanels.has(d.deviceId) ? 'block' : 'none'};">
           <div class="cmd-actions">
@@ -343,6 +347,20 @@ function bindHandlers(devices) {
         body: JSON.stringify({ packageName }),
       });
       if (!res.ok) { alert('שם חבילה לא תקין. דוגמה: com.whatsapp'); return; }
+      loadDevices();
+    });
+  });
+
+  document.querySelectorAll('[data-setinterval-for]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const deviceId = btn.getAttribute('data-setinterval-for');
+      const input = document.querySelector(`[data-interval-for="${CSS.escape(deviceId)}"]`);
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/sync-interval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minutes: Number(input.value) }),
+      });
+      if (!res.ok) { alert('התדירות חייבת להיות בין 15 ל-1440 דקות'); return; }
       loadDevices();
     });
   });
