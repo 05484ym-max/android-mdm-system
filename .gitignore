@@ -17,3 +17,6 @@ node_modules/
 backend/data/
 *.jks
 *.b64
+
+!admin-panel/downloads/
+!admin-panel/downloads/mdm.apk
