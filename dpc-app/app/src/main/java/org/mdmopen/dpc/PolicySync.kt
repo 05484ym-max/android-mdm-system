@@ -36,6 +36,7 @@ object PolicySync {
 
         val enforcement = enforcer.apply(result.policy)
         SyncScheduler.schedule(context)
+        PushRegistration.ensureRegistered(context)
 
         val executor = CommandExecutor(context)
         val outcomes = result.commands.map { queued ->

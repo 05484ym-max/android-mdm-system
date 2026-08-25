@@ -75,6 +75,15 @@ class ApiClient(
         return SyncResult(policy, commands)
     }
 
+    /** Lets the server push a wake-up to this device. */
+    fun registerPushToken(deviceId: String, pushToken: String) {
+        request(
+            "POST",
+            "/api/devices/${segment(deviceId)}/push-token",
+            JSONObject().put("pushToken", pushToken),
+        )
+    }
+
     private fun segment(value: String): String =
         URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 

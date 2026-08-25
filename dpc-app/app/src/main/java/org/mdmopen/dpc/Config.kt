@@ -13,6 +13,7 @@ object Config {
     private const val KEY_KIOSK = "kiosk_enabled"
     private const val KEY_SYNC_MINUTES = "sync_interval_minutes"
     private const val KEY_ADMIN_PIN = "admin_pin_sha256"
+    private const val KEY_PUSH_TOKEN = "push_token"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -60,6 +61,14 @@ object Config {
 
     fun setSyncIntervalMinutes(context: Context, minutes: Int) {
         prefs(context).edit().putInt(KEY_SYNC_MINUTES, minutes).apply()
+    }
+
+    /** The last FCM token we successfully handed to the server. */
+    fun pushToken(context: Context): String? =
+        prefs(context).getString(KEY_PUSH_TOKEN, null)
+
+    fun setPushToken(context: Context, token: String) {
+        prefs(context).edit().putString(KEY_PUSH_TOKEN, token).apply()
     }
 
     fun hasAdminPin(context: Context): Boolean =
