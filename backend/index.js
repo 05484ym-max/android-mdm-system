@@ -6,6 +6,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
+const push = require('./push');
 
 const app = express();
 app.use(express.json());
@@ -60,6 +61,13 @@ function normalizePolicy(policy) {
     syncIntervalMinutes:
       (policy && policy.syncIntervalMinutes) || DEFAULT_SYNC_INTERVAL_MINUTES,
   };
+}
+
+/** Saves the policy and nudges the device to pick it up immediately. */
+async function savePolicyAndWake(device, policy) {
+  const updated = await db.setPolicy(device.deviceId, policy);
+  await push.wake(device.pushToken);
+  return publicDevice(updated);
 }
 
 function publicDevice(device) {
@@ -271,7 +279,7 @@ app.post('/api/devices/:deviceId/policy/apps', requireAdmin, wrap(async (req, re
     return res.json(publicDevice(device));
   }
   policy.allowedApps = [...policy.allowedApps, packageName];
-  res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+  res.json(await savePolicyAndWake(device, policy));
 }));
 
 app.delete('/api/devices/:deviceId/policy/apps/:packageName', requireAdmin,
@@ -282,7 +290,7 @@ app.delete('/api/devices/:deviceId/policy/apps/:packageName', requireAdmin,
     }
     const policy = normalizePolicy(device.policy);
     policy.allowedApps = policy.allowedApps.filter(p => p !== req.params.packageName);
-    res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+    res.json(await savePolicyAndWake(device, policy));
   }));
 
 app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, res) => {
@@ -296,7 +304,7 @@ app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, r
   }
   const policy = normalizePolicy(device.policy);
   policy.kioskEnabled = enabled;
-  res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+  res.json(await savePolicyAndWake(device, policy));
 }));
 
 function validateCommandParams(command, params) {
@@ -329,11 +337,21 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
     return res.status(404).json({ error: 'device not found' });
   }
   await db.queueCommand(req.params.deviceId, crypto.randomUUID(), command, params);
+  await push.wake(device.pushToken);
   const refreshed = await db.getDevice(req.params.deviceId);
   res.json(publicDevice(refreshed));
 }));
 
 /** One round trip per device: report status, take policy, collect commands. */
+app.post('/api/devices/:deviceId/push-token', requireDevice, wrap(async (req, res) => {
+  const { pushToken } = req.body;
+  if (typeof pushToken !== 'string' || pushToken.length < 20 || pushToken.length > 500) {
+    return res.status(400).json({ error: 'invalid pushToken' });
+  }
+  await db.setPushToken(req.params.deviceId, pushToken);
+  res.json({ status: 'ok' });
+}));
+
 app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => {
   const { model, androidVersion, isDeviceOwner } = req.body;
   const str = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
@@ -363,7 +381,7 @@ app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,
     }
     const policy = normalizePolicy(device.policy);
     policy.syncIntervalMinutes = minutes;
-    res.json(publicDevice(await db.setPolicy(req.params.deviceId, policy)));
+    res.json(await savePolicyAndWake(device, policy));
   }));
 
 app.use((err, req, res, next) => {

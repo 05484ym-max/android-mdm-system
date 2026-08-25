@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS devices (
   status          JSONB
 );
 
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS push_token TEXT;
+
 CREATE TABLE IF NOT EXISTS commands (
   id           UUID PRIMARY KEY,
   device_id    TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
@@ -63,6 +65,7 @@ function toDevice(row, pendingCommands = [], commandHistory = []) {
     subscription: row.subscription,
     policy: row.policy,
     status: row.status,
+    pushToken: row.push_token,
     pendingCommands,
     commandHistory,
   };
@@ -138,6 +141,9 @@ const setSubscription = (deviceId, value) =>
 const setPolicy = (deviceId, value) =>
   updateDeviceField(deviceId, 'policy', value);
 
+const setPushToken = (deviceId, value) =>
+  updateDeviceField(deviceId, 'push_token', value);
+
 const setStatus = (deviceId, value) =>
   updateDeviceField(deviceId, 'status', value);
 
@@ -210,6 +216,7 @@ module.exports = {
   setSubscription,
   setPolicy,
   setStatus,
+  setPushToken,
   queueCommand,
   takePendingCommands,
   createEnrollment,
