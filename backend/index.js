@@ -20,7 +20,9 @@ const SECURE_COOKIES = process.env.SECURE_COOKIES === '1';
 app.use(express.static(path.join(__dirname, '../admin-panel')));
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
+// Accept either a pre-computed hash or a plain password (easier to set on a host).
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH ||
+  (process.env.ADMIN_PASSWORD ? bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10) : null);
 const JWT_SECRET = process.env.JWT_SECRET;
 const AUTH_ENABLED = Boolean(ADMIN_USERNAME && ADMIN_PASSWORD_HASH && JWT_SECRET);
 
