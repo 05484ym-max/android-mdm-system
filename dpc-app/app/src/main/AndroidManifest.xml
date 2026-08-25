@@ -79,6 +79,23 @@
             android:name=".CustomerActivity"
             android:exported="false" />
 
+    
+        <activity
+            android:name=".ProvisioningActivity"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.app.action.GET_PROVISIONING_MODE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+        </activity>
+
     </application>
 
 </manifest>
