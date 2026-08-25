@@ -1,6 +1,7 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
@@ -138,6 +139,13 @@ class MainActivity : Activity() {
         enrollStatusView.text = if (enrolled) "✓ המכשיר רשום בשרת" else "✕ המכשיר אינו רשום"
         enrollStatusView.setTextColor(Color.parseColor(if (enrolled) OK else BAD))
 
+        // After enrollment, lock the server address so the device token
+        // cannot accidentally be sent to a different server.
+        serverInput.isEnabled = !enrolled
+        if (enrolled) {
+            serverInput.setText(Config.serverUrl(this))
+        }
+
         val hasPin = Config.hasAdminPin(this)
         pinStatusView.text =
             if (hasPin) "✓ קוד מנהל מוגדר" else "✕ אין קוד — כל אחד יכול לצאת מהקיוסק"
@@ -204,6 +212,35 @@ class MainActivity : Activity() {
     }
 
     private fun exitKioskLocally() {
+        if (!Config.hasAdminPin(this)) {
+            log("לא מוגדר קוד מנהל — יש להגדיר קוד לפני יציאה מקיוסק")
+            return
+        }
+
+        val pinDialogInput = EditText(this).apply {
+            hint = "קוד מנהל"
+            inputType =
+                InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setSingleLine()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("אימות מנהל")
+            .setMessage("הזן קוד מנהל כדי לצאת מהקיוסק")
+            .setView(pinDialogInput)
+            .setNegativeButton("ביטול", null)
+            .setPositiveButton("אישור") { _, _ ->
+                val pin = pinDialogInput.text.toString()
+                if (Config.checkAdminPin(this, pin)) {
+                    performLocalKioskExit()
+                } else {
+                    log("קוד מנהל שגוי — הקיוסק נשאר פעיל")
+                }
+            }
+            .show()
+    }
+
+    private fun performLocalKioskExit() {
         try {
             PolicyEnforcer(this).disableKiosk()
             Config.setKioskEnabled(this, false)
