@@ -15,16 +15,21 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 
 class CustomerActivity : Activity() {
 
     private lateinit var contentArea: LinearLayout
 
-    private val BG = "#F5F6FB"
+    private val BG = "#EAF1FB"
     private val CARD = "#FFFFFF"
-    private val TEXT = "#20253A"
-    private val MUTED = "#747A8C"
-    private val GOLD = "#A88425"
+    private val TEXT = "#14233D"
+    private val MUTED = "#6F7A90"
+    private val GOLD = "#B08A2E"
+    private val NAVY = "#102A56"
+    private val NAVY_DARK = "#071A35"
+    private val BLUE = "#235FA7"
+    private val BORDER = "#D7E1EF"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,26 +93,22 @@ class CustomerActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
+            setPadding(8, 8, 8, 10)
             setBackgroundColor(Color.WHITE)
-            elevation = 12f
-            setPadding(12, 12, 12, 16)
+            elevation = 14f
 
             addView(
-                navButton("אזור אישי") { showPersonalArea() },
+                navButton("👤\nאזור אישי") { showPersonalArea() },
                 LinearLayout.LayoutParams(0, 72, 1f)
             )
 
             addView(
-                navButton("חנות אפליקציות") {
-                    startActivity(
-                        Intent(this@CustomerActivity, AppStoreActivity::class.java)
-                    )
-                },
+                navButton("▦\nחנות אפליקציות") { showAppStore() },
                 LinearLayout.LayoutParams(0, 72, 1f)
             )
 
             addView(
-                navButton("ניהול") { openAdminLogin() },
+                navButton("🔒\nכניסת מנהל") { openAdminLogin() },
                 LinearLayout.LayoutParams(0, 72, 1f)
             )
         }
@@ -116,11 +117,47 @@ class CustomerActivity : Activity() {
     private fun navButton(label: String, action: () -> Unit): Button {
         return Button(this).apply {
             text = label
-            textSize = 14f
-            setTextColor(Color.parseColor(TEXT))
+            textSize = 12f
+            isAllCaps = false
+            setTextColor(Color.parseColor(NAVY))
             setBackgroundColor(Color.TRANSPARENT)
             setOnClickListener { action() }
         }
+    }
+
+    private fun showAppStore() {
+        contentArea.removeAllViews()
+
+        contentArea.addView(
+            sectionTitle("חנות האפליקציות")
+        )
+
+        contentArea.addView(
+            infoCard(
+                "חנות יהודי כשר",
+                "כאן יוצגו האפליקציות המאושרות למכשיר"
+            )
+        )
+
+        contentArea.addView(
+            Button(this).apply {
+                text = "פתיחת חנות האפליקציות"
+                textSize = 15f
+                isAllCaps = false
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor(NAVY))
+
+                setOnClickListener {
+                    startActivity(
+                        Intent(
+                            this@CustomerActivity,
+                            AppStoreActivity::class.java
+                        )
+                    )
+                }
+            }
+        )
     }
 
     private fun openAdminLogin() {
@@ -152,6 +189,65 @@ class CustomerActivity : Activity() {
         contentArea.removeAllViews()
 
         contentArea.addView(statusCard())
+
+        contentArea.addView(
+            Button(this).apply {
+                text = "↻  סנכרון עכשיו"
+                textSize = 15f
+                isAllCaps = false
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor(NAVY))
+                setPadding(18, 14, 18, 14)
+
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    62
+                ).apply {
+                    setMargins(0, 8, 0, 18)
+                }
+
+                setOnClickListener {
+                    isEnabled = false
+                    text = "מסנכרן..."
+
+                    Thread {
+                        try {
+                            val result = PolicySync.run(applicationContext)
+
+                            // Also check whether a newer APK exists.
+                            AutoUpdater.check(applicationContext)
+
+                            runOnUiThread {
+                                text = "✓ הסנכרון הושלם"
+                                Toast.makeText(
+                                    this@CustomerActivity,
+                                    "המכשיר סונכרן בהצלחה",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+
+                                postDelayed({
+                                    text = "↻  סנכרון עכשיו"
+                                    isEnabled = true
+                                }, 1800)
+                            }
+
+                        } catch (e: Exception) {
+                            runOnUiThread {
+                                text = "↻  נסה שוב"
+                                isEnabled = true
+
+                                Toast.makeText(
+                                    this@CustomerActivity,
+                                    "הסנכרון נכשל",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }.start()
+                }
+            }
+        )
 
         contentArea.addView(sectionTitle("פרטי המנוי"))
 

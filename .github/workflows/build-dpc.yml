@@ -55,6 +55,7 @@ jobs:
           DPC_KEYSTORE_PATH: ${{ runner.temp }}/dpc.jks
           DPC_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           DPC_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          VERSION_CODE: ${{ github.run_number }}
         run: gradle assembleRelease
 
       - name: Publish APK and matching QR payload
@@ -79,6 +80,24 @@ jobs:
 
           mkdir -p admin-panel/downloads
           cp "$APK" admin-panel/downloads/mdm.apk
+
+          python3 - "${{ github.run_number }}" <<'PYVER'
+          import json, sys
+
+          version_code = int(sys.argv[1])
+
+          data = {
+              "versionCode": version_code,
+              "apkUrl": "https://android-mdm-system.onrender.com/downloads/mdm.apk"
+          }
+
+          with open("admin-panel/downloads/version.json", "w") as f:
+              json.dump(data, f, indent=2)
+              f.write("\n")
+
+          print("Generated version.json:")
+          print(json.dumps(data, indent=2))
+          PYVER
 
           python3 - "$CHECKSUM" <<'PY'
           import json, sys
@@ -108,7 +127,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add admin-panel/downloads/mdm.apk admin-panel/downloads/provisioning.json
+          git add admin-panel/downloads/mdm.apk admin-panel/downloads/provisioning.json admin-panel/downloads/version.json
           if git diff --cached --quiet; then
             echo "Nothing changed"
           else
