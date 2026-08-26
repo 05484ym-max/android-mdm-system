@@ -85,7 +85,8 @@
     
         <activity
             android:name=".ProvisioningActivity"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
 
             <intent-filter>
                 <action android:name="android.app.action.GET_PROVISIONING_MODE" />
