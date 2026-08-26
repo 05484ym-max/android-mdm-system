@@ -94,6 +94,8 @@ class MainActivity : Activity() {
         root.addView(goldButton("שמירת קוד") { saveAdminPin() })
 
         root.addView(quietButton("יציאה מקיוסק (מקומי)") { exitKioskLocally() })
+        root.addView(quietButton("שחרור מכשיר מניהול") { releaseDeviceLocally() })
+        root.addView(quietButton("בדיקת FRP") { checkFrpSupport() })
 
         root.addView(sectionLabel("יומן"))
         logView = TextView(this).apply {
@@ -259,6 +261,89 @@ class MainActivity : Activity() {
             log("קיוסק כובה מקומית — יחזור בסנכרון הבא אם השרת מורה על כך")
         } catch (e: Exception) {
             log("שגיאה: ${e.message}")
+        }
+    }
+
+    private fun releaseDeviceLocally() {
+        if (!PolicyEnforcer(this).isDeviceOwner()) {
+            log("המכשיר אינו Device Owner")
+            return
+        }
+
+        if (!Config.hasAdminPin(this)) {
+            log("לא ניתן לשחרר מכשיר ללא קוד מנהל")
+            return
+        }
+
+        val pinDialogInput = EditText(this).apply {
+            hint = "קוד מנהל"
+            inputType =
+                InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setSingleLine()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("שחרור מכשיר")
+            .setMessage("הזן קוד מנהל")
+            .setView(pinDialogInput)
+            .setNegativeButton("ביטול", null)
+            .setPositiveButton("המשך") { _, _ ->
+                val pin = pinDialogInput.text.toString()
+
+                if (!Config.checkAdminPin(this, pin)) {
+                    log("קוד מנהל שגוי — המכשיר לא שוחרר")
+                    return@setPositiveButton
+                }
+
+                AlertDialog.Builder(this)
+                    .setTitle("אישור סופי")
+                    .setMessage(
+                        "פעולה זו תסיר את ניהול Device Owner מהמכשיר ותבטל את חסימות ההסרה והאיפוס. להמשיך?"
+                    )
+                    .setNegativeButton("ביטול", null)
+                    .setPositiveButton("שחרור סופי") { _, _ ->
+                        try {
+                            PolicyEnforcer(this).releaseDeviceOwner()
+                            refreshStatus()
+                            log("המכשיר שוחרר מניהול בהצלחה")
+                        } catch (e: Exception) {
+                            log("שחרור המכשיר נכשל: ${e.message}")
+                        }
+                    }
+                    .show()
+            }
+            .show()
+    }
+
+    private fun checkFrpSupport() {
+        try {
+            val dpm = getSystemService(DevicePolicyManager::class.java)
+            val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+
+            if (!dpm.isDeviceOwnerApp(packageName)) {
+                log("FRP: המכשיר אינו Device Owner")
+                return
+            }
+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                log("FRP: גרסת Android נמוכה מדי")
+                return
+            }
+
+            val policy = dpm.getFactoryResetProtectionPolicy(admin)
+
+            if (policy == null) {
+                log("FRP: API נתמך, אך אין כרגע מדיניות FRP מוגדרת")
+            } else {
+                log("FRP: קיימת מדיניות FRP")
+                log("FRP enabled: ${policy.isFactoryResetProtectionEnabled}")
+                log("FRP accounts: ${policy.factoryResetProtectionAccounts}")
+            }
+        } catch (e: SecurityException) {
+            log("FRP: אין הרשאה/אין תמיכה במכשיר הזה")
+            log(e.message ?: "SecurityException")
+        } catch (e: Exception) {
+            log("FRP ERROR: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 

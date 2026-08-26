@@ -33,6 +33,8 @@ class PolicyEnforcer(private val context: Context) {
 
         dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+        dpm.addUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
+        dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
 
         val allowed = policy.allowedApps.toSet()
         val toSuspend = mutableListOf<String>()
@@ -90,5 +92,21 @@ class PolicyEnforcer(private val context: Context) {
         dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
         dpm.setLockTaskPackages(admin, emptyArray())
         dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
+    }
+
+    fun releaseDeviceOwner() {
+        check(isDeviceOwner()) { "Not device owner" }
+
+        // Remove kiosk controls first.
+        disableKiosk()
+
+        // Remove restrictions we applied.
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
+
+        // Release Device Owner ownership.
+        dpm.clearDeviceOwnerApp(context.packageName)
     }
 }
