@@ -95,9 +95,7 @@ class MainActivity : Activity() {
 
         root.addView(quietButton("יציאה מקיוסק (מקומי)") { exitKioskLocally() })
         root.addView(quietButton("שחרור מכשיר מניהול") { releaseDeviceLocally() })
-        root.addView(quietButton("בדיקת FRP") { checkFrpSupport() })
-
-        root.addView(sectionLabel("יומן"))
+root.addView(sectionLabel("יומן"))
         logView = TextView(this).apply {
             textSize = 12f
             setTextColor(Color.parseColor(DIM))
@@ -315,37 +313,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun checkFrpSupport() {
-        try {
-            val dpm = getSystemService(DevicePolicyManager::class.java)
-            val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
-
-            if (!dpm.isDeviceOwnerApp(packageName)) {
-                log("FRP: המכשיר אינו Device Owner")
-                return
-            }
-
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                log("FRP: גרסת Android נמוכה מדי")
-                return
-            }
-
-            val policy = dpm.getFactoryResetProtectionPolicy(admin)
-
-            if (policy == null) {
-                log("FRP: API נתמך, אך אין כרגע מדיניות FRP מוגדרת")
-            } else {
-                log("FRP: קיימת מדיניות FRP")
-                log("FRP enabled: ${policy.isFactoryResetProtectionEnabled}")
-                log("FRP accounts: ${policy.factoryResetProtectionAccounts}")
-            }
-        } catch (e: SecurityException) {
-            log("FRP: אין הרשאה/אין תמיכה במכשיר הזה")
-            log(e.message ?: "SecurityException")
-        } catch (e: Exception) {
-            log("FRP ERROR: ${e.javaClass.simpleName}: ${e.message}")
-        }
-    }
 
     private fun postLog(message: String) = mainHandler.post { log(message) }
 
