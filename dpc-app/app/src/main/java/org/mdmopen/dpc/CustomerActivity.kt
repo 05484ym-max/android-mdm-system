@@ -93,37 +93,74 @@ class CustomerActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(8, 8, 8, 10)
+            setPadding(
+                dp(8),
+                dp(8),
+                dp(8),
+                dp(14)
+            )
+
             setBackgroundColor(Color.WHITE)
-            elevation = 14f
+            elevation = dp(12).toFloat()
+            minimumHeight = dp(88)
 
             addView(
-                navButton("👤\nאזור אישי") { showPersonalArea() },
-                LinearLayout.LayoutParams(0, 72, 1f)
+                navButton("👤\nאזור אישי") {
+                    showPersonalArea()
+                },
+                LinearLayout.LayoutParams(
+                    0,
+                    dp(74),
+                    1f
+                )
             )
 
             addView(
-                navButton("▦\nחנות אפליקציות") { showAppStore() },
-                LinearLayout.LayoutParams(0, 72, 1f)
+                navButton("▦\nחנות אפליקציות") {
+                    showAppStore()
+                },
+                LinearLayout.LayoutParams(
+                    0,
+                    dp(74),
+                    1f
+                )
             )
 
             addView(
-                navButton("🔒\nכניסת מנהל") { openAdminLogin() },
-                LinearLayout.LayoutParams(0, 72, 1f)
+                navButton("🔒\nכניסת מנהל") {
+                    openAdminLogin()
+                },
+                LinearLayout.LayoutParams(
+                    0,
+                    dp(74),
+                    1f
+                )
             )
         }
     }
 
-    private fun navButton(label: String, action: () -> Unit): Button {
+    private fun navButton(
+        label: String,
+        action: () -> Unit
+    ): Button {
         return Button(this).apply {
             text = label
             textSize = 12f
             isAllCaps = false
+            gravity = Gravity.CENTER
             setTextColor(Color.parseColor(NAVY))
             setBackgroundColor(Color.TRANSPARENT)
+            setPadding(
+                dp(4),
+                dp(4),
+                dp(4),
+                dp(4)
+            )
+            minimumHeight = dp(68)
             setOnClickListener { action() }
         }
     }
+
 
     private fun showAppStore() {
         contentArea.removeAllViews()
@@ -202,7 +239,7 @@ class CustomerActivity : Activity() {
 
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    62
+                    dp(58)
                 ).apply {
                     setMargins(0, 8, 0, 18)
                 }
@@ -340,4 +377,9 @@ class CustomerActivity : Activity() {
             })
         }
     }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
+    }
+
 }
