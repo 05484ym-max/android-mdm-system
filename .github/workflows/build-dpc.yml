@@ -36,53 +36,82 @@ jobs:
         with:
           gradle-version: 8.7
 
-      - name: Restore shared debug keystore
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
-
-      - name: Create debug keystore if missing
+      # The QR code pins the signing identity by checksum, so it must never drift.
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            echo ">>> No cached keystore - generating a new one"
-            keytool -genkeypair -keystore ~/.android/debug.keystore -storetype PKCS12 \
-              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass android -keypass android \
-              -dname "CN=Android Debug,O=Android,C=US"
-          else
-            echo ">>> Reusing cached keystore"
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::ANDROID_KEYSTORE_B64 is missing. Refusing to build with a throw-away key - it would break every existing QR code."
+            exit 1
           fi
-          keytool -list -keystore ~/.android/debug.keystore -storepass android
+          printf '%s' "$KEYSTORE_B64" | tr -d '\n\r ' | base64 -d > "$RUNNER_TEMP/dpc.jks"
+          keytool -list -keystore "$RUNNER_TEMP/dpc.jks" -storepass "$KEYSTORE_PASSWORD"
 
-      - name: Build debug APK
+      - name: Build release APK
         working-directory: dpc-app
-        run: gradle assembleDebug
+        env:
+          DPC_KEYSTORE_PATH: ${{ runner.temp }}/dpc.jks
+          DPC_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          DPC_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: gradle assembleRelease
+
+      - name: Publish APK and matching QR payload
+        run: |
+          set -e
+          APK=dpc-app/app/build/outputs/apk/release/app-release.apk
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+          CERT_HEX=$("$APKSIGNER" verify --print-certs "$APK" \
+            | grep -m1 -i 'certificate SHA-256 digest' \
+            | awk '{print $NF}')
+          if [ -z "$CERT_HEX" ]; then
+            echo "::error::Could not read the signing certificate digest"
+            exit 1
+          fi
+
+          CHECKSUM=$(python3 -c "import base64,sys; print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1])).decode().rstrip('='))" "$CERT_HEX")
+          echo "Certificate SHA-256 : $CERT_HEX"
+          echo "SIGNATURE_CHECKSUM  : $CHECKSUM"
+
+          mkdir -p admin-panel/downloads
+          cp "$APK" admin-panel/downloads/mdm.apk
+
+          python3 - "$CHECKSUM" <<'PY'
+          import json, sys
+          payload = {
+            "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME":
+              "org.mdmopen.dpc/.DpcDeviceAdminReceiver",
+            "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION":
+              "https://android-mdm-system.onrender.com/downloads/mdm.apk",
+            "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": sys.argv[1],
+            "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": True,
+            "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": True,
+          }
+          with open("admin-panel/downloads/provisioning.json", "w") as f:
+              json.dump(payload, f, indent=2)
+              f.write("\n")
+          PY
+
+          cat admin-panel/downloads/provisioning.json
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dpc-app-debug
-          path: dpc-app/app/build/outputs/apk/debug/app-debug.apk
+          name: dpc-app-release
+          path: dpc-app/app/build/outputs/apk/release/app-release.apk
 
-      - name: Update public MDM APK
-        run: |
-          mkdir -p admin-panel/downloads
-          cp dpc-app/app/build/outputs/apk/debug/app-debug.apk admin-panel/downloads/mdm.apk
-
-      - name: Commit latest MDM APK
+      - name: Commit APK and QR payload
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add admin-panel/downloads/mdm.apk
-
+          git add admin-panel/downloads/mdm.apk admin-panel/downloads/provisioning.json
           if git diff --cached --quiet; then
-            echo "APK did not change"
+            echo "Nothing changed"
           else
-            git commit -m "Update MDM APK [skip ci]"
+            git commit -m "Update MDM APK and provisioning payload [skip ci]"
             git push
           fi
-
-# trigger rebuild

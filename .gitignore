@@ -20,3 +20,5 @@ backend/data/
 
 !admin-panel/downloads/
 !admin-panel/downloads/mdm.apk
+*.jks
+*.b64

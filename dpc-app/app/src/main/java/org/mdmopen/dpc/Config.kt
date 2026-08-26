@@ -14,6 +14,7 @@ object Config {
     private const val KEY_KIOSK = "kiosk_enabled"
     private const val KEY_SYNC_MINUTES = "sync_interval_minutes"
     private const val KEY_ADMIN_PIN = "admin_pin_sha256"
+    private const val KEY_PENDING_ENROLL = "pending_enrollment_token"
     private const val KEY_PUSH_TOKEN = "push_token"
 
     const val DEFAULT_SYNC_MINUTES = 60
@@ -70,6 +71,18 @@ object Config {
 
     fun setPushToken(context: Context, token: String) {
         prefs(context).edit().putString(KEY_PUSH_TOKEN, token).apply()
+    }
+
+    /** Enrolment code handed over by the QR code, consumed once at provisioning. */
+    fun pendingEnrollmentToken(context: Context): String? =
+        prefs(context).getString(KEY_PENDING_ENROLL, null)
+
+    fun setPendingEnrollmentToken(context: Context, token: String) {
+        prefs(context).edit().putString(KEY_PENDING_ENROLL, token).apply()
+    }
+
+    fun clearPendingEnrollmentToken(context: Context) {
+        prefs(context).edit().remove(KEY_PENDING_ENROLL).apply()
     }
 
     fun hasAdminPin(context: Context): Boolean =
