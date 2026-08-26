@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS commands (
 CREATE INDEX IF NOT EXISTS commands_pending_idx
   ON commands (device_id) WHERE delivered_at IS NULL;
 
+ALTER TABLE commands ADD COLUMN IF NOT EXISTS result_status TEXT;
+ALTER TABLE commands ADD COLUMN IF NOT EXISTS result_message TEXT;
+ALTER TABLE commands ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+
+
 CREATE TABLE IF NOT EXISTS enrollments (
   id         UUID PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -169,6 +174,21 @@ async function takePendingCommands(deviceId) {
   return rows.map(toCommand);
 }
 
+async function completeCommand(deviceId, commandId, status, message) {
+  const { rowCount } = await pool.query(
+    `UPDATE commands
+        SET result_status = $3,
+            result_message = $4,
+            completed_at = now()
+      WHERE id = $1
+        AND device_id = $2
+        AND delivered_at IS NOT NULL`,
+    [commandId, deviceId, status, message || null],
+  );
+
+  return rowCount > 0;
+}
+
 // ---------- enrollments ----------
 
 async function createEnrollment(id, tokenHash, expiresAt) {
@@ -219,6 +239,7 @@ module.exports = {
   setPushToken,
   queueCommand,
   takePendingCommands,
+  completeCommand,
   createEnrollment,
   consumeEnrollment,
   listEnrollments,

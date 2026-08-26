@@ -2,6 +2,9 @@ package org.mdmopen.dpc
 
 import android.app.PendingIntent
 import android.content.Context
+import android.os.UserManager
+import android.content.ComponentName
+import android.app.admin.DevicePolicyManager
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
@@ -16,7 +19,7 @@ import java.net.URL
  */
 class AppInstaller(private val context: Context) {
 
-    fun installFromUrl(apkUrl: String): String {
+    fun installFromUrl(apkUrl: String, commandId: String? = null): String {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(
             PackageInstaller.SessionParams.MODE_FULL_INSTALL
@@ -27,7 +30,8 @@ class AppInstaller(private val context: Context) {
                 openApkStream(apkUrl).use { input -> input.copyTo(output) }
                 session.fsync(output)
             }
-            session.commit(statusSender(sessionId))
+            temporarilyAllowInstall()
+            session.commit(statusSender(sessionId, commandId))
         }
         return "התקנה הופעלה מ-$apkUrl"
     }
@@ -36,6 +40,51 @@ class AppInstaller(private val context: Context) {
         context.packageManager.packageInstaller
             .uninstall(packageName, statusSender(packageName.hashCode()))
         return "הסרה הופעלה עבור $packageName"
+    }
+
+
+    private fun temporarilyAllowInstall() {
+        val dpm =
+            context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+        if (!dpm.isDeviceOwnerApp(context.packageName)) return
+
+        val admin =
+            ComponentName(context, DpcDeviceAdminReceiver::class.java)
+
+        dpm.clearUserRestriction(
+            admin,
+            UserManager.DISALLOW_INSTALL_APPS
+        )
+
+        context.getSharedPreferences(
+            "dpc_installer",
+            Context.MODE_PRIVATE
+        ).edit()
+            .putBoolean("install_temporarily_allowed", true)
+            .apply()
+    }
+
+    fun restoreInstallBlock() {
+        val dpm =
+            context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+        if (!dpm.isDeviceOwnerApp(context.packageName)) return
+
+        val admin =
+            ComponentName(context, DpcDeviceAdminReceiver::class.java)
+
+        dpm.addUserRestriction(
+            admin,
+            UserManager.DISALLOW_INSTALL_APPS
+        )
+
+        context.getSharedPreferences(
+            "dpc_installer",
+            Context.MODE_PRIVATE
+        ).edit()
+            .putBoolean("install_temporarily_allowed", false)
+            .apply()
     }
 
     private fun openApkStream(apkUrl: String): InputStream {
@@ -54,8 +103,10 @@ class AppInstaller(private val context: Context) {
         return connection.inputStream
     }
 
-    private fun statusSender(requestCode: Int): IntentSender {
-        val intent = Intent(context, InstallResultReceiver::class.java)
+    private fun statusSender(requestCode: Int, commandId: String? = null): IntentSender {
+        val intent = Intent(context, InstallResultReceiver::class.java).apply {
+            commandId?.let { putExtra("commandId", it) }
+        }
         var flags = PendingIntent.FLAG_UPDATE_CURRENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             flags = flags or PendingIntent.FLAG_MUTABLE

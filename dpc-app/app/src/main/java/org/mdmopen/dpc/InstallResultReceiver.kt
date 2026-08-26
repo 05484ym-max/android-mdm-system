@@ -14,6 +14,13 @@ class InstallResultReceiver : BroadcastReceiver() {
         val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
 
+        // Restore app-install blocking after every install/uninstall result.
+        try {
+            AppInstaller(context).restoreInstallBlock()
+        } catch (e: Exception) {
+            Log.e(PolicySync.TAG, "Failed to restore install restriction", e)
+        }
+
         when (status) {
             PackageInstaller.STATUS_SUCCESS ->
                 Log.i(PolicySync.TAG, "Package operation succeeded: $packageName")

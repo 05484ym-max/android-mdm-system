@@ -26,7 +26,10 @@ class CommandExecutor(context: Context) {
             dpm.wipeData(0)
             "מחיקת המכשיר הופעלה"
         }
-        "INSTALL_APP" -> installer.installFromUrl(queued.params.getString("apkUrl"))
+        "INSTALL_APP" -> installer.installFromUrl(
+            queued.params.getString("apkUrl"),
+            queued.id
+        )
         "UNINSTALL_APP" -> installer.uninstall(queued.params.getString("packageName"))
         else -> "פקודה לא מוכרת: ${queued.command}"
     }

@@ -16,6 +16,7 @@ data class Policy(
 )
 
 data class QueuedCommand(
+    val id: String,
     val command: String,
     val params: JSONObject,
 )
@@ -67,12 +68,28 @@ class ApiClient(
         val commands = (0 until queued.length()).map { index ->
             val item = queued.getJSONObject(index)
             QueuedCommand(
-                command = item.getString("command"),
+                    id = item.getString("id"),
+                    command = item.getString("command"),
                 params = item.optJSONObject("params") ?: JSONObject(),
             )
         }
 
         return SyncResult(policy, commands)
+    }
+
+    fun reportCommandResult(
+        deviceId: String,
+        commandId: String,
+        status: String,
+        message: String?
+    ) {
+        request(
+            "POST",
+            "/api/devices/${segment(deviceId)}/commands/${segment(commandId)}/result",
+            JSONObject()
+                .put("status", status)
+                .put("message", message ?: "")
+        )
     }
 
     /** Lets the server push a wake-up to this device. */

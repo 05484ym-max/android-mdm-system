@@ -343,6 +343,36 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
 }));
 
 /** One round trip per device: report status, take policy, collect commands. */
+
+app.post(
+  '/api/devices/:deviceId/commands/:commandId/result',
+  requireDevice,
+  wrap(async (req, res) => {
+    const status = String(req.body.status || '').toUpperCase();
+    const message =
+      typeof req.body.message === 'string'
+        ? req.body.message.slice(0, 1000)
+        : '';
+
+    if (!['SUCCESS', 'FAILED'].includes(status)) {
+      return res.status(400).json({ error: 'invalid status' });
+    }
+
+    const updated = await db.completeCommand(
+      req.params.deviceId,
+      req.params.commandId,
+      status,
+      message,
+    );
+
+    if (!updated) {
+      return res.status(404).json({ error: 'command not found' });
+    }
+
+    res.json({ status: 'ok' });
+  }),
+);
+
 app.post('/api/devices/:deviceId/push-token', requireDevice, wrap(async (req, res) => {
   const { pushToken } = req.body;
   if (typeof pushToken !== 'string' || pushToken.length < 20 || pushToken.length > 500) {
