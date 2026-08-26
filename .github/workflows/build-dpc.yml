@@ -34,7 +34,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
+          gradle-version: 8.9
 
       # The QR code pins the signing identity by checksum, so it must never drift.
       - name: Decode signing keystore
