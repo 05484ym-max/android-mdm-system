@@ -183,9 +183,15 @@ object AutoUpdater {
                 }
             }
 
-        val sessionId = installer.createSession(params)
+        // Must be lifted before createSession() - DISALLOW_INSTALL_APPS blocks
+        // session creation itself, not just the final commit.
+        temporarilyAllowInstall(context)
+
+        var sessionId = -1
 
         try {
+            sessionId = installer.createSession(params)
+
             installer.openSession(sessionId).use { session ->
 
                 apk.inputStream().use { input ->
@@ -198,8 +204,6 @@ object AutoUpdater {
                         session.fsync(output)
                     }
                 }
-
-                temporarilyAllowInstall(context)
 
                 val callbackIntent =
                     Intent(
@@ -226,9 +230,11 @@ object AutoUpdater {
         } catch (e: Exception) {
             restoreInstallBlock(context)
 
-            try {
-                installer.abandonSession(sessionId)
-            } catch (_: Exception) {
+            if (sessionId >= 0) {
+                try {
+                    installer.abandonSession(sessionId)
+                } catch (_: Exception) {
+                }
             }
 
             throw e
