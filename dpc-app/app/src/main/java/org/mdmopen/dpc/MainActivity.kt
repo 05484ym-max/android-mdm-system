@@ -44,21 +44,38 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(BG))
-            setPadding(40, 72, 40, 40)
+            setPadding(20, 0, 20, 40)
         }
 
-        root.addView(TextView(this).apply {
-            text = "MDM DPC"
-            textSize = 24f
-            setTextColor(Color.parseColor(GOLD_SOFT))
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor(HEADER))
+            setPadding(24, 40, 24, 40)
             gravity = Gravity.CENTER
+            addView(TextView(this@MainActivity).apply {
+                text = "יהודי כשר"
+                textSize = 22f
+                setTextColor(Color.parseColor(GOLD_SOFT))
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "מערכת ניהול מכשירים"
+                textSize = 12f
+                setTextColor(Color.parseColor("#FFFFFF"))
+                gravity = Gravity.CENTER
+                setPadding(0, 8, 0, 0)
+            })
         })
 
         statusView = TextView(this).apply {
             textSize = 14f
-            setPadding(0, 28, 0, 0)
+            setPadding(24, 16, 24, 16)
+            setBackgroundColor(Color.parseColor(CARD))
         }
-        root.addView(statusView)
+        root.addView(statusView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = 20
+            bottomMargin = 12
+        })
 
         root.addView(sectionLabel("כתובת השרת"))
         serverInput = textField(Config.serverUrl(this), "http://192.168.1.10:3000")
@@ -68,9 +85,12 @@ class MainActivity : Activity() {
         root.addView(sectionLabel("רישום המכשיר"))
         enrollStatusView = TextView(this).apply {
             textSize = 12f
-            setPadding(0, 0, 0, 12)
+            setPadding(24, 12, 24, 12)
+            setBackgroundColor(Color.parseColor(CARD))
         }
-        root.addView(enrollStatusView)
+        root.addView(enrollStatusView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = 12
+        })
         enrollInput = textField("", "קוד רישום מהפאנל")
         root.addView(enrollInput)
         root.addView(goldButton("רישום מכשיר") { enrollDevice() })
@@ -84,9 +104,12 @@ class MainActivity : Activity() {
         root.addView(sectionLabel("קוד מנהל ליציאה מקיוסק"))
         pinStatusView = TextView(this).apply {
             textSize = 12f
-            setPadding(0, 0, 0, 12)
+            setPadding(24, 12, 24, 12)
+            setBackgroundColor(Color.parseColor(CARD))
         }
-        root.addView(pinStatusView)
+        root.addView(pinStatusView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = 12
+        })
         pinInput = textField("", "קוד חדש (4 ספרות ומעלה)")
         pinInput.inputType =
             InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
@@ -97,12 +120,16 @@ class MainActivity : Activity() {
         root.addView(quietButton("שחרור מכשיר מניהול") { releaseDeviceLocally() })
 root.addView(sectionLabel("יומן"))
         logView = TextView(this).apply {
-            textSize = 12f
+            textSize = 11f
             setTextColor(Color.parseColor(DIM))
+            setPadding(16, 16, 16, 16)
+            setBackgroundColor(Color.parseColor(CARD))
         }
         root.addView(
             ScrollView(this).apply { addView(logView) },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                topMargin = 12
+            },
         )
 
         return ScrollView(this).apply {
@@ -116,30 +143,32 @@ root.addView(sectionLabel("יומן"))
         hint = hintText
         setSingleLine()
         setTextColor(Color.parseColor(TEXT))
-        setHintTextColor(Color.parseColor("#6B6862"))
+        setHintTextColor(Color.parseColor(DIM))
         setBackgroundColor(Color.parseColor(CARD))
-        setPadding(24, 24, 24, 24)
+        setPadding(20, 16, 20, 16)
     }
 
     private fun goldButton(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
         setBackgroundColor(Color.parseColor(GOLD))
-        setTextColor(Color.parseColor(BG))
+        setTextColor(Color.parseColor("#FFFFFF"))
+        setPadding(20, 16, 20, 16)
         setOnClickListener { onClick() }
     }
 
     private fun quietButton(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
         setBackgroundColor(Color.parseColor(CARD))
-        setTextColor(Color.parseColor(DIM))
+        setTextColor(Color.parseColor(TEXT))
+        setPadding(20, 12, 20, 12)
         setOnClickListener { onClick() }
     }
 
     private fun sectionLabel(text: String) = TextView(this).apply {
         this.text = text
         textSize = 13f
-        setTextColor(Color.parseColor(GOLD_SOFT))
-        setPadding(0, 36, 0, 10)
+        setTextColor(Color.parseColor(GOLD))
+        setPadding(0, 24, 0, 12)
     }
 
     private fun refreshStatus() {

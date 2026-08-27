@@ -21,15 +21,15 @@ class CustomerActivity : Activity() {
 
     private lateinit var contentArea: LinearLayout
 
-    private val BG = "#EAF1FB"
+    private val BG = "#F5F7FA"
     private val CARD = "#FFFFFF"
-    private val TEXT = "#14233D"
-    private val MUTED = "#6F7A90"
-    private val GOLD = "#B08A2E"
-    private val NAVY = "#102A56"
-    private val NAVY_DARK = "#071A35"
-    private val BLUE = "#235FA7"
-    private val BORDER = "#D7E1EF"
+    private val TEXT = "#1A1A1A"
+    private val MUTED = "#888888"
+    private val GOLD = "#8B7A4A"
+    private val NAVY = "#1A2A4A"
+    private val NAVY_DARK = "#0F1820"
+    private val BLUE = "#5B7A9B"
+    private val BORDER = "#E5E5E5"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
