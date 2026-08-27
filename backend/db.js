@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS push_token TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_name TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_number TEXT;
+
+CREATE TABLE IF NOT EXISTS apps_catalog (
+  package_name TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  added_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS commands (
   id           UUID PRIMARY KEY,
@@ -71,6 +79,8 @@ function toDevice(row, pendingCommands = [], commandHistory = []) {
     policy: row.policy,
     status: row.status,
     pushToken: row.push_token,
+    customerName: row.customer_name,
+    customerNumber: row.customer_number,
     pendingCommands,
     commandHistory,
   };
@@ -88,7 +98,8 @@ async function getDevice(deviceId) {
 
 async function listDevices() {
   const { rows } = await pool.query(
-    `SELECT device_id, registered_at, subscription, policy, status
+    `SELECT device_id, registered_at, subscription, policy, status,
+            customer_name, customer_number
        FROM devices
       ORDER BY registered_at`,
   );
@@ -151,6 +162,37 @@ const setPushToken = (deviceId, value) =>
 
 const setStatus = (deviceId, value) =>
   updateDeviceField(deviceId, 'status', value);
+
+async function setCustomerInfo(deviceId, name, number) {
+  const { rows } = await pool.query(
+    `UPDATE devices SET customer_name = $2, customer_number = $3
+      WHERE device_id = $1 RETURNING *`,
+    [deviceId, name || null, number || null],
+  );
+  return rows[0] ? toDevice(rows[0]) : null;
+}
+
+// ---------- apps catalog ----------
+
+async function listAppsCatalog() {
+  const { rows } = await pool.query(
+    `SELECT package_name, name, added_at FROM apps_catalog ORDER BY added_at DESC`,
+  );
+  return rows.map(row => ({
+    packageName: row.package_name,
+    name: row.name,
+    addedAt: row.added_at.toISOString(),
+  }));
+}
+
+async function addAppToCatalog(packageName, name) {
+  await pool.query(
+    `INSERT INTO apps_catalog (package_name, name)
+     VALUES ($1, $2)
+     ON CONFLICT (package_name) DO UPDATE SET name = $2`,
+    [packageName, name],
+  );
+}
 
 // ---------- commands ----------
 
@@ -237,10 +279,13 @@ module.exports = {
   setPolicy,
   setStatus,
   setPushToken,
+  setCustomerInfo,
   queueCommand,
   takePendingCommands,
   completeCommand,
   createEnrollment,
   consumeEnrollment,
   listEnrollments,
+  listAppsCatalog,
+  addAppToCatalog,
 };

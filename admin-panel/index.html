@@ -120,6 +120,27 @@
   .cmd-log-item { color: var(--text); font-size: 0.8rem; padding: 3px 0; }
   .cmd-pending { color: var(--gold-soft); }
   .empty-state { text-align: center; color: var(--text-dim); padding: 30px 0; }
+  .search-input {
+    width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--card-border);
+    background: #111113; color: var(--text); font-family: inherit; margin-bottom: 14px;
+  }
+  .customer-row { display: flex; gap: 8px; margin-bottom: 4px; }
+  .customer-input {
+    padding: 6px 8px; border-radius: 8px; border: 1px solid var(--card-border);
+    background: #111; color: var(--text); font-family: inherit; font-size: 0.85rem;
+  }
+  .customer-name { color: var(--gold-soft); font-size: 1.05rem; font-weight: bold; }
+  .catalog-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 0; border-bottom: 1px solid var(--card-border);
+  }
+  .catalog-row:last-child { border-bottom: none; }
+  .catalog-name { color: var(--text); font-weight: bold; min-width: 140px; }
+  .catalog-package { color: var(--text-dim); font-size: 0.78rem; direction: ltr; }
+  .catalog-select {
+    padding: 7px 8px; border-radius: 8px; border: 1px solid var(--card-border);
+    background: #111; color: var(--text); font-family: inherit; font-size: 0.8rem;
+  }
 </style>
 </head>
 <body>
@@ -145,6 +166,17 @@
   <div id="codeBox" class="code-box" style="display:none;"></div>
 </div>
 
+<div class="enroll-card">
+  <h2>חנות אפליקציות</h2>
+  <input class="search-input" id="catalogSearch" placeholder="חיפוש בקטלוג לפי שם..." />
+  <div id="catalogList"><div class="empty-state">טוען...</div></div>
+  <div class="add-app-row" style="margin-top:10px;">
+    <input class="package-input" id="newAppName" placeholder="שם האפליקציה (לדוגמה: וויז)" />
+    <input class="package-input" id="newAppPackage" placeholder="com.waze" />
+    <button class="add-app-btn" id="addAppToCatalogBtn">הוסף לקטלוג</button>
+  </div>
+</div>
+
 <div class="stats">
   <div class="stat-card">
     <div class="label">סה"כ מכשירים</div>
@@ -162,6 +194,7 @@
 
 <div class="devices-section">
   <h2>מכשירים, מנויים ופקודות</h2>
+  <input class="search-input" id="deviceSearch" placeholder="חיפוש לפי מספר לקוח, שם או מזהה מכשיר..." />
   <div id="devicesList"><div class="empty-state">טוען...</div></div>
 </div>
 
@@ -208,8 +241,10 @@ async function queueCommand(deviceId, command, params) {
   return true;
 }
 
+let allDevices = [];
+let allApps = [];
+
 async function loadDevices() {
-  const listEl = document.getElementById('devicesList');
   const res = await fetch('/api/devices');
 
   if (res.status === 401) {
@@ -218,14 +253,35 @@ async function loadDevices() {
   }
   document.getElementById('loginScreen').style.display = 'none';
 
-  const devices = await res.json();
-  document.getElementById('totalDevices').textContent = devices.length;
+  allDevices = await res.json();
+  document.getElementById('totalDevices').textContent = allDevices.length;
   document.getElementById('activeSubs').textContent =
-    devices.filter(d => d.subscriptionStatus === 'active').length;
+    allDevices.filter(d => d.subscriptionStatus === 'active').length;
   document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('he-IL');
 
-  if (devices.length === 0) {
+  renderDeviceList(filterDevices(document.getElementById('deviceSearch').value));
+  loadAppsCatalog();
+}
+
+function filterDevices(query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return allDevices;
+  return allDevices.filter(d =>
+    (d.customerName || '').toLowerCase().includes(q) ||
+    (d.customerNumber || '').toLowerCase().includes(q) ||
+    d.deviceId.toLowerCase().includes(q)
+  );
+}
+
+function renderDeviceList(devices) {
+  const listEl = document.getElementById('devicesList');
+
+  if (allDevices.length === 0) {
     listEl.innerHTML = '<div class="empty-state">עוד לא נרשמו מכשירים</div>';
+    return;
+  }
+  if (devices.length === 0) {
+    listEl.innerHTML = '<div class="empty-state">לא נמצאו מכשירים תואמים</div>';
     return;
   }
 
@@ -252,6 +308,12 @@ async function loadDevices() {
     return `
       <div class="device-row">
         <div class="device-info">
+          <div class="customer-name">${d.customerName ? escapeHtml(d.customerName) : 'ללא שם'}${d.customerNumber ? ' · #' + escapeHtml(d.customerNumber) : ''}</div>
+          <div class="customer-row">
+            <input class="customer-input" data-customer-name-for="${id}" placeholder="שם לקוח" value="${escapeHtml(d.customerName || '')}" />
+            <input class="customer-input" data-customer-number-for="${id}" placeholder="מס' מזהה" value="${escapeHtml(d.customerNumber || '')}" style="width:100px;" />
+            <button class="add-app-btn" data-save-customer-for="${id}">שמור</button>
+          </div>
           <div class="device-id">${id}</div>
           <div class="device-date">נרשם: ${escapeHtml(new Date(d.registeredAt).toLocaleString('he-IL'))}</div>
           ${statusLine}
@@ -300,6 +362,20 @@ async function loadDevices() {
 }
 
 function bindHandlers(devices) {
+  document.querySelectorAll('[data-save-customer-for]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const deviceId = btn.getAttribute('data-save-customer-for');
+      const nameInput = document.querySelector(`[data-customer-name-for="${CSS.escape(deviceId)}"]`);
+      const numberInput = document.querySelector(`[data-customer-number-for="${CSS.escape(deviceId)}"]`);
+      await fetch(`/api/devices/${encodeURIComponent(deviceId)}/customer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nameInput.value.trim(), number: numberInput.value.trim() }),
+      });
+      loadDevices();
+    });
+  });
+
   document.querySelectorAll('[data-renew-for]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const deviceId = btn.getAttribute('data-renew-for');
@@ -441,6 +517,103 @@ document.getElementById('genCodeBtn').addEventListener('click', async () => {
   if (!res.ok) { box.textContent = 'שגיאה'; return; }
   const data = await res.json();
   box.textContent = data.token;
+});
+
+async function loadAppsCatalog() {
+  const res = await fetch('/api/apps');
+  if (!res.ok) return;
+  allApps = await res.json();
+  renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
+}
+
+function filterCatalog(query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return allApps;
+  return allApps.filter(a =>
+    a.name.toLowerCase().includes(q) || a.packageName.toLowerCase().includes(q)
+  );
+}
+
+function renderCatalog(apps) {
+  const listEl = document.getElementById('catalogList');
+
+  if (allApps.length === 0) {
+    listEl.innerHTML = '<div class="empty-state">הקטלוג ריק — הוסיפו אפליקציה למטה</div>';
+    return;
+  }
+  if (apps.length === 0) {
+    listEl.innerHTML = '<div class="empty-state">לא נמצאו אפליקציות תואמות</div>';
+    return;
+  }
+
+  const deviceOptions = allDevices.map(d =>
+    `<option value="${escapeHtml(d.deviceId)}">${escapeHtml(d.customerName || d.deviceId)}</option>`
+  ).join('');
+
+  listEl.innerHTML = apps.map(a => `
+    <div class="catalog-row">
+      <div>
+        <div class="catalog-name">${escapeHtml(a.name)}</div>
+        <div class="catalog-package">${escapeHtml(a.packageName)}</div>
+      </div>
+      <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
+      <select class="catalog-select" data-device-select-for="${escapeHtml(a.packageName)}">
+        <option value="">בחר לקוח...</option>
+        ${deviceOptions}
+      </select>
+      <button class="add-app-btn" data-assign-one="${escapeHtml(a.packageName)}">הוסף ללקוח</button>
+    </div>
+  `).join('');
+
+  document.querySelectorAll('[data-assign-all]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const packageName = btn.getAttribute('data-assign-all');
+      btn.disabled = true;
+      btn.textContent = 'מוסיף...';
+      await fetch(`/api/apps/${encodeURIComponent(packageName)}/assign-all`, { method: 'POST' });
+      loadDevices();
+    });
+  });
+
+  document.querySelectorAll('[data-assign-one]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const packageName = btn.getAttribute('data-assign-one');
+      const select = document.querySelector(`[data-device-select-for="${CSS.escape(packageName)}"]`);
+      const deviceId = select.value;
+      if (!deviceId) { alert('נא לבחור לקוח'); return; }
+      await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/apps`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ packageName }),
+      });
+      loadDevices();
+    });
+  });
+}
+
+document.getElementById('addAppToCatalogBtn').addEventListener('click', async () => {
+  const nameInput = document.getElementById('newAppName');
+  const packageInput = document.getElementById('newAppPackage');
+  const name = nameInput.value.trim();
+  const packageName = packageInput.value.trim();
+  if (!name || !packageName) { alert('נא למלא שם ומזהה חבילה'); return; }
+  const res = await fetch('/api/apps', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, packageName }),
+  });
+  if (!res.ok) { alert('שם חבילה לא תקין. דוגמה: com.waze'); return; }
+  nameInput.value = '';
+  packageInput.value = '';
+  loadAppsCatalog();
+});
+
+document.getElementById('catalogSearch').addEventListener('input', () => {
+  renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
+});
+
+document.getElementById('deviceSearch').addEventListener('input', () => {
+  renderDeviceList(filterDevices(document.getElementById('deviceSearch').value));
 });
 
 loadDevices();

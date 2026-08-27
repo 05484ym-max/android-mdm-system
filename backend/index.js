@@ -264,6 +264,60 @@ app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, r
   res.json(publicDevice(updated));
 }));
 
+app.post('/api/devices/:deviceId/customer', requireAdmin, wrap(async (req, res) => {
+  const { name, number } = req.body;
+  if (name != null && typeof name !== 'string') {
+    return res.status(400).json({ error: 'name must be a string' });
+  }
+  if (number != null && typeof number !== 'string') {
+    return res.status(400).json({ error: 'number must be a string' });
+  }
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+  const updated = await db.setCustomerInfo(
+    req.params.deviceId,
+    name ? name.slice(0, 100) : null,
+    number ? number.slice(0, 50) : null,
+  );
+  res.json(publicDevice(updated));
+}));
+
+// ---------- apps catalog (admin) ----------
+
+app.get('/api/apps', requireAdmin, wrap(async (req, res) => {
+  res.json(await db.listAppsCatalog());
+}));
+
+app.post('/api/apps', requireAdmin, wrap(async (req, res) => {
+  const { packageName, name } = req.body;
+  if (typeof packageName !== 'string' || !PACKAGE_NAME_REGEX.test(packageName)) {
+    return res.status(400).json({ error: 'invalid packageName format' });
+  }
+  if (typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  await db.addAppToCatalog(packageName, name.trim().slice(0, 100));
+  res.json(await db.listAppsCatalog());
+}));
+
+app.post('/api/apps/:packageName/assign-all', requireAdmin, wrap(async (req, res) => {
+  const { packageName } = req.params;
+  if (!PACKAGE_NAME_REGEX.test(packageName)) {
+    return res.status(400).json({ error: 'invalid packageName format' });
+  }
+  const devices = await db.listDevices();
+  for (const device of devices) {
+    const policy = normalizePolicy(device.policy);
+    if (!policy.allowedApps.includes(packageName)) {
+      policy.allowedApps = [...policy.allowedApps, packageName];
+      await savePolicyAndWake(device, policy);
+    }
+  }
+  res.json({ status: 'ok', updated: devices.length });
+}));
+
 app.post('/api/devices/:deviceId/policy/apps', requireAdmin, wrap(async (req, res) => {
   const { packageName } = req.body;
   if (typeof packageName !== 'string' || !PACKAGE_NAME_REGEX.test(packageName)) {
