@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS apps_catalog (
   added_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS icon_url TEXT;
+
 CREATE TABLE IF NOT EXISTS commands (
   id           UUID PRIMARY KEY,
   device_id    TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
@@ -176,21 +178,22 @@ async function setCustomerInfo(deviceId, name, number) {
 
 async function listAppsCatalog() {
   const { rows } = await pool.query(
-    `SELECT package_name, name, added_at FROM apps_catalog ORDER BY added_at DESC`,
+    `SELECT package_name, name, icon_url, added_at FROM apps_catalog ORDER BY added_at DESC`,
   );
   return rows.map(row => ({
     packageName: row.package_name,
     name: row.name,
+    iconUrl: row.icon_url,
     addedAt: row.added_at.toISOString(),
   }));
 }
 
-async function addAppToCatalog(packageName, name) {
+async function addAppToCatalog(packageName, name, iconUrl) {
   await pool.query(
-    `INSERT INTO apps_catalog (package_name, name)
-     VALUES ($1, $2)
-     ON CONFLICT (package_name) DO UPDATE SET name = $2`,
-    [packageName, name],
+    `INSERT INTO apps_catalog (package_name, name, icon_url)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (package_name) DO UPDATE SET name = $2, icon_url = $3`,
+    [packageName, name, iconUrl || null],
   );
 }
 

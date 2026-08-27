@@ -137,6 +137,16 @@
   .catalog-row:last-child { border-bottom: none; }
   .catalog-name { color: var(--text); font-weight: bold; min-width: 140px; }
   .catalog-package { color: var(--text-dim); font-size: 0.78rem; direction: ltr; }
+  .catalog-icon {
+    width: 40px; height: 40px; border-radius: 10px; object-fit: cover;
+    background: #111113; border: 1px solid var(--card-border); flex-shrink: 0;
+  }
+  .catalog-icon-placeholder {
+    width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+    background: #111113; border: 1px solid var(--card-border);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim); font-size: 1rem; font-weight: bold;
+  }
   .catalog-select {
     padding: 7px 8px; border-radius: 8px; border: 1px solid var(--card-border);
     background: #111; color: var(--text); font-family: inherit; font-size: 0.8rem;
@@ -552,6 +562,10 @@ function renderCatalog(apps) {
 
   listEl.innerHTML = apps.map(a => `
     <div class="catalog-row">
+      ${a.iconUrl
+        ? `<img class="catalog-icon" src="${escapeHtml(a.iconUrl)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'catalog-icon-placeholder',textContent:'${escapeHtml((a.name || '?')[0])}'}))" />`
+        : `<div class="catalog-icon-placeholder">${escapeHtml((a.name || '?')[0])}</div>`
+      }
       <div>
         <div class="catalog-name">${escapeHtml(a.name)}</div>
         <div class="catalog-package">${escapeHtml(a.packageName)}</div>

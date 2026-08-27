@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -68,6 +69,42 @@ async function savePolicyAndWake(device, policy) {
   const updated = await db.setPolicy(device.deviceId, policy);
   await push.wake(device.pushToken);
   return publicDevice(updated);
+}
+
+/** Reads the app's icon straight off its public Play Store listing page. */
+function fetchPlayStoreIcon(packageName) {
+  const MAX_BYTES = 300000; // og:image sits in <head>, well within this.
+  return new Promise(resolve => {
+    let settled = false;
+    const done = value => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+
+    const url = `https://play.google.com/store/apps/details?id=${encodeURIComponent(packageName)}&hl=en`;
+    const req = https.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      timeout: 8000,
+    }, res => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return done(null);
+      }
+      let body = '';
+      res.on('data', chunk => {
+        if (body.length < MAX_BYTES) body += chunk;
+      });
+      res.on('end', () => {
+        const match = body.match(/<meta property="og:image" content="([^"]+)"/);
+        done(match ? match[1] : null);
+      });
+      res.on('error', () => done(null));
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => done(null));
+  });
 }
 
 function publicDevice(device) {
@@ -298,7 +335,8 @@ app.post('/api/apps', requireAdmin, wrap(async (req, res) => {
   if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'name is required' });
   }
-  await db.addAppToCatalog(packageName, name.trim().slice(0, 100));
+  const iconUrl = await fetchPlayStoreIcon(packageName);
+  await db.addAppToCatalog(packageName, name.trim().slice(0, 100), iconUrl);
   res.json(await db.listAppsCatalog());
 }));
 
