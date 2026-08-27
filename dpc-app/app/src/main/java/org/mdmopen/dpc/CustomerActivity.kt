@@ -198,25 +198,55 @@ class CustomerActivity : Activity() {
     }
 
     private fun openAdminLogin() {
+        val hasPin = Config.hasAdminPin(this)
+
         val input = EditText(this).apply {
-            hint = "קוד מנהל"
+            hint = if (hasPin) "הכנס קוד" else "הגדר קוד חדש"
             inputType =
                 InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
             setSingleLine()
         }
 
         AlertDialog.Builder(this)
-            .setTitle("כניסת מנהל")
-            .setMessage("הזן קוד מנהל")
+            .setTitle(if (hasPin) "התחבר כמנהל" else "הגדר קוד מנהל")
+            .setMessage(
+                if (hasPin)
+                    "הכנס קוד מנהל"
+                else
+                    "בחר קוד מנהל חדש של לפחות 4 ספרות"
+            )
             .setView(input)
             .setNegativeButton("ביטול", null)
-            .setPositiveButton("כניסה") { _, _ ->
+            .setPositiveButton(if (hasPin) "היכנס" else "שמור") { _, _ ->
                 val pin = input.text.toString()
-                if (Config.checkAdminPin(this, pin)) {
+
+                if (!hasPin) {
+                    if (pin.length < 4) {
+                        Toast.makeText(
+                            this,
+                            "הקוד חייב להכיל לפחות 4 ספרות",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        return@setPositiveButton
+                    }
+
+                    Config.setAdminPin(this, pin)
+
                     startActivity(
                         Intent(this, MainActivity::class.java)
                             .putExtra("admin_mode", true)
                     )
+                } else if (Config.checkAdminPin(this, pin)) {
+                    startActivity(
+                        Intent(this, MainActivity::class.java)
+                            .putExtra("admin_mode", true)
+                    )
+                } else {
+                    Toast.makeText(
+                        this,
+                        "קוד שגוי",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
             .show()
