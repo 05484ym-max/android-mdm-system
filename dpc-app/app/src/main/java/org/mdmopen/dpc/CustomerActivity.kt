@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -21,15 +22,13 @@ class CustomerActivity : Activity() {
 
     private lateinit var contentArea: LinearLayout
 
-    private val BG = "#F5F7FA"
+    private val BG = "#FAFAFA"
     private val CARD = "#FFFFFF"
-    private val TEXT = "#1A1A1A"
-    private val MUTED = "#888888"
-    private val GOLD = "#8B7A4A"
-    private val NAVY = "#1A2A4A"
-    private val NAVY_DARK = "#0F1820"
-    private val BLUE = "#5B7A9B"
-    private val BORDER = "#E5E5E5"
+    private val BORDER = "#EFEFF2"
+    private val TEXT = "#111114"
+    private val MUTED = "#8A8A94"
+    private val ACCENT = "#4F46E5"
+    private val ACCENT_SOFT = "#EEF0FF"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,48 +43,46 @@ class CustomerActivity : Activity() {
         }
 
         page.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor(NAVY_DARK))
-            setPadding(24, dp(36), 24, dp(20))
-            gravity = Gravity.CENTER
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor(CARD))
+            setPadding(dp(24), dp(20), dp(24), dp(18))
+
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.RIGHT
+                addView(TextView(this@CustomerActivity).apply {
+                    text = "יהודי כשר"
+                    textSize = 19f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                })
+                addView(TextView(this@CustomerActivity).apply {
+                    text = "האזור האישי שלך"
+                    textSize = 12.5f
+                    setTextColor(Color.parseColor(MUTED))
+                    gravity = Gravity.RIGHT
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
             addView(TextView(this@CustomerActivity).apply {
-                text = "יהודי כשר"
-                textSize = 22f
+                text = "י"
+                textSize = 18f
                 setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#E8CF7A"))
-                gravity = Gravity.CENTER
-            })
-            addView(TextView(this@CustomerActivity).apply {
-                text = "מערכת ניהול מכשירים"
-                textSize = 11f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
-                setPadding(0, dp(4), 0, 0)
+                background = roundedBackground(ACCENT, dp(14).toFloat())
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+                    marginStart = dp(14)
+                }
             })
         })
 
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(36, 54, 36, 24)
-        }
-
-        header.addView(TextView(this).apply {
-            text = "האזור שלי"
-            textSize = 27f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.RIGHT
-        })
-
-        header.addView(TextView(this).apply {
-            text = "ניהול המנוי והאפליקציות שלך"
-            textSize = 14f
-            setTextColor(Color.parseColor(MUTED))
-            gravity = Gravity.RIGHT
-            setPadding(0, 8, 0, 0)
-        })
-
-        page.addView(header)
+        page.addView(View(this).apply {
+            setBackgroundColor(Color.parseColor(BORDER))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
 
         contentArea = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -111,73 +108,65 @@ class CustomerActivity : Activity() {
     }
 
     private fun buildBottomBar(): LinearLayout {
-        return LinearLayout(this).apply {
+        val bar = LinearLayout(this)
+        bar.apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor(CARD))
+            minimumHeight = dp(80)
+
+            addView(View(this@CustomerActivity).apply {
+                setBackgroundColor(Color.parseColor(BORDER))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+        }
+
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(14)
-            )
-
-            setBackgroundColor(Color.WHITE)
-            elevation = dp(12).toFloat()
-            minimumHeight = dp(88)
-
-            addView(
-                navButton("👤\nאזור אישי") {
-                    showPersonalArea()
-                },
-                LinearLayout.LayoutParams(
-                    0,
-                    dp(74),
-                    1f
-                )
-            )
-
-            addView(
-                navButton("▦\nחנות אפליקציות") {
-                    showAppStore()
-                },
-                LinearLayout.LayoutParams(
-                    0,
-                    dp(74),
-                    1f
-                )
-            )
-
-            addView(
-                navButton("🔒\nכניסת מנהל") {
-                    openAdminLogin()
-                },
-                LinearLayout.LayoutParams(
-                    0,
-                    dp(74),
-                    1f
-                )
-            )
+            setPadding(dp(12), dp(10), dp(12), dp(14))
         }
+
+        row.addView(
+            navButton("👤", "אזור אישי") { showPersonalArea() },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        row.addView(
+            navButton("▦", "חנות אפליקציות") { showAppStore() },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        row.addView(
+            navButton("🔒", "כניסת מנהל") { openAdminLogin() },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+
+        bar.addView(row)
+        return bar
     }
 
     private fun navButton(
+        icon: String,
         label: String,
         action: () -> Unit
-    ): Button {
-        return Button(this).apply {
-            text = label
-            textSize = 12f
-            isAllCaps = false
+    ): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setTextColor(Color.parseColor(NAVY))
-            setBackgroundColor(Color.TRANSPARENT)
-            setPadding(
-                dp(4),
-                dp(4),
-                dp(4),
-                dp(4)
-            )
-            minimumHeight = dp(68)
+            setPadding(dp(4), dp(10), dp(4), dp(6))
+            isClickable = true
+            isFocusable = true
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = icon
+                textSize = 18f
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = label
+                textSize = 11f
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(4), 0, 0)
+            })
+
             setOnClickListener { action() }
         }
     }
@@ -197,25 +186,9 @@ class CustomerActivity : Activity() {
             )
         )
 
-        contentArea.addView(
-            Button(this).apply {
-                text = "פתיחת חנות האפליקציות"
-                textSize = 15f
-                isAllCaps = false
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor(NAVY))
-
-                setOnClickListener {
-                    startActivity(
-                        Intent(
-                            this@CustomerActivity,
-                            AppStoreActivity::class.java
-                        )
-                    )
-                }
-            }
-        )
+        contentArea.addView(primaryButton("פתיחת חנות האפליקציות") {
+            startActivity(Intent(this@CustomerActivity, AppStoreActivity::class.java))
+        })
     }
 
     private fun openAdminLogin() {
@@ -276,6 +249,7 @@ class CustomerActivity : Activity() {
     private fun showPersonalArea() {
         contentArea.removeAllViews()
 
+        contentArea.addView(sectionTitle("האזור האישי"))
         contentArea.addView(statusCard())
 
         contentArea.addView(
@@ -285,14 +259,14 @@ class CustomerActivity : Activity() {
                 isAllCaps = false
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor(NAVY))
+                background = roundedBackground(ACCENT, dp(14).toFloat())
                 setPadding(18, 14, 18, 14)
 
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     dp(58)
                 ).apply {
-                    setMargins(0, 8, 0, 18)
+                    setMargins(0, dp(8), 0, dp(18))
                 }
 
                 setOnClickListener {
@@ -357,31 +331,30 @@ class CustomerActivity : Activity() {
     private fun statusCard(): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(30, 28, 30, 28)
-            setBackgroundColor(Color.parseColor(CARD))
-            elevation = 4f
+            setPadding(dp(24), dp(22), dp(24), dp(22))
+            background = roundedBackground(ACCENT_SOFT, dp(18).toFloat())
 
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            lp.setMargins(0, 0, 0, 24)
+            lp.setMargins(0, 0, 0, dp(20))
             layoutParams = lp
 
             addView(TextView(this@CustomerActivity).apply {
                 text = "המנוי שלך"
-                textSize = 15f
-                setTextColor(Color.parseColor(MUTED))
+                textSize = 14f
+                setTextColor(Color.parseColor(ACCENT))
                 gravity = Gravity.RIGHT
             })
 
             addView(TextView(this@CustomerActivity).apply {
                 text = "פעיל"
-                textSize = 30f
+                textSize = 28f
                 setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor(GOLD))
+                setTextColor(Color.parseColor(TEXT))
                 gravity = Gravity.RIGHT
-                setPadding(0, 8, 0, 0)
+                setPadding(0, dp(6), 0, 0)
             })
         }
     }
@@ -389,43 +362,74 @@ class CustomerActivity : Activity() {
     private fun sectionTitle(title: String): TextView {
         return TextView(this).apply {
             text = title
-            textSize = 17f
+            textSize = 15f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(TEXT))
+            setTextColor(Color.parseColor(MUTED))
             gravity = Gravity.RIGHT
-            setPadding(0, 22, 0, 14)
+            setPadding(dp(2), dp(18), dp(2), dp(10))
         }
     }
 
     private fun infoCard(label: String, value: String): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(26, 22, 26, 22)
-            setBackgroundColor(Color.parseColor(CARD))
-            elevation = 2f
+            setPadding(dp(22), dp(18), dp(22), dp(18))
+            background = roundedCardWithBorder()
 
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            lp.setMargins(0, 0, 0, 14)
+            lp.setMargins(0, 0, 0, dp(10))
             layoutParams = lp
 
             addView(TextView(this@CustomerActivity).apply {
                 text = label
-                textSize = 13f
+                textSize = 12.5f
                 setTextColor(Color.parseColor(MUTED))
                 gravity = Gravity.RIGHT
             })
 
             addView(TextView(this@CustomerActivity).apply {
                 text = value
-                textSize = 19f
+                textSize = 17f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(Color.parseColor(TEXT))
                 gravity = Gravity.RIGHT
-                setPadding(0, 7, 0, 0)
+                setPadding(0, dp(6), 0, 0)
             })
+        }
+    }
+
+    private fun primaryButton(label: String, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            textSize = 15f
+            isAllCaps = false
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = roundedBackground(ACCENT, dp(14).toFloat())
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(58)
+            ).apply { setMargins(0, dp(6), 0, 0) }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun roundedBackground(color: String, radius: Float): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(Color.parseColor(color))
+            cornerRadius = radius
+        }
+    }
+
+    private fun roundedCardWithBorder(): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(Color.parseColor(CARD))
+            setStroke(dp(1), Color.parseColor(BORDER))
+            cornerRadius = dp(14).toFloat()
         }
     }
 

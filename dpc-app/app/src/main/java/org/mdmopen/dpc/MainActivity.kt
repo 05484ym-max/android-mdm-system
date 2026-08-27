@@ -61,7 +61,7 @@ class MainActivity : Activity() {
             addView(TextView(this@MainActivity).apply {
                 text = "מערכת ניהול מכשירים"
                 textSize = 12f
-                setTextColor(Color.parseColor("#FFFFFF"))
+                setTextColor(Color.parseColor(DIM))
                 gravity = Gravity.CENTER
                 setPadding(0, 8, 0, 0)
             })
