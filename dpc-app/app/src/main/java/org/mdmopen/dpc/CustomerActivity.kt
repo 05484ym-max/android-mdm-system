@@ -43,6 +43,27 @@ class CustomerActivity : Activity() {
             setBackgroundColor(Color.parseColor(BG))
         }
 
+        page.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor(NAVY_DARK))
+            setPadding(24, dp(36), 24, dp(20))
+            gravity = Gravity.CENTER
+            addView(TextView(this@CustomerActivity).apply {
+                text = "יהודי כשר"
+                textSize = 22f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#E8CF7A"))
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = "מערכת ניהול מכשירים"
+                textSize = 11f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(4), 0, 0)
+            })
+        })
+
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(36, 54, 36, 24)
