@@ -218,24 +218,14 @@ app.get('/api/enrollments', requireAdmin, wrap(async (req, res) => {
 // ---------- device endpoints ----------
 
 app.post('/api/devices/register', wrap(async (req, res) => {
-  const { deviceId, enrollmentToken } = req.body;
-  if (typeof deviceId !== 'string' || !deviceId) {
-    return res.status(400).json({ error: 'deviceId is required' });
-  }
-
-  const existing = await db.getDevice(deviceId);
-  if (existing) {
-    const token = bearerToken(req);
-    if (token && digestsMatch(sha256(token), existing.authTokenHash)) {
-      return res.json({ status: 'registered', deviceId });
-    }
-    return res.status(409).json({ error: 'device already enrolled' });
-  }
-
+  const { enrollmentToken } = req.body;
   if (typeof enrollmentToken !== 'string' || !enrollmentToken) {
     return res.status(400).json({ error: 'enrollmentToken is required' });
   }
 
+  // The server assigns the ID (a short number, not a UUID) so the admin has
+  // something they can read off the device and type into the panel.
+  const deviceId = await db.generateUniqueDeviceId();
   const consumed = await db.consumeEnrollment(
     sha256(enrollmentToken.trim().toUpperCase()),
     deviceId,

@@ -74,15 +74,16 @@ class ProvisioningActivity : Activity() {
         status("רושם את המכשיר בשרת…")
         Thread {
             try {
-                val token = ApiClient(serverUrl).enroll(Config.deviceId(this), enrollmentToken)
-                Config.setDeviceToken(this, token)
+                val result = ApiClient(serverUrl).enroll(enrollmentToken)
+                Config.setDeviceId(this, result.deviceId)
+                Config.setDeviceToken(this, result.deviceToken)
                 Config.clearPendingEnrollmentToken(this)
                 PolicySync.run(this)
-                post("המכשיר נרשם והמדיניות הוחלה.")
+                post("המכשיר נרשם. מזהה מכשיר: ${result.deviceId}")
             } catch (e: Exception) {
                 post("הרישום לא הושלם: ${e.message}. אפשר להשלים מהאפליקציה.")
             } finally {
-                mainHandler.postDelayed({ done() }, 2500)
+                mainHandler.postDelayed({ done() }, 4000)
             }
         }.start()
     }

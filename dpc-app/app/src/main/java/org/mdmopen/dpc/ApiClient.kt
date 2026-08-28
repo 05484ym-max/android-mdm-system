@@ -33,6 +33,8 @@ data class SyncResult(
     val commands: List<QueuedCommand>,
 )
 
+data class EnrollResult(val deviceId: String, val deviceToken: String)
+
 class ApiException(message: String) : Exception(message)
 
 class ApiClient(
@@ -40,16 +42,15 @@ class ApiClient(
     private val deviceToken: String? = null,
 ) {
 
-    /** One-time enrollment. Returns the long-lived device token to store. */
-    fun enroll(deviceId: String, enrollmentToken: String): String {
+    /** One-time enrollment. The server assigns the device its short numeric ID. */
+    fun enroll(enrollmentToken: String): EnrollResult {
         val body = request(
             "POST",
             "/api/devices/register",
-            JSONObject()
-                .put("deviceId", deviceId)
-                .put("enrollmentToken", enrollmentToken),
+            JSONObject().put("enrollmentToken", enrollmentToken),
         )
-        return JSONObject(body).getString("deviceToken")
+        val json = JSONObject(body)
+        return EnrollResult(json.getString("deviceId"), json.getString("deviceToken"))
     }
 
     /**

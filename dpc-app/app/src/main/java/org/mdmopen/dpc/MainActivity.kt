@@ -205,13 +205,13 @@ root.addView(sectionLabel("יומן"))
 
         Thread {
             try {
-                val token = ApiClient(Config.serverUrl(this@MainActivity))
-                    .enroll(Config.deviceId(this@MainActivity), code)
-                Config.setDeviceToken(this@MainActivity, token)
+                val result = ApiClient(Config.serverUrl(this@MainActivity)).enroll(code)
+                Config.setDeviceId(this@MainActivity, result.deviceId)
+                Config.setDeviceToken(this@MainActivity, result.deviceToken)
                 mainHandler.post {
                     enrollInput.setText("")
                     refreshStatus()
-                    log("המכשיר נרשם בהצלחה")
+                    log("המכשיר נרשם בהצלחה. מזהה מכשיר: ${result.deviceId}")
                 }
             } catch (e: Exception) {
                 postLog("רישום נכשל: ${e.message}")

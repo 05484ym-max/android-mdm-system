@@ -135,6 +135,15 @@ async function listDevices() {
   ));
 }
 
+/** A short numeric ID the admin can read off a device and type into the panel. */
+async function generateUniqueDeviceId() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const id = String(Math.floor(1000000000 + Math.random() * 9000000000));
+    if (!(await getDevice(id))) return id;
+  }
+  throw new Error('could not generate a unique device id');
+}
+
 async function createDevice(deviceId, authTokenHash) {
   const { rows } = await pool.query(
     `INSERT INTO devices (device_id, auth_token_hash)
@@ -277,6 +286,7 @@ module.exports = {
   init,
   getDevice,
   listDevices,
+  generateUniqueDeviceId,
   createDevice,
   setSubscription,
   setPolicy,

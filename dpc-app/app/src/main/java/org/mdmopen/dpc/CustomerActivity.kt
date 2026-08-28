@@ -261,7 +261,7 @@ class CustomerActivity : Activity() {
         contentArea.addView(sectionTitle("המכשיר שלי"))
         contentArea.addView(
             infoRowCard(
-                listOf(Triple("#", "מזהה מכשיר", Config.deviceId(this).take(12) + "..."))
+                listOf(Triple("#", "מזהה מכשיר", Config.deviceId(this)))
             )
         )
     }

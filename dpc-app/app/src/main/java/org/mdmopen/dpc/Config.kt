@@ -31,13 +31,19 @@ object Config {
         prefs(context).edit().putString(KEY_SERVER_URL, url.trim().trimEnd('/')).apply()
     }
 
-    /** Stable per-device identifier, generated once on first use. */
+    /** Placeholder identifier used only before enrollment assigns the real one. */
     fun deviceId(context: Context): String {
         val p = prefs(context)
         p.getString(KEY_DEVICE_ID, null)?.let { return it }
         val id = UUID.randomUUID().toString()
         p.edit().putString(KEY_DEVICE_ID, id).apply()
         return id
+    }
+
+    /** The short numeric ID the server assigns at enrollment - replaces the
+     * placeholder above so the admin has something readable to type in. */
+    fun setDeviceId(context: Context, id: String) {
+        prefs(context).edit().putString(KEY_DEVICE_ID, id).apply()
     }
 
     /** Long-lived token issued by the server at enrollment. */
