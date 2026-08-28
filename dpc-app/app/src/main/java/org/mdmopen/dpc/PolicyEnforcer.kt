@@ -11,6 +11,7 @@ import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.provider.Telephony
+import android.util.Log
 
 data class EnforcementResult(
     val suspended: List<String>,
@@ -155,17 +156,27 @@ class PolicyEnforcer(private val context: Context) {
      * secure settings directly - no visit to Settings, no user-facing prompt)
      * so StoreGuardAccessibilityService can watch for the customer opening
      * Play Store on their own.
+     *
+     * Since Android 11, platform policy blocks Device Owners from writing
+     * ENABLED_ACCESSIBILITY_SERVICES this way (SecurityException), even though
+     * the API itself doesn't say so. Caught here rather than left to propagate,
+     * since this used to take down the entire sync - app hide/unhide, self-update,
+     * command execution - every single time it ran on such a device.
      */
     private fun enableStoreGuard() {
-        val serviceId = "${context.packageName}/${StoreGuardAccessibilityService::class.java.name}"
-        val resolver = context.contentResolver
+        try {
+            val serviceId = "${context.packageName}/${StoreGuardAccessibilityService::class.java.name}"
+            val resolver = context.contentResolver
 
-        val current = Settings.Secure.getString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-        if (current == null || !current.split(':').contains(serviceId)) {
-            val updated = if (current.isNullOrBlank()) serviceId else "$current:$serviceId"
-            dpm.setSecureSetting(admin, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, updated)
+            val current = Settings.Secure.getString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            if (current == null || !current.split(':').contains(serviceId)) {
+                val updated = if (current.isNullOrBlank()) serviceId else "$current:$serviceId"
+                dpm.setSecureSetting(admin, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, updated)
+            }
+            dpm.setSecureSetting(admin, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
+        } catch (e: SecurityException) {
+            Log.w("PolicyEnforcer", "Platform blocked silent accessibility enable", e)
         }
-        dpm.setSecureSetting(admin, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
     }
 
     private fun enableKiosk(allowed: Set<String>) {
