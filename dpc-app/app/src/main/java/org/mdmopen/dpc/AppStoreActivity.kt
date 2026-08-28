@@ -16,6 +16,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import java.net.URL
 
 class AppStoreActivity : Activity() {
@@ -48,45 +49,45 @@ class AppStoreActivity : Activity() {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(BG))
+            // Same fix as CustomerActivity: the manifest's supportsRtl alone
+            // isn't relied on here - forced explicitly so this screen matches
+            // regardless of device locale.
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
 
         page.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(24), dp(22), dp(24), dp(14))
+            setPadding(dp(24), dp(18), dp(24), dp(14))
 
-            addView(TextView(this@AppStoreActivity).apply {
-                text = "יהודי כשר"
-                textSize = 21f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(TEXT))
-                gravity = Gravity.RIGHT
+            addView(LinearLayout(this@AppStoreActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(ImageView(this@AppStoreActivity).apply {
+                    setImageResource(R.mipmap.ic_launcher)
+                    alpha = 0.85f
+                    layoutParams = LinearLayout.LayoutParams(dp(38), dp(38)).apply {
+                        marginEnd = dp(14)
+                    }
+                })
+
+                addView(TextView(this@AppStoreActivity).apply {
+                    text = "חנות אפליקציות"
+                    textSize = 17f
+                    typeface = heavyFont
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-            addView(TextView(this@AppStoreActivity).apply {
-                text = "✓"
-                textSize = 15f
-                typeface = heavyFont
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                background = flatCircle(ACCENT)
-                layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
-            })
+            addView(syncBadge())
         })
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(4), dp(20), dp(24))
         }
-
-        content.addView(TextView(this).apply {
-            text = "חנות אפליקציות"
-            textSize = 20f
-            typeface = heavyFont
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.RIGHT
-            setPadding(0, 0, 0, dp(18))
-        })
 
         val apps = approvedApps()
         if (apps.isEmpty()) {
@@ -129,6 +130,59 @@ class AppStoreActivity : Activity() {
         )
 
         return page
+    }
+
+    /** Same sync badge as CustomerActivity's header - this screen is a
+     * separate Activity so it can't share that private function directly. */
+    private fun syncBadge(): TextView {
+        lateinit var badge: TextView
+        badge = TextView(this).apply {
+            text = "↻ סינכרון"
+            textSize = 12.5f
+            typeface = heavyFont
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = flatRounded(ACCENT, dp(12).toFloat())
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+            isClickable = true
+            isFocusable = true
+
+            setOnClickListener {
+                isClickable = false
+                text = "⏳ מסנכרן..."
+
+                Thread {
+                    try {
+                        PolicySync.run(applicationContext)
+                        AutoUpdater.check(applicationContext)
+                        Config.setLastSyncNow(applicationContext)
+
+                        runOnUiThread {
+                            text = "✓ סונכרן"
+                            Toast.makeText(
+                                this@AppStoreActivity,
+                                "המכשיר סונכרן בהצלחה",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            // Newly approved apps only show up here after a
+                            // full rebuild - the grid is drawn once at onCreate.
+                            setContentView(buildUi())
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            text = "↻ סינכרון"
+                            isClickable = true
+                            Toast.makeText(
+                                this@AppStoreActivity,
+                                "הסנכרון נכשל: ${e.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }.start()
+            }
+        }
+        return badge
     }
 
     /** One square icon tile, Play-Store-grid style - name and status live
@@ -230,10 +284,10 @@ class AppStoreActivity : Activity() {
         }.start()
     }
 
-    private fun flatCircle(color: String): GradientDrawable {
+    private fun flatRounded(color: String, radius: Float): GradientDrawable {
         return GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
             setColor(Color.parseColor(color))
+            cornerRadius = radius
         }
     }
 
