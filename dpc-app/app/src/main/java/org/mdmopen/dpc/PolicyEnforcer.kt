@@ -40,7 +40,10 @@ class PolicyEnforcer(private val context: Context) {
         if (PlayStoreGate.isWindowClosed(context)) {
             dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         }
-        dpm.addUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
+        // The customer can remove any app they can see - our own app is a
+        // Device Owner app, which Android already refuses to let anyone
+        // uninstall through the normal flow regardless of this restriction.
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
 
         val allowed = policy.allowedApps.toSet() + playStoreTemporaryAllowance()
