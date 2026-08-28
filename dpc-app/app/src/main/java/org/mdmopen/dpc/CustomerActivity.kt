@@ -1,7 +1,6 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -13,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -23,8 +23,10 @@ class CustomerActivity : Activity() {
     private data class NavItem(val container: LinearLayout, val icon: TextView, val label: TextView)
 
     private lateinit var contentArea: LinearLayout
+    private lateinit var headerLabelView: TextView
     private lateinit var personalNavItem: NavItem
     private lateinit var storeNavItem: NavItem
+    private lateinit var adminNavItem: NavItem
     private var isPersonalAreaActive = false
 
     private val BG = "#F2F1E6"
@@ -53,14 +55,29 @@ class CustomerActivity : Activity() {
         page.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(24), dp(22), dp(24), dp(14))
+            setPadding(dp(24), dp(18), dp(24), dp(14))
 
-            addView(TextView(this@CustomerActivity).apply {
-                text = "יהודי כשר"
-                textSize = 21f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(TEXT))
-                gravity = Gravity.RIGHT
+            // Right side: the app's own emblem (it already carries the
+            // "יהודי כשר" lettering) plus a label naming the active screen -
+            // replaces the old static wordmark so the header stays useful
+            // as a per-tab indicator instead of a repeated brand name.
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(ImageView(this@CustomerActivity).apply {
+                    setImageResource(R.mipmap.ic_launcher)
+                    layoutParams = LinearLayout.LayoutParams(dp(38), dp(38))
+                })
+
+                headerLabelView = TextView(this@CustomerActivity).apply {
+                    textSize = 17f
+                    typeface = heavyFont
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                    setPadding(0, 0, dp(10), 0)
+                }
+                addView(headerLabelView)
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
             addView(headerSyncBadge())
@@ -160,7 +177,7 @@ class CustomerActivity : Activity() {
 
         personalNavItem = navButton("👤", "אזור אישי") { showPersonalArea() }
         storeNavItem = navButton("▦", "חנות אפליקציות") { showAppStore() }
-        val adminNavItem = navButton("🔒", "כניסת מנהל") { openAdminLogin() }
+        adminNavItem = navButton("🔒", "כניסת מנהל") { showAdminLogin() }
 
         row.addView(
             personalNavItem.container,
@@ -207,7 +224,7 @@ class CustomerActivity : Activity() {
     }
 
     private fun setActiveNav(active: NavItem) {
-        for (item in listOf(personalNavItem, storeNavItem)) {
+        for (item in listOf(personalNavItem, storeNavItem, adminNavItem)) {
             val isActive = item === active
             item.icon.alpha = if (isActive) 1f else 0.5f
             item.label.typeface = if (isActive) heavyFont else mediumFont
@@ -219,6 +236,7 @@ class CustomerActivity : Activity() {
 
     private fun showAppStore() {
         isPersonalAreaActive = false
+        headerLabelView.text = "חנות אפליקציות"
         setActiveNav(storeNavItem)
         contentArea.removeAllViews()
 
@@ -234,63 +252,110 @@ class CustomerActivity : Activity() {
         })
     }
 
-    private fun openAdminLogin() {
+    /** A full tab like the other two, rather than a popup dialog - centered
+     * PIN field, styled to match the rest of the app. Business logic (first-time
+     * PIN setup vs. checking an existing one) is unchanged from the old dialog. */
+    private fun showAdminLogin() {
+        isPersonalAreaActive = false
+        headerLabelView.text = "כניסת מנהל"
+        setActiveNav(adminNavItem)
+        contentArea.removeAllViews()
+
         val hasPin = Config.hasAdminPin(this)
 
-        val input = EditText(this).apply {
-            hint = if (hasPin) "הכנס קוד" else "הגדר קוד חדש"
-            inputType =
-                InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            setSingleLine()
-        }
+        contentArea.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(36), dp(24), dp(36))
+            background = roundedCardWithBorder()
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(24), 0, dp(16)) }
 
-        AlertDialog.Builder(this)
-            .setTitle(if (hasPin) "התחבר כמנהל" else "הגדר קוד מנהל")
-            .setMessage(
-                if (hasPin)
-                    "הכנס קוד מנהל"
-                else
-                    "בחר קוד מנהל חדש של לפחות 4 ספרות"
-            )
-            .setView(input)
-            .setNegativeButton("ביטול", null)
-            .setPositiveButton(if (hasPin) "היכנס" else "שמור") { _, _ ->
+            addView(TextView(this@CustomerActivity).apply {
+                text = "🔒"
+                textSize = 26f
+                gravity = Gravity.CENTER
+                background = flatCircle(ACCENT_TINT)
+                layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = if (hasPin) "כניסת מנהל" else "הגדרת קוד מנהל"
+                textSize = 18f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(18), 0, dp(6))
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = if (hasPin) "הכנס את קוד המנהל כדי להמשיך"
+                       else "בחר קוד מנהל חדש בן 4 ספרות לפחות"
+                textSize = 13f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                setPadding(dp(12), 0, dp(12), dp(22))
+            })
+
+            val input = EditText(this@CustomerActivity).apply {
+                hint = if (hasPin) "קוד מנהל" else "קוד חדש"
+                inputType =
+                    InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+                setSingleLine()
+                textSize = 20f
+                typeface = heavyFont
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor(TEXT))
+                background = roundedCardWithBorder()
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                layoutParams = LinearLayout.LayoutParams(
+                    dp(180),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            addView(input)
+
+            addView(primaryButton(if (hasPin) "היכנס" else "שמור והמשך") {
                 val pin = input.text.toString()
 
                 if (!hasPin) {
                     if (pin.length < 4) {
                         Toast.makeText(
-                            this,
+                            this@CustomerActivity,
                             "הקוד חייב להכיל לפחות 4 ספרות",
                             Toast.LENGTH_SHORT
                         ).show()
-                        return@setPositiveButton
+                        return@primaryButton
                     }
 
-                    Config.setAdminPin(this, pin)
+                    Config.setAdminPin(this@CustomerActivity, pin)
 
                     startActivity(
-                        Intent(this, MainActivity::class.java)
+                        Intent(this@CustomerActivity, MainActivity::class.java)
                             .putExtra("admin_mode", true)
                     )
-                } else if (Config.checkAdminPin(this, pin)) {
+                } else if (Config.checkAdminPin(this@CustomerActivity, pin)) {
                     startActivity(
-                        Intent(this, MainActivity::class.java)
+                        Intent(this@CustomerActivity, MainActivity::class.java)
                             .putExtra("admin_mode", true)
                     )
                 } else {
                     Toast.makeText(
-                        this,
+                        this@CustomerActivity,
                         "קוד שגוי",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
-            }
-            .show()
+            })
+        })
     }
 
     private fun showPersonalArea() {
         isPersonalAreaActive = true
+        headerLabelView.text = "אזור אישי"
         setActiveNav(personalNavItem)
         contentArea.removeAllViews()
 
