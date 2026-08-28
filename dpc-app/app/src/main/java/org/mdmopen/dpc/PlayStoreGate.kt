@@ -101,14 +101,24 @@ object PlayStoreGate {
             currentVersion != null && currentVersion > startingVersion
 
         if (done || elapsedMs >= MAX_WAIT_MS) {
-            InstallOverlay.hide(context)
             // Whoever's window is open last wins - if a newer install request
             // already pushed the deadline further out than this call's own,
             // this stale callback must not re-hide out from under it.
             if (Config.playStoreAllowedUntil(context) <= myDeadline) {
+                // Hiding the app only stops it being launched again - Play
+                // Store itself is still the running foreground activity
+                // underneath the overlay, so removing the overlay alone just
+                // reveals it again. Send the customer home first to actually
+                // push it out of the foreground before it's suspended.
+                context.startActivity(
+                    Intent(Intent.ACTION_MAIN)
+                        .addCategory(Intent.CATEGORY_HOME)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
                 dpm.setApplicationHidden(admin, PACKAGE, true)
                 dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
             }
+            InstallOverlay.hide(context)
             return
         }
 
