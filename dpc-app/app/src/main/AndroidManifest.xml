@@ -9,7 +9,7 @@
     <application
         android:allowBackup="false"
         android:label="MDM DPC"
-        android:theme="@android:style/Theme.Material.Light"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
 
