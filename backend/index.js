@@ -74,6 +74,11 @@ async function savePolicyAndWake(device, policy) {
 
 /** Reads the app's icon straight off its public Play Store listing page. */
 function fetchPlayStoreIcon(packageName) {
+  const url = `https://play.google.com/store/apps/details?id=${encodeURIComponent(packageName)}&hl=en&gl=US`;
+  return fetchIconFromUrl(url, 3);
+}
+
+function fetchIconFromUrl(url, redirectsLeft) {
   const MAX_BYTES = 300000; // og:image sits in <head>, well within this.
   return new Promise(resolve => {
     let settled = false;
@@ -84,11 +89,16 @@ function fetchPlayStoreIcon(packageName) {
       }
     };
 
-    const url = `https://play.google.com/store/apps/details?id=${encodeURIComponent(packageName)}&hl=en`;
     const req = https.get(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       timeout: 8000,
     }, res => {
+      // Play Store sometimes redirects to a locale/consent variant of the page.
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirectsLeft > 0) {
+        res.resume();
+        const nextUrl = new URL(res.headers.location, url).toString();
+        return fetchIconFromUrl(nextUrl, redirectsLeft - 1).then(done);
+      }
       if (res.statusCode !== 200) {
         res.resume();
         return done(null);
@@ -98,7 +108,10 @@ function fetchPlayStoreIcon(packageName) {
         if (body.length < MAX_BYTES) body += chunk;
       });
       res.on('end', () => {
-        const match = body.match(/<meta property="og:image" content="([^"]+)"/);
+        // Attribute order/quote style aren't guaranteed, so match either way.
+        const match =
+          body.match(/<meta[^>]*\bproperty=["']og:image["'][^>]*\bcontent=["']([^"']+)["']/) ||
+          body.match(/<meta[^>]*\bcontent=["']([^"']+)["'][^>]*\bproperty=["']og:image["']/);
         done(match ? match[1] : null);
       });
       res.on('error', () => done(null));

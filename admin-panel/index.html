@@ -628,6 +628,7 @@ function renderCatalog(apps) {
         <div class="catalog-name">${escapeHtml(a.name)}</div>
         <div class="catalog-package">${escapeHtml(a.packageName)}</div>
       </div>
+      <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
       <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
       <select class="catalog-select" data-device-select-for="${escapeHtml(a.packageName)}">
         <option value="">בחר לקוח...</option>
@@ -637,6 +638,20 @@ function renderCatalog(apps) {
       <button class="add-app-btn" data-install-store="${escapeHtml(a.packageName)}">התקן דרך Play Store</button>
     </div>
   `).join('');
+
+  document.querySelectorAll('[data-refresh-icon]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const packageName = btn.getAttribute('data-refresh-icon');
+      const name = btn.getAttribute('data-refresh-name');
+      btn.disabled = true;
+      await fetch('/api/apps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, packageName }),
+      });
+      loadAppsCatalog();
+    });
+  });
 
   document.querySelectorAll('[data-assign-all]').forEach(btn => {
     btn.addEventListener('click', async () => {
