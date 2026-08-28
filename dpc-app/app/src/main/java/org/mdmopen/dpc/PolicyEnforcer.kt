@@ -109,6 +109,7 @@ class PolicyEnforcer(private val context: Context) {
         addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR))
         addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_EMAIL))
         addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY))
+        addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALCULATOR))
         addResolved(Intent(AlarmClock.ACTION_SHOW_ALARMS))
         addResolved(Intent(MediaStore.ACTION_IMAGE_CAPTURE))
 
@@ -132,6 +133,10 @@ class PolicyEnforcer(private val context: Context) {
             "com.samsung.android.email.provider",
             "com.samsung.android.dialer",
             "com.samsung.android.messaging",
+            "com.sec.android.app.voicenote",
+            "com.samsung.android.app.voicenote",
+            "com.sec.android.app.popupcalculator",
+            "com.google.android.calculator",
         )
         val installed = pm.getInstalledApplications(0).map { it.packageName }.toSet()
         essential += knownUtilityApps.filter { it in installed }
