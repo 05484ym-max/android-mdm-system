@@ -439,8 +439,8 @@ class CustomerActivity : Activity() {
                             isClickable = true
                             Toast.makeText(
                                 this@CustomerActivity,
-                                "הסנכרון נכשל",
-                                Toast.LENGTH_SHORT
+                                "הסנכרון נכשל: ${e.message}",
+                                Toast.LENGTH_LONG
                             ).show()
                         }
                     }
