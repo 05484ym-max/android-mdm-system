@@ -1,6 +1,8 @@
 package org.mdmopen.dpc
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -11,6 +13,7 @@ object Config {
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_DEVICE_TOKEN = "device_token"
     private const val KEY_ALLOWED_APPS = "allowed_apps"
+    private const val KEY_APP_CATALOG = "app_catalog"
     private const val KEY_KIOSK = "kiosk_enabled"
     private const val KEY_SYNC_MINUTES = "sync_interval_minutes"
     private const val KEY_ADMIN_PIN = "admin_pin_sha256"
@@ -51,6 +54,34 @@ object Config {
 
     fun setAllowedApps(context: Context, apps: List<String>) {
         prefs(context).edit().putStringSet(KEY_ALLOWED_APPS, apps.toSet()).apply()
+    }
+
+    /** Display metadata (name, icon) for the customer's approved apps, so the
+     * in-app store can show a real catalog instead of raw package names. */
+    fun appCatalog(context: Context): List<CatalogApp> {
+        val raw = prefs(context).getString(KEY_APP_CATALOG, null) ?: return emptyList()
+        val array = JSONArray(raw)
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            CatalogApp(
+                packageName = item.getString("packageName"),
+                name = item.getString("name"),
+                iconUrl = if (item.isNull("iconUrl")) null else item.optString("iconUrl", null),
+            )
+        }
+    }
+
+    fun setAppCatalog(context: Context, catalog: List<CatalogApp>) {
+        val array = JSONArray()
+        catalog.forEach { app ->
+            array.put(
+                JSONObject()
+                    .put("packageName", app.packageName)
+                    .put("name", app.name)
+                    .put("iconUrl", app.iconUrl)
+            )
+        }
+        prefs(context).edit().putString(KEY_APP_CATALOG, array.toString()).apply()
     }
 
     fun kioskEnabled(context: Context): Boolean =

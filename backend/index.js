@@ -486,8 +486,15 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
     lastSeen: new Date().toISOString(),
   });
 
+  const policy = normalizePolicy(req.device.policy);
+  const allowed = new Set(policy.allowedApps);
+  const catalog = (await db.listAppsCatalog())
+    .filter(app => allowed.has(app.packageName))
+    .map(({ packageName, name, iconUrl }) => ({ packageName, name, iconUrl }));
+
   res.json({
-    policy: normalizePolicy(req.device.policy),
+    policy,
+    catalog,
     commands: await db.takePendingCommands(req.params.deviceId),
   });
 }));

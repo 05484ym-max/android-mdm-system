@@ -21,8 +21,15 @@ data class QueuedCommand(
     val params: JSONObject,
 )
 
+data class CatalogApp(
+    val packageName: String,
+    val name: String,
+    val iconUrl: String?,
+)
+
 data class SyncResult(
     val policy: Policy,
+    val catalog: List<CatalogApp>,
     val commands: List<QueuedCommand>,
 )
 
@@ -74,7 +81,17 @@ class ApiClient(
             )
         }
 
-        return SyncResult(policy, commands)
+        val catalogJson = json.optJSONArray("catalog") ?: JSONArray()
+        val catalog = (0 until catalogJson.length()).map { index ->
+            val item = catalogJson.getJSONObject(index)
+            CatalogApp(
+                packageName = item.getString("packageName"),
+                name = item.optString("name", item.getString("packageName")),
+                iconUrl = if (item.isNull("iconUrl")) null else item.optString("iconUrl", null),
+            )
+        }
+
+        return SyncResult(policy, catalog, commands)
     }
 
     fun reportCommandResult(
