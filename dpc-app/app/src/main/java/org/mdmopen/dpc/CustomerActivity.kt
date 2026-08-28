@@ -20,8 +20,12 @@ import android.widget.Toast
 
 class CustomerActivity : Activity() {
 
+    private data class NavItem(val container: LinearLayout, val icon: TextView, val label: TextView)
+
     private lateinit var contentArea: LinearLayout
     private lateinit var topSubtitle: TextView
+    private lateinit var personalNavItem: NavItem
+    private lateinit var storeNavItem: NavItem
 
     private val BG = "#FAFAFA"
     private val CARD = "#FFFFFF"
@@ -30,6 +34,7 @@ class CustomerActivity : Activity() {
     private val MUTED = "#8A8A94"
     private val ACCENT = "#4F46E5"
     private val ACCENT_DEEP = "#3730A3"
+    private val ACCENT_TINT = "#EEF0FF"
 
     private val heavyFont = Typeface.create("sans-serif-black", Typeface.NORMAL)
     private val mediumFont = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -132,16 +137,20 @@ class CustomerActivity : Activity() {
             setPadding(dp(12), dp(10), dp(12), dp(14))
         }
 
+        personalNavItem = navButton("👤", "אזור אישי") { showPersonalArea() }
+        storeNavItem = navButton("▦", "חנות אפליקציות") { showAppStore() }
+        val adminNavItem = navButton("🔒", "כניסת מנהל") { openAdminLogin() }
+
         row.addView(
-            navButton("👤", "אזור אישי") { showPersonalArea() },
+            personalNavItem.container,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
         row.addView(
-            navButton("▦", "חנות אפליקציות") { showAppStore() },
+            storeNavItem.container,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
         row.addView(
-            navButton("🔒", "כניסת מנהל") { openAdminLogin() },
+            adminNavItem.container,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
 
@@ -153,35 +162,59 @@ class CustomerActivity : Activity() {
         icon: String,
         label: String,
         action: () -> Unit
-    ): LinearLayout {
-        return LinearLayout(this).apply {
+    ): NavItem {
+        val iconView = TextView(this).apply {
+            text = icon
+            textSize = 18f
+            gravity = Gravity.CENTER
+        }
+        val labelView = TextView(this).apply {
+            text = label
+            textSize = 11f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(4), 0, 0)
+        }
+
+        val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(10), dp(4), dp(6))
             isClickable = true
             isFocusable = true
 
-            addView(TextView(this@CustomerActivity).apply {
-                text = icon
-                textSize = 18f
-                gravity = Gravity.CENTER
-            })
-            addView(TextView(this@CustomerActivity).apply {
-                text = label
-                textSize = 11f
-                typeface = mediumFont
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(4), 0, 0)
-            })
+            addView(iconView)
+            addView(labelView)
 
             setOnClickListener { action() }
+        }
+
+        return NavItem(container, iconView, labelView)
+    }
+
+    private fun setActiveNav(active: NavItem) {
+        for (item in listOf(personalNavItem, storeNavItem)) {
+            val isActive = item === active
+            item.icon.alpha = if (isActive) 1f else 0.5f
+            item.label.typeface = if (isActive) heavyFont else mediumFont
+            item.label.setTextColor(Color.parseColor(if (isActive) ACCENT else MUTED))
+            item.container.background =
+                if (isActive) roundedTint(ACCENT_TINT, dp(14).toFloat()) else null
+        }
+    }
+
+    private fun roundedTint(color: String, radius: Float): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(Color.parseColor(color))
+            cornerRadius = radius
         }
     }
 
 
     private fun showAppStore() {
         topSubtitle.text = "חנות האפליקציות"
+        setActiveNav(storeNavItem)
         contentArea.removeAllViews()
 
         contentArea.addView(
@@ -257,6 +290,7 @@ class CustomerActivity : Activity() {
 
     private fun showPersonalArea() {
         topSubtitle.text = "האזור האישי שלך"
+        setActiveNav(personalNavItem)
         contentArea.removeAllViews()
 
         contentArea.addView(sectionTitle("האזור האישי"))
