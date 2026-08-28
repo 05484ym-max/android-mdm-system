@@ -378,12 +378,21 @@ class CustomerActivity : Activity() {
     private fun loadIcon(app: CatalogApp, installed: Boolean, target: ImageView) {
         if (installed) {
             try {
-                target.setImageDrawable(packageManager.getApplicationIcon(app.packageName))
+                val drawable = packageManager.getApplicationIcon(app.packageName)
+                target.setImageDrawable(drawable)
+                // Cached now so the icon still has something real to fall
+                // back to later if the customer uninstalls this app - the
+                // server's scraped iconUrl isn't always reliable.
+                AppIconCache.save(this, app.packageName, drawable)
                 return
             } catch (_: Exception) {
-                // Fall through to the remote icon below.
+                // Fall through to the remote/cached icon below.
             }
         }
+
+        val cached = AppIconCache.get(this, app.packageName)
+        if (cached != null) target.setImageBitmap(cached)
+
         val url = app.iconUrl ?: return
         Thread {
             val bitmap: Bitmap? = try {
