@@ -5,6 +5,7 @@ import android.app.WallpaperManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -31,7 +32,7 @@ object WallpaperBranding {
     private const val TAG = "WallpaperBranding"
     // Renamed from "dpc_wallpaper" - a prior attempt could have recorded an
     // "already branded" id despite never actually reading the real wallpaper
-    // (see grantWallpaperReadPermission below), which would have silently
+    // (see wallpaperReadPermissionGranted below), which would have silently
     // blocked every retry since. A fresh prefs file forces one clean re-try.
     private const val PREFS = "dpc_wallpaper_v2"
     private const val KEY_LAST_ID = "last_branded_wallpaper_id"
@@ -50,7 +51,12 @@ object WallpaperBranding {
             val dpm = context.getSystemService(DevicePolicyManager::class.java)
             if (!dpm.isDeviceOwnerApp(context.packageName)) return
 
-            grantWallpaperReadPermission(context, dpm)
+            // WallpaperManager silently hands back a built-in placeholder
+            // instead of throwing when read access isn't actually there -
+            // branding that placeholder would overwrite the customer's real
+            // photo with it. Never proceed without confirming the grant
+            // really took effect, rather than hoping it did.
+            if (!wallpaperReadPermissionGranted(context, dpm)) return
 
             val wallpaperManager = WallpaperManager.getInstance(context)
             val currentId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
@@ -107,9 +113,12 @@ object WallpaperBranding {
      * permission - a long-standing, largely undocumented privacy restriction.
      * Neither permission is ever prompted for; a Device Owner can grant either
      * silently, which is the only reason declaring them in the manifest is safe
-     * here (no user-facing runtime prompt ever appears).
+     * here (no user-facing runtime prompt ever appears). setPermissionGrantState()
+     * can fail without throwing (wrong protection level, OEM policy, app state),
+     * so its result - and the actual resulting permission state - both get
+     * checked instead of assumed.
      */
-    private fun grantWallpaperReadPermission(context: Context, dpm: DevicePolicyManager) {
+    private fun wallpaperReadPermissionGranted(context: Context, dpm: DevicePolicyManager): Boolean {
         val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
         val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Manifest.permission.READ_MEDIA_IMAGES
@@ -126,6 +135,9 @@ object WallpaperBranding {
         } catch (e: Exception) {
             Log.w(TAG, "Could not grant $permission", e)
         }
+        val granted = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        if (!granted) Log.w(TAG, "$permission still not granted after requesting it - skipping wallpaper branding")
+        return granted
     }
 
     private fun drawableToBitmap(drawable: Drawable): Bitmap {
