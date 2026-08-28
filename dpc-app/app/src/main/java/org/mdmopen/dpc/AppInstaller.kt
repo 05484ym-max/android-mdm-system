@@ -37,6 +37,7 @@ class AppInstaller(private val context: Context) {
     }
 
     fun uninstall(packageName: String): String {
+        temporarilyAllowUninstall()
         context.packageManager.packageInstaller
             .uninstall(packageName, statusSender(packageName.hashCode()))
         return "הסרה הופעלה עבור $packageName"
@@ -65,6 +66,28 @@ class AppInstaller(private val context: Context) {
             .apply()
     }
 
+    // DISALLOW_UNINSTALL_APPS blocks every uninstall source, including our own
+    // remote command - without lifting it too, PackageInstaller.uninstall()
+    // just silently fails with STATUS_FAILURE_BLOCKED.
+    private fun temporarilyAllowUninstall() {
+        val dpm =
+            context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+        if (!dpm.isDeviceOwnerApp(context.packageName)) return
+
+        val admin =
+            ComponentName(context, DpcDeviceAdminReceiver::class.java)
+
+        dpm.clearUserRestriction(
+            admin,
+            UserManager.DISALLOW_UNINSTALL_APPS
+        )
+    }
+
+    /** Restores both restrictions after any install/uninstall result -
+     * InstallResultReceiver can't tell which one was just cleared, so it
+     * always restores both; re-adding an already-active restriction is a
+     * harmless no-op. */
     fun restoreInstallBlock() {
         val dpm =
             context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -77,6 +100,10 @@ class AppInstaller(private val context: Context) {
         dpm.addUserRestriction(
             admin,
             UserManager.DISALLOW_INSTALL_APPS
+        )
+        dpm.addUserRestriction(
+            admin,
+            UserManager.DISALLOW_UNINSTALL_APPS
         )
 
         context.getSharedPreferences(
