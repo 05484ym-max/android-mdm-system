@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.UserManager
+import android.provider.AlarmClock
+import android.provider.MediaStore
 import android.provider.Telephony
 
 data class EnforcementResult(
@@ -76,22 +78,42 @@ class PolicyEnforcer(private val context: Context) {
     }
 
     /**
-     * Packages that must stay usable no matter what's approved: our own app, whichever
-     * app currently handles Settings/dialing/SMS/the home screen. Suspending anything
-     * else the customer can see (including preinstalled Google/OEM apps) is intentional.
+     * Packages that must stay usable no matter what's approved: basic phone functions
+     * (settings, dialer, SMS, home) plus everyday device tools (contacts, clock,
+     * calendar, camera, gallery, files, mail) - resolved dynamically by system role
+     * rather than hardcoded OEM package names, since those vary by manufacturer.
+     * Suspending anything else the customer can see (including preinstalled
+     * Google/social apps) is intentional.
      */
     private fun essentialPackages(): Set<String> {
         val essential = mutableSetOf(context.packageName, "com.android.settings")
         val pm = context.packageManager
 
-        pm.resolveActivity(Intent(Intent.ACTION_DIAL), 0)
-            ?.activityInfo?.packageName?.let { essential += it }
+        fun addResolved(intent: Intent) {
+            pm.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName?.let { essential += it }
+        }
+
+        addResolved(Intent(Intent.ACTION_DIAL))
+        addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
+        addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CONTACTS))
+        addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR))
+        addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_EMAIL))
+        addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY))
+        addResolved(Intent(AlarmClock.ACTION_SHOW_ALARMS))
+        addResolved(Intent(MediaStore.ACTION_IMAGE_CAPTURE))
 
         Telephony.Sms.getDefaultSmsPackage(context)?.let { essential += it }
 
-        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
-            ?.activityInfo?.packageName?.let { essential += it }
+        // No system-wide intent role for "the file manager" - fall back to the
+        // common built-in package names across Samsung/AOSP devices.
+        val fileManagerCandidates = listOf(
+            "com.sec.android.app.myfiles",
+            "com.google.android.documentsui",
+            "com.android.documentsui",
+        )
+        val installed = pm.getInstalledApplications(0).map { it.packageName }.toSet()
+        essential += fileManagerCandidates.filter { it in installed }
 
         return essential
     }
