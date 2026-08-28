@@ -49,6 +49,10 @@ class PolicyEnforcer(private val context: Context) {
             if (app.packageName == context.packageName) continue
             if (app.packageName in essential) {
                 systemSkipped++
+                // Explicitly unsuspend rather than just skipping, so an app that got
+                // wrongly suspended before it was added to this list recovers on the
+                // next sync instead of staying suspended forever.
+                toUnsuspend += app.packageName
                 continue
             }
             // Apps with no launcher entry are never visible to the customer either way -
