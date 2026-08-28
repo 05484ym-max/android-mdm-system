@@ -9,9 +9,7 @@ import android.content.pm.PackageManager
 import android.os.UserManager
 import android.provider.AlarmClock
 import android.provider.MediaStore
-import android.provider.Settings
 import android.provider.Telephony
-import android.util.Log
 
 data class EnforcementResult(
     val suspended: List<String>,
@@ -41,7 +39,7 @@ class PolicyEnforcer(private val context: Context) {
         dpm.addUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
 
-        val allowed = policy.allowedApps.toSet()
+        val allowed = policy.allowedApps.toSet() + playStoreTemporaryAllowance()
         val essential = essentialPackages()
         val toSuspend = mutableListOf<String>()
         val toUnsuspend = mutableListOf<String>()
@@ -79,8 +77,6 @@ class PolicyEnforcer(private val context: Context) {
 
         if (policy.kioskEnabled) enableKiosk(allowed) else disableKiosk()
 
-        enableStoreGuard()
-
         return EnforcementResult(
             suspended = toSuspend - failed.toSet(),
             unsuspended = toUnsuspend - failed.toSet(),
@@ -99,10 +95,7 @@ class PolicyEnforcer(private val context: Context) {
      * Google/social apps) is intentional.
      */
     private fun essentialPackages(): Set<String> {
-        // Play Store is deliberately kept unhidden: StoreGuardAccessibilityService
-        // blocks the customer from browsing it directly, while CommandExecutor can
-        // still deep-link into it to install an admin-approved app for real.
-        val essential = mutableSetOf(context.packageName, "com.android.settings", "com.android.vending")
+        val essential = mutableSetOf(context.packageName, "com.android.settings")
         val pm = context.packageManager
 
         fun addResolved(intent: Intent) {
@@ -152,32 +145,13 @@ class PolicyEnforcer(private val context: Context) {
     }
 
     /**
-     * Silently turns on our own accessibility service (Device Owner can write
-     * secure settings directly - no visit to Settings, no user-facing prompt)
-     * so StoreGuardAccessibilityService can watch for the customer opening
-     * Play Store on their own.
-     *
-     * Since Android 11, platform policy blocks Device Owners from writing
-     * ENABLED_ACCESSIBILITY_SERVICES this way (SecurityException), even though
-     * the API itself doesn't say so. Caught here rather than left to propagate,
-     * since this used to take down the entire sync - app hide/unhide, self-update,
-     * command execution - every single time it ran on such a device.
+     * Play Store is hidden by default like any unapproved app. PlayStoreGate
+     * briefly opens a window (recorded here as an expiry timestamp) while an
+     * admin-approved install is in progress - this is what keeps it unhidden
+     * for that window on every policy pass in the meantime.
      */
-    private fun enableStoreGuard() {
-        try {
-            val serviceId = "${context.packageName}/${StoreGuardAccessibilityService::class.java.name}"
-            val resolver = context.contentResolver
-
-            val current = Settings.Secure.getString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-            if (current == null || !current.split(':').contains(serviceId)) {
-                val updated = if (current.isNullOrBlank()) serviceId else "$current:$serviceId"
-                dpm.setSecureSetting(admin, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, updated)
-            }
-            dpm.setSecureSetting(admin, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
-        } catch (e: SecurityException) {
-            Log.w("PolicyEnforcer", "Platform blocked silent accessibility enable", e)
-        }
-    }
+    private fun playStoreTemporaryAllowance(): Set<String> =
+        if (!PlayStoreGate.isWindowClosed(context)) setOf("com.android.vending") else emptySet()
 
     private fun enableKiosk(allowed: Set<String>) {
         dpm.setLockTaskPackages(admin, (allowed + context.packageName).toTypedArray())

@@ -3,8 +3,6 @@ package org.mdmopen.dpc
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 
 class CommandExecutor(private val context: Context) {
 
@@ -35,19 +33,7 @@ class CommandExecutor(private val context: Context) {
         "UNINSTALL_APP" -> installer.uninstall(queued.params.getString("packageName"))
         "OPEN_PLAY_STORE_INSTALL" -> {
             val packageName = queued.params.getString("packageName")
-
-            // Brief window during which the store-guard service lets Play Store
-            // stay open, since we're the ones opening it this time.
-            Config.setPlayStoreAllowedUntil(
-                context,
-                System.currentTimeMillis() + StoreGuardAccessibilityService.ALLOW_WINDOW_MS,
-            )
-
-            context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
-                    .setPackage("com.android.vending")
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
+            PlayStoreGate.openForInstall(context, packageName)
             "נפתח Play Store להתקנת $packageName"
         }
         else -> "פקודה לא מוכרת: ${queued.command}"

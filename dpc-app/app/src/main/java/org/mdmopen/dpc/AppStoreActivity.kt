@@ -1,13 +1,11 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -165,28 +163,11 @@ class AppStoreActivity : Activity() {
         if (launchIntent != null) startActivity(launchIntent) else openPlayStoreForInstall(packageName)
     }
 
-    /** Opens this app's install page in the real Play Store. StoreGuardAccessibilityService
-     * would otherwise bounce the customer straight back out of Play Store - the allow
-     * window here is what tells it this particular visit was sanctioned. */
+    /** Play Store is hidden by default like any unapproved app - this briefly
+     * reveals it, opens the install page, and lets it hide itself again once
+     * the window closes (see PlayStoreGate). */
     private fun openPlayStoreForInstall(packageName: String) {
-        Config.setPlayStoreAllowedUntil(
-            this,
-            System.currentTimeMillis() + StoreGuardAccessibilityService.ALLOW_WINDOW_MS,
-        )
-        try {
-            startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
-                    .setPackage("com.android.vending")
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        } catch (_: Exception) {
-            startActivity(
-                Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("https://play.google.com/store/apps/details?id=$packageName"),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }
+        PlayStoreGate.openForInstall(this, packageName)
     }
 
     private fun loadIcon(app: CatalogApp, installed: Boolean, target: ImageView) {
