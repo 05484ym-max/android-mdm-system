@@ -29,11 +29,11 @@ class AppStoreActivity : Activity() {
         StoreApp("Gmail", "com.google.android.gm", "דואר אלקטרוני מבית Google")
     )
 
-    private val BG = "#F5F7FA"
+    private val BG = "#F2F1E6"
     private val CARD = "#FFFFFF"
-    private val TEXT = "#1A1A1A"
-    private val MUTED = "#888888"
-    private val GOLD = "#8B7A4A"
+    private val TEXT = "#1C1C1C"
+    private val MUTED = "#8C8C86"
+    private val GOLD = "#4B6B45"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

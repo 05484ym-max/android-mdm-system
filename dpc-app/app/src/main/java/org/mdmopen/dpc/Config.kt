@@ -16,6 +16,7 @@ object Config {
     private const val KEY_ADMIN_PIN = "admin_pin_sha256"
     private const val KEY_PENDING_ENROLL = "pending_enrollment_token"
     private const val KEY_PUSH_TOKEN = "push_token"
+    private const val KEY_LAST_SYNC_AT = "last_sync_at"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -71,6 +72,14 @@ object Config {
 
     fun setPushToken(context: Context, token: String) {
         prefs(context).edit().putString(KEY_PUSH_TOKEN, token).apply()
+    }
+
+    /** Epoch millis of the last successful sync, for the "last updated" label. */
+    fun lastSyncAt(context: Context): Long =
+        prefs(context).getLong(KEY_LAST_SYNC_AT, 0L)
+
+    fun setLastSyncNow(context: Context) {
+        prefs(context).edit().putLong(KEY_LAST_SYNC_AT, System.currentTimeMillis()).apply()
     }
 
     /** Enrolment code handed over by the QR code, consumed once at provisioning. */
