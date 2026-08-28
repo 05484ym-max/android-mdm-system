@@ -35,7 +35,11 @@ class PolicyEnforcer(private val context: Context) {
         check(isDeviceOwner()) { "Not device owner - cannot enforce policy" }
 
         dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
-        dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+        // A background sync landing mid-install (PlayStoreGate's window still open)
+        // must not re-clamp this out from under a Play Store install in progress.
+        if (PlayStoreGate.isWindowClosed(context)) {
+            dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+        }
         dpm.addUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
 

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.UserManager
 
 /**
  * Play Store is hidden by default, same as any app the customer hasn't been
@@ -31,6 +32,9 @@ object PlayStoreGate {
 
         Config.setPlayStoreAllowedUntil(context, System.currentTimeMillis() + ALLOW_WINDOW_MS)
         dpm.setApplicationHidden(admin, PACKAGE, false)
+        // DISALLOW_INSTALL_APPS blocks every install source, Play Store included -
+        // without lifting it too, the customer sees the store but "Install" is a no-op.
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
 
         try {
             context.startActivity(
@@ -52,6 +56,7 @@ object PlayStoreGate {
         Handler(Looper.getMainLooper()).postDelayed({
             if (isWindowClosed(context)) {
                 dpm.setApplicationHidden(admin, PACKAGE, true)
+                dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
             }
         }, ALLOW_WINDOW_MS)
     }
