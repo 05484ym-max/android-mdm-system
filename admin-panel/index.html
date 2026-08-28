@@ -137,27 +137,32 @@
     background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.85rem;
   }
   .customer-name { color: var(--text); font-size: 1.05rem; font-weight: 700; }
-  .catalog-row {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding: 10px 0; border-bottom: 1px solid var(--card-border);
+  .catalog-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 10px;
   }
-  .catalog-row:last-child { border-bottom: none; }
-  .catalog-name { color: var(--text); font-weight: 700; min-width: 140px; }
-  .catalog-package { color: var(--text-dim); font-size: 0.78rem; direction: ltr; }
+  .catalog-tile {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 18px;
+    padding: 14px 10px; display: flex; flex-direction: column; align-items: center;
+    text-align: center; gap: 6px;
+  }
+  .catalog-name { color: var(--text); font-weight: 700; font-size: 0.9rem; }
+  .catalog-package { color: var(--text-dim); font-size: 0.7rem; direction: ltr; word-break: break-all; }
+  .catalog-icon-frame {
+    width: 60px; height: 60px; border-radius: 16px; border: 2px solid var(--accent);
+    background: var(--accent-tint); flex-shrink: 0; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
   .catalog-icon {
-    width: 40px; height: 40px; border-radius: 12px; object-fit: cover;
-    background: var(--bg); border: 1px solid var(--card-border); flex-shrink: 0;
+    width: 100%; height: 100%; object-fit: cover;
   }
   .catalog-icon-placeholder {
-    width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
-    background: var(--accent-tint); border: 1px solid var(--card-border);
-    display: flex; align-items: center; justify-content: center;
-    color: var(--accent); font-size: 1rem; font-weight: 700;
+    color: var(--accent); font-size: 1.2rem; font-weight: 700;
   }
-  .catalog-select {
-    padding: 7px 8px; border-radius: 10px; border: 1px solid var(--card-border);
-    background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.8rem;
+  .catalog-tile-actions { display: flex; gap: 6px; width: 100%; margin-top: 4px; }
+  .catalog-tile-actions .add-app-btn {
+    flex: 1; padding: 7px 6px; font-size: 0.72rem; white-space: normal;
   }
+  .catalog-tile .approved-badge { margin-top: 4px; }
   .sub-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
   .sub-tab-btn {
     flex: 1; padding: 10px; border-radius: 12px; border: 1px solid var(--card-border);
@@ -685,9 +690,10 @@ let catalogMode = 'all';
 let catalogCustomerId = '';
 
 function catalogIconHtml(a) {
-  return a.iconUrl
+  const inner = a.iconUrl
     ? `<img class="catalog-icon" src="${escapeHtml(a.iconUrl)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'catalog-icon-placeholder',textContent:'${escapeHtml((a.name || '?')[0])}'}))" />`
     : `<div class="catalog-icon-placeholder">${escapeHtml((a.name || '?')[0])}</div>`;
+  return `<div class="catalog-icon-frame">${inner}</div>`;
 }
 
 function populateCatalogCustomerSelect() {
@@ -731,17 +737,17 @@ function renderCatalog(apps) {
   }
 
   if (catalogMode === 'all') {
-    listEl.innerHTML = apps.map(a => `
-      <div class="catalog-row">
+    listEl.innerHTML = `<div class="catalog-grid">${apps.map(a => `
+      <div class="catalog-tile">
         ${catalogIconHtml(a)}
-        <div>
-          <div class="catalog-name">${escapeHtml(a.name)}</div>
-          <div class="catalog-package">${escapeHtml(a.packageName)}</div>
+        <div class="catalog-name">${escapeHtml(a.name)}</div>
+        <div class="catalog-package">${escapeHtml(a.packageName)}</div>
+        <div class="catalog-tile-actions">
+          <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
+          <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
         </div>
-        <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
-        <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
       </div>
-    `).join('');
+    `).join('')}</div>`;
 
     document.querySelectorAll('[data-refresh-icon]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -777,20 +783,18 @@ function renderCatalog(apps) {
   const device = allDevices.find(d => d.deviceId === catalogCustomerId);
   const already = new Set((device && device.policy && device.policy.allowedApps) || []);
 
-  listEl.innerHTML = apps.map(a => `
-    <div class="catalog-row">
+  listEl.innerHTML = `<div class="catalog-grid">${apps.map(a => `
+    <div class="catalog-tile">
       ${catalogIconHtml(a)}
-      <div>
-        <div class="catalog-name">${escapeHtml(a.name)}</div>
-        <div class="catalog-package">${escapeHtml(a.packageName)}</div>
+      <div class="catalog-name">${escapeHtml(a.name)}</div>
+      <div class="catalog-package">${escapeHtml(a.packageName)}</div>
+      ${already.has(a.packageName) ? '<span class="approved-badge">✓ מאושר</span>' : ''}
+      <div class="catalog-tile-actions">
+        ${already.has(a.packageName) ? '' : `<button class="add-app-btn" data-assign-one="${escapeHtml(a.packageName)}">הוסף</button>`}
+        <button class="add-app-btn" data-install-store="${escapeHtml(a.packageName)}">התקן דרך Play Store</button>
       </div>
-      ${already.has(a.packageName)
-        ? '<span class="approved-badge">✓ מאושר</span>'
-        : `<button class="add-app-btn" data-assign-one="${escapeHtml(a.packageName)}">הוסף</button>`
-      }
-      <button class="add-app-btn" data-install-store="${escapeHtml(a.packageName)}">התקן דרך Play Store</button>
     </div>
-  `).join('');
+  `).join('')}</div>`;
 
   document.querySelectorAll('[data-assign-one]').forEach(btn => {
     btn.addEventListener('click', async () => {
