@@ -158,6 +158,18 @@
     padding: 7px 8px; border-radius: 10px; border: 1px solid var(--card-border);
     background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.8rem;
   }
+  .sub-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .sub-tab-btn {
+    flex: 1; padding: 10px; border-radius: 12px; border: 1px solid var(--card-border);
+    background: var(--bg); color: var(--text-dim); font-weight: 700; cursor: pointer;
+    font-family: inherit; font-size: 0.85rem;
+  }
+  .sub-tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .customer-picker {
+    width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--card-border);
+    background: var(--bg); color: var(--text); font-family: inherit; margin-bottom: 14px;
+  }
+  .approved-badge { color: var(--ok); font-size: 0.85rem; font-weight: 700; white-space: nowrap; }
   .open-detail-btn {
     background: var(--accent); color: #fff; border: none; border-radius: 10px;
     padding: 9px 16px; font-weight: 700; cursor: pointer; font-family: inherit;
@@ -250,9 +262,16 @@
 <div class="tab-content" data-tab-content="catalog">
   <div class="enroll-card">
     <h2>חנות אפליקציות</h2>
+    <div class="sub-tabs">
+      <button class="sub-tab-btn active" data-catalog-mode="all">אפליקציות לכולם</button>
+      <button class="sub-tab-btn" data-catalog-mode="customer">הוספה ללקוח</button>
+    </div>
+    <select class="customer-picker" id="catalogCustomerSelect" style="display:none;">
+      <option value="">בחר לקוח...</option>
+    </select>
     <input class="search-input" id="catalogSearch" placeholder="חיפוש בקטלוג לפי שם..." />
     <div id="catalogList"><div class="empty-state">טוען...</div></div>
-    <div class="add-app-row" style="margin-top:10px;">
+    <div class="add-app-row" id="addAppToCatalogRow" style="margin-top:10px;">
       <input class="package-input" id="newAppName" placeholder="שם האפליקציה (לדוגמה: וויז)" />
       <input class="package-input" id="newAppPackage" placeholder="com.waze" />
       <button class="add-app-btn" id="addAppToCatalogBtn">הוסף לקטלוג</button>
@@ -364,6 +383,7 @@ async function loadDevices() {
   document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('he-IL');
 
   renderDeviceList(filterDevices(document.getElementById('deviceSearch').value));
+  populateCatalogCustomerSelect();
   loadAppsCatalog();
 
   if (currentDetailDeviceId) {
@@ -661,6 +681,43 @@ function filterCatalog(query) {
   );
 }
 
+let catalogMode = 'all';
+let catalogCustomerId = '';
+
+function catalogIconHtml(a) {
+  return a.iconUrl
+    ? `<img class="catalog-icon" src="${escapeHtml(a.iconUrl)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'catalog-icon-placeholder',textContent:'${escapeHtml((a.name || '?')[0])}'}))" />`
+    : `<div class="catalog-icon-placeholder">${escapeHtml((a.name || '?')[0])}</div>`;
+}
+
+function populateCatalogCustomerSelect() {
+  const select = document.getElementById('catalogCustomerSelect');
+  const options = allDevices.map(d =>
+    `<option value="${escapeHtml(d.deviceId)}">${escapeHtml(d.customerName || d.deviceId)}</option>`
+  ).join('');
+  select.innerHTML = '<option value="">בחר לקוח...</option>' + options;
+  if (allDevices.some(d => d.deviceId === catalogCustomerId)) {
+    select.value = catalogCustomerId;
+  } else {
+    catalogCustomerId = '';
+  }
+}
+
+document.querySelectorAll('[data-catalog-mode]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    catalogMode = btn.getAttribute('data-catalog-mode');
+    document.querySelectorAll('[data-catalog-mode]').forEach(b => b.classList.toggle('active', b === btn));
+    document.getElementById('catalogCustomerSelect').style.display = catalogMode === 'customer' ? 'block' : 'none';
+    document.getElementById('addAppToCatalogRow').style.display = catalogMode === 'all' ? 'flex' : 'none';
+    renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
+  });
+});
+
+document.getElementById('catalogCustomerSelect').addEventListener('change', e => {
+  catalogCustomerId = e.target.value;
+  renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
+});
+
 function renderCatalog(apps) {
   const listEl = document.getElementById('catalogList');
 
@@ -673,62 +730,72 @@ function renderCatalog(apps) {
     return;
   }
 
-  const deviceOptions = allDevices.map(d =>
-    `<option value="${escapeHtml(d.deviceId)}">${escapeHtml(d.customerName || d.deviceId)}</option>`
-  ).join('');
+  if (catalogMode === 'all') {
+    listEl.innerHTML = apps.map(a => `
+      <div class="catalog-row">
+        ${catalogIconHtml(a)}
+        <div>
+          <div class="catalog-name">${escapeHtml(a.name)}</div>
+          <div class="catalog-package">${escapeHtml(a.packageName)}</div>
+        </div>
+        <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
+        <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
+      </div>
+    `).join('');
+
+    document.querySelectorAll('[data-refresh-icon]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const packageName = btn.getAttribute('data-refresh-icon');
+        const name = btn.getAttribute('data-refresh-name');
+        btn.disabled = true;
+        await fetch('/api/apps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, packageName }),
+        });
+        loadAppsCatalog();
+      });
+    });
+
+    document.querySelectorAll('[data-assign-all]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const packageName = btn.getAttribute('data-assign-all');
+        btn.disabled = true;
+        btn.textContent = 'מוסיף...';
+        await fetch(`/api/apps/${encodeURIComponent(packageName)}/assign-all`, { method: 'POST' });
+        loadDevices();
+      });
+    });
+    return;
+  }
+
+  // catalogMode === 'customer'
+  if (!catalogCustomerId) {
+    listEl.innerHTML = '<div class="empty-state">בחר לקוח למעלה כדי להוסיף לו אפליקציות</div>';
+    return;
+  }
+  const device = allDevices.find(d => d.deviceId === catalogCustomerId);
+  const already = new Set((device && device.policy && device.policy.allowedApps) || []);
 
   listEl.innerHTML = apps.map(a => `
     <div class="catalog-row">
-      ${a.iconUrl
-        ? `<img class="catalog-icon" src="${escapeHtml(a.iconUrl)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'catalog-icon-placeholder',textContent:'${escapeHtml((a.name || '?')[0])}'}))" />`
-        : `<div class="catalog-icon-placeholder">${escapeHtml((a.name || '?')[0])}</div>`
-      }
+      ${catalogIconHtml(a)}
       <div>
         <div class="catalog-name">${escapeHtml(a.name)}</div>
         <div class="catalog-package">${escapeHtml(a.packageName)}</div>
       </div>
-      <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
-      <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
-      <select class="catalog-select" data-device-select-for="${escapeHtml(a.packageName)}">
-        <option value="">בחר לקוח...</option>
-        ${deviceOptions}
-      </select>
-      <button class="add-app-btn" data-assign-one="${escapeHtml(a.packageName)}">הוסף ללקוח</button>
+      ${already.has(a.packageName)
+        ? '<span class="approved-badge">✓ מאושר</span>'
+        : `<button class="add-app-btn" data-assign-one="${escapeHtml(a.packageName)}">הוסף</button>`
+      }
       <button class="add-app-btn" data-install-store="${escapeHtml(a.packageName)}">התקן דרך Play Store</button>
     </div>
   `).join('');
 
-  document.querySelectorAll('[data-refresh-icon]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const packageName = btn.getAttribute('data-refresh-icon');
-      const name = btn.getAttribute('data-refresh-name');
-      btn.disabled = true;
-      await fetch('/api/apps', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, packageName }),
-      });
-      loadAppsCatalog();
-    });
-  });
-
-  document.querySelectorAll('[data-assign-all]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const packageName = btn.getAttribute('data-assign-all');
-      btn.disabled = true;
-      btn.textContent = 'מוסיף...';
-      await fetch(`/api/apps/${encodeURIComponent(packageName)}/assign-all`, { method: 'POST' });
-      loadDevices();
-    });
-  });
-
   document.querySelectorAll('[data-assign-one]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const packageName = btn.getAttribute('data-assign-one');
-      const select = document.querySelector(`[data-device-select-for="${CSS.escape(packageName)}"]`);
-      const deviceId = select.value;
-      if (!deviceId) { alert('נא לבחור לקוח'); return; }
-      await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/apps`, {
+      await fetch(`/api/devices/${encodeURIComponent(catalogCustomerId)}/policy/apps`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ packageName }),
@@ -740,20 +807,16 @@ function renderCatalog(apps) {
   document.querySelectorAll('[data-install-store]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const packageName = btn.getAttribute('data-install-store');
-      const select = document.querySelector(`[data-device-select-for="${CSS.escape(packageName)}"]`);
-      const deviceId = select.value;
-      if (!deviceId) { alert('נא לבחור לקוח'); return; }
-
       btn.disabled = true;
       btn.textContent = 'שולח...';
 
       // Approve first so the app isn't hidden again once it's installed.
-      await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/apps`, {
+      await fetch(`/api/devices/${encodeURIComponent(catalogCustomerId)}/policy/apps`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ packageName }),
       });
-      await fetch(`/api/devices/${encodeURIComponent(deviceId)}/commands`, {
+      await fetch(`/api/devices/${encodeURIComponent(catalogCustomerId)}/commands`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: 'OPEN_PLAY_STORE_INSTALL', params: { packageName } }),
