@@ -17,6 +17,7 @@ object Config {
     private const val KEY_PENDING_ENROLL = "pending_enrollment_token"
     private const val KEY_PUSH_TOKEN = "push_token"
     private const val KEY_LAST_SYNC_AT = "last_sync_at"
+    private const val KEY_PLAY_STORE_ALLOWED_UNTIL = "play_store_allowed_until"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -80,6 +81,14 @@ object Config {
 
     fun setLastSyncNow(context: Context) {
         prefs(context).edit().putLong(KEY_LAST_SYNC_AT, System.currentTimeMillis()).apply()
+    }
+
+    /** Epoch millis until which the store-guard service lets Play Store stay open. */
+    fun playStoreAllowedUntil(context: Context): Long =
+        prefs(context).getLong(KEY_PLAY_STORE_ALLOWED_UNTIL, 0L)
+
+    fun setPlayStoreAllowedUntil(context: Context, until: Long) {
+        prefs(context).edit().putLong(KEY_PLAY_STORE_ALLOWED_UNTIL, until).apply()
     }
 
     /** Enrolment code handed over by the QR code, consumed once at provisioning. */

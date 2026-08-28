@@ -222,6 +222,7 @@ function commandLabel(cmd) {
   return {
     LOCK: 'נעילה', SYNC_POLICY: 'סנכרון מדיניות', REBOOT: 'הפעלה מחדש',
     WIPE: 'מחיקת מכשיר', INSTALL_APP: 'התקנת אפליקציה', UNINSTALL_APP: 'הסרת אפליקציה',
+    OPEN_PLAY_STORE_INSTALL: 'התקנה דרך Play Store',
   }[cmd] || cmd;
 }
 
@@ -576,6 +577,7 @@ function renderCatalog(apps) {
         ${deviceOptions}
       </select>
       <button class="add-app-btn" data-assign-one="${escapeHtml(a.packageName)}">הוסף ללקוח</button>
+      <button class="add-app-btn" data-install-store="${escapeHtml(a.packageName)}">התקן דרך Play Store</button>
     </div>
   `).join('');
 
@@ -600,6 +602,34 @@ function renderCatalog(apps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ packageName }),
       });
+      loadDevices();
+    });
+  });
+
+  document.querySelectorAll('[data-install-store]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const packageName = btn.getAttribute('data-install-store');
+      const select = document.querySelector(`[data-device-select-for="${CSS.escape(packageName)}"]`);
+      const deviceId = select.value;
+      if (!deviceId) { alert('נא לבחור לקוח'); return; }
+
+      btn.disabled = true;
+      btn.textContent = 'שולח...';
+
+      // Approve first so the app isn't hidden again once it's installed.
+      await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/apps`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ packageName }),
+      });
+      await fetch(`/api/devices/${encodeURIComponent(deviceId)}/commands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'OPEN_PLAY_STORE_INSTALL', params: { packageName } }),
+      });
+
+      btn.disabled = false;
+      btn.textContent = 'התקן דרך Play Store';
       loadDevices();
     });
   });

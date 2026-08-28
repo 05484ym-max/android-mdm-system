@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.UserManager
 import android.provider.AlarmClock
 import android.provider.MediaStore
+import android.provider.Settings
 import android.provider.Telephony
 
 data class EnforcementResult(
@@ -77,6 +78,8 @@ class PolicyEnforcer(private val context: Context) {
 
         if (policy.kioskEnabled) enableKiosk(allowed) else disableKiosk()
 
+        enableStoreGuard()
+
         return EnforcementResult(
             suspended = toSuspend - failed.toSet(),
             unsuspended = toUnsuspend - failed.toSet(),
@@ -95,7 +98,10 @@ class PolicyEnforcer(private val context: Context) {
      * Google/social apps) is intentional.
      */
     private fun essentialPackages(): Set<String> {
-        val essential = mutableSetOf(context.packageName, "com.android.settings")
+        // Play Store is deliberately kept unhidden: StoreGuardAccessibilityService
+        // blocks the customer from browsing it directly, while CommandExecutor can
+        // still deep-link into it to install an admin-approved app for real.
+        val essential = mutableSetOf(context.packageName, "com.android.settings", "com.android.vending")
         val pm = context.packageManager
 
         fun addResolved(intent: Intent) {
@@ -142,6 +148,24 @@ class PolicyEnforcer(private val context: Context) {
         essential += knownUtilityApps.filter { it in installed }
 
         return essential
+    }
+
+    /**
+     * Silently turns on our own accessibility service (Device Owner can write
+     * secure settings directly - no visit to Settings, no user-facing prompt)
+     * so StoreGuardAccessibilityService can watch for the customer opening
+     * Play Store on their own.
+     */
+    private fun enableStoreGuard() {
+        val serviceId = "${context.packageName}/${StoreGuardAccessibilityService::class.java.name}"
+        val resolver = context.contentResolver
+
+        val current = Settings.Secure.getString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+        if (current == null || !current.split(':').contains(serviceId)) {
+            val updated = if (current.isNullOrBlank()) serviceId else "$current:$serviceId"
+            dpm.setSecureSetting(admin, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, updated)
+        }
+        dpm.setSecureSetting(admin, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
     }
 
     private fun enableKiosk(allowed: Set<String>) {

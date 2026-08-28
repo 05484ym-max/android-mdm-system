@@ -30,7 +30,8 @@ const AUTH_ENABLED = Boolean(ADMIN_USERNAME && ADMIN_PASSWORD_HASH && JWT_SECRET
 
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const ALLOWED_COMMANDS =
-  ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP'];
+  ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
+   'OPEN_PLAY_STORE_INSTALL'];
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -405,7 +406,7 @@ function validateCommandParams(command, params) {
       ? null
       : 'apkUrl must be an http(s) URL';
   }
-  if (command === 'UNINSTALL_APP') {
+  if (command === 'UNINSTALL_APP' || command === 'OPEN_PLAY_STORE_INSTALL') {
     return PACKAGE_NAME_REGEX.test(params.packageName || '')
       ? null
       : 'packageName is invalid';
