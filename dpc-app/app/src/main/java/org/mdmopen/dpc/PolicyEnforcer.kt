@@ -105,15 +105,27 @@ class PolicyEnforcer(private val context: Context) {
 
         Telephony.Sms.getDefaultSmsPackage(context)?.let { essential += it }
 
-        // No system-wide intent role for "the file manager" - fall back to the
-        // common built-in package names across Samsung/AOSP devices.
-        val fileManagerCandidates = listOf(
+        // Samsung's own apps often don't answer the standard role intents above
+        // (no default set, or the category isn't declared at all), so the dynamic
+        // resolution above silently misses them. Back it up with known package
+        // names across Samsung/AOSP - harmless if a name isn't installed.
+        val knownUtilityApps = listOf(
             "com.sec.android.app.myfiles",
             "com.google.android.documentsui",
             "com.android.documentsui",
+            "com.sec.android.app.camera",
+            "com.sec.android.gallery3d",
+            "com.samsung.android.gallery",
+            "com.sec.android.app.clockpackage",
+            "com.samsung.android.calendar",
+            "com.samsung.android.app.contacts",
+            "com.android.contacts",
+            "com.samsung.android.email.provider",
+            "com.samsung.android.dialer",
+            "com.samsung.android.messaging",
         )
         val installed = pm.getInstalledApplications(0).map { it.packageName }.toSet()
-        essential += fileManagerCandidates.filter { it in installed }
+        essential += knownUtilityApps.filter { it in installed }
 
         return essential
     }
