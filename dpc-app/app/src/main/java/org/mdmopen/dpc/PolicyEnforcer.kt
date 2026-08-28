@@ -65,10 +65,15 @@ class PolicyEnforcer(private val context: Context) {
             else toSuspend += app.packageName
         }
 
-        val failed = (
-            dpm.setPackagesSuspended(admin, toSuspend.toTypedArray(), true) +
-                dpm.setPackagesSuspended(admin, toUnsuspend.toTypedArray(), false)
-            ).toList()
+        // Hidden (not merely suspended) so unapproved apps disappear from the
+        // launcher entirely instead of showing as a greyed-out icon.
+        val failed = mutableListOf<String>()
+        for (pkg in toSuspend) {
+            if (!dpm.setApplicationHidden(admin, pkg, true)) failed += pkg
+        }
+        for (pkg in toUnsuspend) {
+            if (!dpm.setApplicationHidden(admin, pkg, false)) failed += pkg
+        }
 
         if (policy.kioskEnabled) enableKiosk(allowed) else disableKiosk()
 
