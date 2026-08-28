@@ -14,6 +14,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.util.Log
+import java.io.File
 
 /**
  * Stamps the transparent "יהודי כשר" emblem onto the customer's own home and
@@ -34,6 +35,15 @@ object WallpaperBranding {
     // blocked every retry since. A fresh prefs file forces one clean re-try.
     private const val PREFS = "dpc_wallpaper_v2"
     private const val KEY_LAST_ID = "last_branded_wallpaper_id"
+    private const val KEY_RECIPE_VERSION = "recipe_version"
+    private const val ORIGINAL_FILE = "wallpaper_original.png"
+
+    // Bump this whenever compositeEmblem()'s sizing or the emblem asset
+    // itself changes, so a device already branded under an older recipe
+    // gets one clean re-composite from the saved original instead of never
+    // updating (same id forever looks "already done") or stamping the new
+    // emblem onto its own previous output (see apply() below).
+    private const val RECIPE_VERSION = 2
 
     fun apply(context: Context) {
         try {
@@ -45,13 +55,34 @@ object WallpaperBranding {
             val wallpaperManager = WallpaperManager.getInstance(context)
             val currentId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val originalFile = File(context.filesDir, ORIGINAL_FILE)
 
-            // Already branded this exact wallpaper - re-running would stamp
-            // the emblem onto our own previous composite.
-            if (currentId != -1 && prefs.getInt(KEY_LAST_ID, Int.MIN_VALUE) == currentId) return
+            val isOurOwnComposite = currentId != -1 &&
+                prefs.getInt(KEY_LAST_ID, Int.MIN_VALUE) == currentId
 
-            val drawable = wallpaperManager.drawable ?: return
-            val original = drawableToBitmap(drawable)
+            if (isOurOwnComposite && prefs.getInt(KEY_RECIPE_VERSION, -1) == RECIPE_VERSION) {
+                return // Already branded this exact photo with the current recipe.
+            }
+
+            // The live wallpaper is our own previous composite (not the
+            // customer's real photo) whenever its id matches what we set -
+            // re-source from the saved original so a recipe change re-brands
+            // cleanly instead of stamping the new emblem onto the old one.
+            val original = if (isOurOwnComposite && originalFile.exists()) {
+                BitmapFactory.decodeFile(originalFile.absolutePath) ?: return
+            } else {
+                val drawable = wallpaperManager.drawable ?: return
+                val fresh = drawableToBitmap(drawable)
+                try {
+                    context.openFileOutput(ORIGINAL_FILE, Context.MODE_PRIVATE).use {
+                        fresh.compress(Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not save the original wallpaper", e)
+                }
+                fresh
+            }
+
             val emblem = BitmapFactory.decodeResource(context.resources, R.drawable.emblem_transparent)
                 ?: return
 
@@ -61,7 +92,10 @@ object WallpaperBranding {
             wallpaperManager.setBitmap(branded, null, true, WallpaperManager.FLAG_LOCK)
 
             val newId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
-            prefs.edit().putInt(KEY_LAST_ID, newId).apply()
+            prefs.edit()
+                .putInt(KEY_LAST_ID, newId)
+                .putInt(KEY_RECIPE_VERSION, RECIPE_VERSION)
+                .apply()
         } catch (e: Exception) {
             Log.w(TAG, "Could not brand the wallpaper", e)
         }
@@ -105,13 +139,13 @@ object WallpaperBranding {
         return bitmap
     }
 
-    /** Emblem sized to a little over half the screen width, centered
+    /** Emblem sized to well under half the screen width, centered
      * horizontally, anchored in the upper third rather than filling it. */
     private fun compositeEmblem(background: Bitmap, emblem: Bitmap): Bitmap {
         val result = background.copy(Bitmap.Config.ARGB_8888, true) ?: return background
         val canvas = Canvas(result)
 
-        val targetWidth = result.width * 0.55f
+        val targetWidth = result.width * 0.42f
         val scale = targetWidth / emblem.width
         val targetHeight = emblem.height * scale
 
