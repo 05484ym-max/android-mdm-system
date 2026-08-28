@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
@@ -27,12 +28,36 @@ class KioskLauncherActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Disabling kiosk clears our forced-home registration, but Android
+        // doesn't always re-resolve Home to the real launcher right away even
+        // across a reboot. If kiosk is actually off, hand off explicitly
+        // instead of showing this restrictive screen regardless of why we
+        // were still invoked.
+        if (!Config.kioskEnabled(this) && handOffToRealLauncher()) return
         enterLockTaskIfNeeded()
         render()
     }
 
     /** This is the home screen - back must not take the user anywhere else. */
     override fun onBackPressed() = Unit
+
+    private fun handOffToRealLauncher(): Boolean {
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val other = packageManager.queryIntentActivities(homeIntent, PackageManager.MATCH_ALL)
+            .firstOrNull { it.activityInfo.packageName != packageName }
+            ?: return false
+        return try {
+            startActivity(
+                Intent(homeIntent)
+                    .setClassName(other.activityInfo.packageName, other.activityInfo.name)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            finish()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     private fun enterLockTaskIfNeeded() {
         if (!Config.kioskEnabled(this)) return
