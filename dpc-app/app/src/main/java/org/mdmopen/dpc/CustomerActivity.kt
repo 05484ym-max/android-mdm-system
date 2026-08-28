@@ -265,7 +265,7 @@ class CustomerActivity : Activity() {
         }
 
         val columns = 2
-        apps.chunked(columns).forEach { rowApps ->
+        apps.chunked(columns).forEachIndexed { index, rowApps ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             rowApps.forEach { app ->
                 row.addView(
@@ -282,7 +282,7 @@ class CustomerActivity : Activity() {
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, dp(16)) }
+                ).apply { setMargins(0, if (index == 0) dp(20) else 0, 0, dp(20)) }
             )
         }
     }
@@ -301,10 +301,10 @@ class CustomerActivity : Activity() {
         val installed = isInstalled(app.packageName)
 
         val icon = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(76), dp(76))
-            background = flatRoundedBordered(ACCENT_TINT, ACCENT, dp(16).toFloat())
+            layoutParams = LinearLayout.LayoutParams(dp(96), dp(96))
+            background = flatRoundedBordered(ACCENT_TINT, ACCENT, dp(20).toFloat())
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setPadding(dp(14), dp(14), dp(14), dp(14))
             setImageResource(android.R.drawable.sym_def_app_icon)
         }
         loadIcon(app, installed, icon)

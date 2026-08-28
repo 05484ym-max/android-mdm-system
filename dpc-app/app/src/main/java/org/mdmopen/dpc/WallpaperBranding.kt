@@ -110,34 +110,41 @@ object WallpaperBranding {
     /**
      * WallpaperManager.getDrawable() hands back a built-in placeholder instead of
      * the customer's actual wallpaper unless the caller holds a storage-read
-     * permission - a long-standing, largely undocumented privacy restriction.
-     * Neither permission is ever prompted for; a Device Owner can grant either
-     * silently, which is the only reason declaring them in the manifest is safe
-     * here (no user-facing runtime prompt ever appears). setPermissionGrantState()
+     * permission - a long-standing, largely undocumented privacy restriction that
+     * predates Android 13's split of READ_EXTERNAL_STORAGE into granular media
+     * permissions. WallpaperManager's internal check is old framework code that
+     * may still specifically look for READ_EXTERNAL_STORAGE regardless of target
+     * SDK, so that one is always requested - READ_MEDIA_IMAGES is requested too
+     * on 33+ in case a newer OS build does check it instead. Neither is ever
+     * prompted for; a Device Owner can grant either silently. setPermissionGrantState()
      * can fail without throwing (wrong protection level, OEM policy, app state),
-     * so its result - and the actual resulting permission state - both get
-     * checked instead of assumed.
+     * so each grant's actual resulting state gets checked instead of assumed.
      */
     private fun wallpaperReadPermissionGranted(context: Context, dpm: DevicePolicyManager): Boolean {
         val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_IMAGES
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
+        val permissions = mutableListOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions += Manifest.permission.READ_MEDIA_IMAGES
         }
-        try {
-            dpm.setPermissionGrantState(
-                admin,
-                context.packageName,
-                permission,
-                DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not grant $permission", e)
+
+        var anyGranted = false
+        for (permission in permissions) {
+            try {
+                dpm.setPermissionGrantState(
+                    admin,
+                    context.packageName,
+                    permission,
+                    DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not grant $permission", e)
+            }
+            val granted = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+            if (!granted) Log.w(TAG, "$permission still not granted after requesting it")
+            anyGranted = anyGranted || granted
         }
-        val granted = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
-        if (!granted) Log.w(TAG, "$permission still not granted after requesting it - skipping wallpaper branding")
-        return granted
+        if (!anyGranted) Log.w(TAG, "No storage-read permission granted - skipping wallpaper branding")
+        return anyGranted
     }
 
     private fun drawableToBitmap(drawable: Drawable): Bitmap {
