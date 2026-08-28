@@ -10,8 +10,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -21,10 +21,13 @@ import java.net.URL
 class AppStoreActivity : Activity() {
 
     private val BG = "#F2F1E6"
-    private val CARD = "#FFFFFF"
     private val TEXT = "#1C1C1C"
     private val MUTED = "#8C8C86"
-    private val GOLD = "#4B6B45"
+    private val ACCENT = "#4B6B45"
+    private val OK = "#328A52"
+
+    private val heavyFont = Typeface.create("sans-serif-black", Typeface.NORMAL)
+    private val mediumFont = Typeface.create("sans-serif-medium", Typeface.NORMAL)
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -41,112 +44,137 @@ class AppStoreActivity : Activity() {
         return Config.appCatalog(this).filter { it.packageName in allowed }
     }
 
-    private fun buildUi(): ScrollView {
-        val root = LinearLayout(this).apply {
+    private fun buildUi(): View {
+        val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(BG))
-            setPadding(30, 48, 30, 40)
         }
 
-        root.addView(TextView(this).apply {
-            text = "חנות האפליקציות"
-            textSize = 27f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.RIGHT
+        page.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(24), dp(22), dp(24), dp(14))
+
+            addView(TextView(this@AppStoreActivity).apply {
+                text = "יהודי כשר"
+                textSize = 21f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.RIGHT
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            addView(TextView(this@AppStoreActivity).apply {
+                text = "✓"
+                textSize = 15f
+                typeface = heavyFont
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                background = flatCircle(ACCENT)
+                layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
+            })
         })
 
-        root.addView(TextView(this).apply {
-            text = "אפליקציות מאושרות למכשיר שלך"
-            textSize = 14f
-            setTextColor(Color.parseColor(MUTED))
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(24))
+        }
+
+        content.addView(TextView(this).apply {
+            text = "חנות אפליקציות"
+            textSize = 20f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(TEXT))
             gravity = Gravity.RIGHT
-            setPadding(0, 8, 0, 30)
+            setPadding(0, 0, 0, dp(18))
         })
 
         val apps = approvedApps()
         if (apps.isEmpty()) {
-            root.addView(TextView(this).apply {
+            content.addView(TextView(this).apply {
                 text = "עדיין לא אושרו אפליקציות למכשיר זה"
                 textSize = 14f
                 setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.RIGHT
-                setPadding(0, 10, 0, 0)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(30), 0, 0)
             })
         } else {
-            apps.forEach { root.addView(createAppCard(it)) }
+            val columns = 3
+            apps.chunked(columns).forEach { rowApps ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                rowApps.forEach { app ->
+                    row.addView(
+                        appTile(app),
+                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    )
+                }
+                repeat(columns - rowApps.size) {
+                    row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
+                }
+                content.addView(
+                    row,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { setMargins(0, 0, 0, dp(20)) }
+                )
+            }
         }
 
-        return ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor(BG))
-            addView(root)
-        }
+        page.addView(
+            ScrollView(this).apply {
+                setBackgroundColor(Color.parseColor(BG))
+                addView(content)
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
+
+        return page
     }
 
-    private fun createAppCard(app: CatalogApp): LinearLayout {
+    /** One square icon tile, Play-Store-grid style - name and status live
+     * under the icon instead of a separate row with its own button. */
+    private fun appTile(app: CatalogApp): LinearLayout {
         val installed = isInstalled(app.packageName)
 
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(22, 22, 22, 22)
-            background = roundedBackground(CARD, 24f)
-            elevation = 4f
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 0, 18) }
-        }
-
         val icon = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(92, 92).apply {
-                setMargins(14, 0, 22, 0)
-            }
+            layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
             setImageResource(android.R.drawable.sym_def_app_icon)
         }
         loadIcon(app, installed, icon)
 
-        val info = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.RIGHT
+        val name = TextView(this).apply {
+            text = app.name
+            textSize = 12.5f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.CENTER
+            maxLines = 2
+            setPadding(0, dp(6), 0, 0)
         }
 
-        info.addView(TextView(this).apply {
-            text = app.name
-            textSize = 19f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.RIGHT
-        })
+        val status = TextView(this).apply {
+            text = if (installed) "✓ מותקן" else "התקנה"
+            textSize = 10.5f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(if (installed) OK else ACCENT))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, 0)
+        }
 
-        info.addView(TextView(this).apply {
-            text = if (installed) "✓ מותקן במכשיר" else "זמין להתקנה דרך Play Store"
-            textSize = 12.5f
-            setTextColor(Color.parseColor(if (installed) "#328A52" else MUTED))
-            gravity = Gravity.RIGHT
-            setPadding(0, 5, 0, 0)
-        })
-
-        card.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-        val action = Button(this).apply {
-            text = if (installed) "פתח" else "התקנה"
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            background = roundedBackground(GOLD, 40f)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(6), 0, dp(6), 0)
+            isClickable = true
+            isFocusable = true
+            addView(icon)
+            addView(name)
+            addView(status)
             setOnClickListener {
                 if (installed) openInstalledApp(app.packageName)
                 else openPlayStoreForInstall(app.packageName)
             }
         }
-
-        card.addView(action, LinearLayout.LayoutParams(210, 105).apply {
-            setMargins(18, 0, 0, 0)
-        })
-
-        card.addView(icon)
-        return card
     }
 
     private fun isInstalled(packageName: String): Boolean {
@@ -192,10 +220,14 @@ class AppStoreActivity : Activity() {
         }.start()
     }
 
-    private fun roundedBackground(color: String, radius: Float): GradientDrawable {
+    private fun flatCircle(color: String): GradientDrawable {
         return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
             setColor(Color.parseColor(color))
-            cornerRadius = radius
         }
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
     }
 }
