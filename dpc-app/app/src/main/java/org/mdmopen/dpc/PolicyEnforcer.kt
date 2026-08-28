@@ -5,8 +5,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.os.UserManager
+import android.provider.Telephony
 
 data class EnforcementResult(
     val suspended: List<String>,
@@ -37,13 +38,20 @@ class PolicyEnforcer(private val context: Context) {
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
 
         val allowed = policy.allowedApps.toSet()
+        val essential = essentialPackages()
         val toSuspend = mutableListOf<String>()
         val toUnsuspend = mutableListOf<String>()
         var systemSkipped = 0
 
         for (app in context.packageManager.getInstalledApplications(0)) {
             if (app.packageName == context.packageName) continue
-            if ((app.flags and ApplicationInfo.FLAG_SYSTEM) != 0) {
+            if (app.packageName in essential) {
+                systemSkipped++
+                continue
+            }
+            // Apps with no launcher entry are never visible to the customer either way -
+            // suspending them only risks breaking a background system service for no gain.
+            if (context.packageManager.getLaunchIntentForPackage(app.packageName) == null) {
                 systemSkipped++
                 continue
             }
@@ -65,6 +73,27 @@ class PolicyEnforcer(private val context: Context) {
             systemAppsSkipped = systemSkipped,
             kioskEnabled = policy.kioskEnabled,
         )
+    }
+
+    /**
+     * Packages that must stay usable no matter what's approved: our own app, whichever
+     * app currently handles Settings/dialing/SMS/the home screen. Suspending anything
+     * else the customer can see (including preinstalled Google/OEM apps) is intentional.
+     */
+    private fun essentialPackages(): Set<String> {
+        val essential = mutableSetOf(context.packageName, "com.android.settings")
+        val pm = context.packageManager
+
+        pm.resolveActivity(Intent(Intent.ACTION_DIAL), 0)
+            ?.activityInfo?.packageName?.let { essential += it }
+
+        Telephony.Sms.getDefaultSmsPackage(context)?.let { essential += it }
+
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName?.let { essential += it }
+
+        return essential
     }
 
     private fun enableKiosk(allowed: Set<String>) {
