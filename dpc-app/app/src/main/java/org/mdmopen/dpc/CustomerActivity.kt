@@ -25,6 +25,7 @@ class CustomerActivity : Activity() {
     private lateinit var contentArea: LinearLayout
     private lateinit var personalNavItem: NavItem
     private lateinit var storeNavItem: NavItem
+    private var isPersonalAreaActive = false
 
     private val BG = "#F2F1E6"
     private val CARD = "#FFFFFF"
@@ -32,7 +33,6 @@ class CustomerActivity : Activity() {
     private val TEXT = "#1C1C1C"
     private val MUTED = "#8C8C86"
     private val ACCENT = "#4B6B45"
-    private val ACCENT_BADGE = "#5A7A54"
     private val ACCENT_TINT = "#E7ECDD"
 
     private val heavyFont = Typeface.create("sans-serif-black", Typeface.NORMAL)
@@ -63,15 +63,7 @@ class CustomerActivity : Activity() {
                 gravity = Gravity.RIGHT
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-            addView(TextView(this@CustomerActivity).apply {
-                text = "✓"
-                textSize = 15f
-                typeface = heavyFont
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                background = flatCircle(ACCENT)
-                layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
-            })
+            addView(headerSyncBadge())
         })
 
         contentArea = LinearLayout(this).apply {
@@ -89,6 +81,63 @@ class CustomerActivity : Activity() {
         page.addView(buildBottomBar())
 
         return page
+    }
+
+    /** Small fixed square in the header, present on every screen (built once
+     * in buildUi, not per-tab) instead of the old full-width button that only
+     * lived inside the personal-area tab. */
+    private fun headerSyncBadge(): TextView {
+        lateinit var badge: TextView
+        badge = TextView(this).apply {
+            text = "↻"
+            textSize = 16f
+            typeface = heavyFont
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = flatRounded(ACCENT, dp(10).toFloat())
+            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
+            isClickable = true
+            isFocusable = true
+
+            setOnClickListener {
+                isClickable = false
+                text = "⏳"
+
+                Thread {
+                    try {
+                        PolicySync.run(applicationContext)
+                        AutoUpdater.check(applicationContext)
+                        Config.setLastSyncNow(applicationContext)
+
+                        runOnUiThread {
+                            text = "✓"
+                            Toast.makeText(
+                                this@CustomerActivity,
+                                "המכשיר סונכרן בהצלחה",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            refreshLastSyncLabelIfShown()
+
+                            postDelayed({
+                                text = "↻"
+                                isClickable = true
+                            }, 1800)
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            text = "↻"
+                            isClickable = true
+                            Toast.makeText(
+                                this@CustomerActivity,
+                                "הסנכרון נכשל: ${e.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }.start()
+            }
+        }
+        return badge
     }
 
     private fun buildBottomBar(): LinearLayout {
@@ -169,6 +218,7 @@ class CustomerActivity : Activity() {
     }
 
     private fun showAppStore() {
+        isPersonalAreaActive = false
         setActiveNav(storeNavItem)
         contentArea.removeAllViews()
 
@@ -240,12 +290,12 @@ class CustomerActivity : Activity() {
     }
 
     private fun showPersonalArea() {
+        isPersonalAreaActive = true
         setActiveNav(personalNavItem)
         contentArea.removeAllViews()
 
         contentArea.addView(identityCard("האזור האישי שלך"))
         contentArea.addView(statusCard())
-        contentArea.addView(syncButton())
 
         contentArea.addView(sectionTitle("פרטי המנוי"))
         contentArea.addView(
@@ -261,7 +311,10 @@ class CustomerActivity : Activity() {
         contentArea.addView(sectionTitle("המכשיר שלי"))
         contentArea.addView(
             infoRowCard(
-                listOf(Triple("#", "מזהה מכשיר", Config.deviceId(this)))
+                listOf(
+                    Triple("#", "מזהה מכשיר", Config.deviceId(this)),
+                    Triple("↻", "עדכון אחרון", lastSyncLabel()),
+                )
             )
         )
     }
@@ -356,99 +409,11 @@ class CustomerActivity : Activity() {
         }
     }
 
-    private fun syncButton(): LinearLayout {
-        lateinit var titleView: TextView
-        lateinit var subtitleView: TextView
-
-        val button = LinearLayout(this)
-        button.apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(16), dp(20), dp(16))
-            background = flatRounded(ACCENT, dp(16).toFloat())
-            isClickable = true
-            isFocusable = true
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 0, dp(20)) }
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = "↻"
-                textSize = 20f
-                typeface = heavyFont
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                background = flatCircle(ACCENT_BADGE)
-                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
-                    marginStart = dp(14)
-                }
-            })
-
-            addView(LinearLayout(this@CustomerActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.RIGHT
-
-                titleView = TextView(this@CustomerActivity).apply {
-                    text = "סנכרון עכשיו"
-                    textSize = 16f
-                    typeface = heavyFont
-                    setTextColor(Color.WHITE)
-                    gravity = Gravity.RIGHT
-                }
-                addView(titleView)
-
-                subtitleView = TextView(this@CustomerActivity).apply {
-                    text = lastSyncLabel()
-                    textSize = 12f
-                    typeface = mediumFont
-                    setTextColor(Color.parseColor("#D6E3D2"))
-                    gravity = Gravity.RIGHT
-                    setPadding(0, dp(2), 0, 0)
-                }
-                addView(subtitleView)
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-            setOnClickListener {
-                isClickable = false
-                titleView.text = "מסנכרן..."
-
-                Thread {
-                    try {
-                        PolicySync.run(applicationContext)
-                        AutoUpdater.check(applicationContext)
-                        Config.setLastSyncNow(applicationContext)
-
-                        runOnUiThread {
-                            titleView.text = "✓ הסתיים"
-                            subtitleView.text = lastSyncLabel()
-                            Toast.makeText(
-                                this@CustomerActivity,
-                                "המכשיר סונכרן בהצלחה",
-                                Toast.LENGTH_SHORT
-                            ).show()
-
-                            postDelayed({
-                                titleView.text = "סנכרון עכשיו"
-                                isClickable = true
-                            }, 1800)
-                        }
-                    } catch (e: Exception) {
-                        runOnUiThread {
-                            titleView.text = "נסה שוב"
-                            isClickable = true
-                            Toast.makeText(
-                                this@CustomerActivity,
-                                "הסנכרון נכשל: ${e.message}",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    }
-                }.start()
-            }
-        }
-
-        return button
+    /** Rebuilds the personal-area tab so its "last synced" row picks up a
+     * sync that just completed via the header badge - a no-op if some other
+     * tab is showing. */
+    private fun refreshLastSyncLabelIfShown() {
+        if (isPersonalAreaActive) showPersonalArea()
     }
 
     private fun lastSyncLabel(): String {
