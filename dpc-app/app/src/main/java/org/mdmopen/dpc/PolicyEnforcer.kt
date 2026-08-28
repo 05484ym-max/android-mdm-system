@@ -104,7 +104,16 @@ class PolicyEnforcer(private val context: Context) {
         }
 
         addResolved(Intent(Intent.ACTION_DIAL))
-        addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
+
+        // Every launcher installed, not just whichever currently resolves as
+        // default - during kiosk mode that default is this app itself, which
+        // would otherwise leave the phone's real home screen unprotected and
+        // suspended like any other unapproved app, with no way back once
+        // kiosk mode turns off again.
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        pm.queryIntentActivities(homeIntent, PackageManager.MATCH_ALL)
+            .forEach { essential += it.activityInfo.packageName }
+
         addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CONTACTS))
         addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR))
         addResolved(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_EMAIL))
@@ -120,6 +129,7 @@ class PolicyEnforcer(private val context: Context) {
         // resolution above silently misses them. Back it up with known package
         // names across Samsung/AOSP - harmless if a name isn't installed.
         val knownUtilityApps = listOf(
+            "com.sec.android.app.launcher",
             "com.sec.android.app.myfiles",
             "com.google.android.documentsui",
             "com.android.documentsui",
