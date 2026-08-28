@@ -50,6 +50,10 @@ class CustomerActivity : Activity() {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(BG))
+            // The manifest doesn't declare supportsRtl, so the system never
+            // mirrors add-order-based layout on its own even under a Hebrew
+            // locale - forced explicitly here instead of relying on that.
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
 
         page.addView(LinearLayout(this).apply {
@@ -67,7 +71,10 @@ class CustomerActivity : Activity() {
 
                 addView(ImageView(this@CustomerActivity).apply {
                     setImageResource(R.mipmap.ic_launcher)
-                    layoutParams = LinearLayout.LayoutParams(dp(38), dp(38))
+                    alpha = 0.85f
+                    layoutParams = LinearLayout.LayoutParams(dp(38), dp(38)).apply {
+                        marginEnd = dp(14)
+                    }
                 })
 
                 headerLabelView = TextView(this@CustomerActivity).apply {
@@ -75,7 +82,6 @@ class CustomerActivity : Activity() {
                     typeface = heavyFont
                     setTextColor(Color.parseColor(TEXT))
                     gravity = Gravity.RIGHT
-                    setPadding(0, 0, dp(10), 0)
                 }
                 addView(headerLabelView)
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -100,25 +106,25 @@ class CustomerActivity : Activity() {
         return page
     }
 
-    /** Small fixed square in the header, present on every screen (built once
+    /** Small fixed badge in the header, present on every screen (built once
      * in buildUi, not per-tab) instead of the old full-width button that only
      * lived inside the personal-area tab. */
     private fun headerSyncBadge(): TextView {
         lateinit var badge: TextView
         badge = TextView(this).apply {
-            text = "↻"
-            textSize = 16f
+            text = "↻ סינכרון"
+            textSize = 12.5f
             typeface = heavyFont
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            background = flatRounded(ACCENT, dp(10).toFloat())
-            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
+            background = flatRounded(ACCENT, dp(12).toFloat())
+            setPadding(dp(14), dp(11), dp(14), dp(11))
             isClickable = true
             isFocusable = true
 
             setOnClickListener {
                 isClickable = false
-                text = "⏳"
+                text = "⏳ מסנכרן..."
 
                 Thread {
                     try {
@@ -127,7 +133,7 @@ class CustomerActivity : Activity() {
                         Config.setLastSyncNow(applicationContext)
 
                         runOnUiThread {
-                            text = "✓"
+                            text = "✓ סונכרן"
                             Toast.makeText(
                                 this@CustomerActivity,
                                 "המכשיר סונכרן בהצלחה",
@@ -136,13 +142,13 @@ class CustomerActivity : Activity() {
                             refreshLastSyncLabelIfShown()
 
                             postDelayed({
-                                text = "↻"
+                                text = "↻ סינכרון"
                                 isClickable = true
                             }, 1800)
                         }
                     } catch (e: Exception) {
                         runOnUiThread {
-                            text = "↻"
+                            text = "↻ סינכרון"
                             isClickable = true
                             Toast.makeText(
                                 this@CustomerActivity,
