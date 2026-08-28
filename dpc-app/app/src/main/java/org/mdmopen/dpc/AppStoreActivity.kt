@@ -152,13 +152,23 @@ class AppStoreActivity : Activity() {
             setPadding(0, dp(6), 0, 0)
         }
 
+        // Installed apps don't get background updates while Play Store is
+        // hidden most of the time, and tapping the tile just opens the app -
+        // so this is the only way the customer can ever reach an update:
+        // it's a separate clickable label (own click listener wins over the
+        // tile's) that reopens the same guarded Play Store page, which shows
+        // "Update" there when one is available and does nothing otherwise.
         val status = TextView(this).apply {
-            text = if (installed) "✓ מותקן" else "התקנה"
+            text = if (installed) "✓ מותקן · בדוק עדכון" else "התקנה"
             textSize = 10.5f
             typeface = mediumFont
             setTextColor(Color.parseColor(if (installed) OK else ACCENT))
             gravity = Gravity.CENTER
             setPadding(0, dp(2), 0, 0)
+            if (installed) {
+                isClickable = true
+                setOnClickListener { openPlayStoreForInstall(app.packageName) }
+            }
         }
 
         return LinearLayout(this).apply {
