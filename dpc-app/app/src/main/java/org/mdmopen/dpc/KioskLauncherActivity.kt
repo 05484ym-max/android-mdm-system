@@ -63,9 +63,18 @@ class KioskLauncherActivity : Activity() {
 
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         var shown = 0
-        for (packageName in Config.allowedApps(this)) {
-            val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: continue
-            list.addView(appRow(packageName, launchIntent))
+        // Essential system apps (Settings, dialer, etc.) are always reachable here too -
+        // otherwise a customer with nothing approved yet (or not installed) is stuck on
+        // an empty screen with no way to do anything.
+        val essential = PolicyEnforcer(this).essentialPackages() - packageName
+        val candidates = essential + Config.allowedApps(this)
+        val entries = candidates.mapNotNull { pkg ->
+            val intent = packageManager.getLaunchIntentForPackage(pkg) ?: return@mapNotNull null
+            Triple(pkg, intent, appLabel(pkg))
+        }.sortedBy { it.third }
+
+        for ((pkg, launchIntent, _) in entries) {
+            list.addView(appRow(pkg, launchIntent))
             list.addView(spacer())
             shown++
         }

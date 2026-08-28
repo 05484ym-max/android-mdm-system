@@ -94,7 +94,7 @@ class PolicyEnforcer(private val context: Context) {
      * Suspending anything else the customer can see (including preinstalled
      * Google/social apps) is intentional.
      */
-    private fun essentialPackages(): Set<String> {
+    fun essentialPackages(): Set<String> {
         val essential = mutableSetOf(context.packageName, "com.android.settings")
         val pm = context.packageManager
 
@@ -154,7 +154,10 @@ class PolicyEnforcer(private val context: Context) {
         if (!PlayStoreGate.isWindowClosed(context)) setOf("com.android.vending") else emptySet()
 
     private fun enableKiosk(allowed: Set<String>) {
-        dpm.setLockTaskPackages(admin, (allowed + context.packageName).toTypedArray())
+        // Without the essentials, a customer with nothing approved yet (or
+        // whose approved apps aren't installed) gets locked into a kiosk
+        // screen with literally nothing reachable - not even Settings.
+        dpm.setLockTaskPackages(admin, (allowed + essentialPackages() + context.packageName).toTypedArray())
         dpm.setLockTaskFeatures(
             admin,
             DevicePolicyManager.LOCK_TASK_FEATURE_HOME or
