@@ -44,7 +44,7 @@ object WallpaperBranding {
     // gets one clean re-composite from the saved original instead of never
     // updating (same id forever looks "already done") or stamping the new
     // emblem onto its own previous output (see apply() below).
-    private const val RECIPE_VERSION = 2
+    private const val RECIPE_VERSION = 3
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
@@ -177,7 +177,7 @@ object WallpaperBranding {
         val targetHeight = emblem.height * scale
 
         val left = (result.width - targetWidth) / 2f
-        val top = result.height * 0.14f
+        val top = result.height * 0.28f
 
         val destRect = RectF(left, top, left + targetWidth, top + targetHeight)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
