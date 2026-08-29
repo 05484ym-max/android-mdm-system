@@ -46,17 +46,22 @@ object WallpaperBranding {
     // emblem onto its own previous output (see apply() below).
     private const val RECIPE_VERSION = 2
 
-    fun apply(context: Context) {
+    /**
+     * Returns a short, human-readable outcome so the customer's own sync
+     * toast can show it - there's no way to pull logcat off a customer's
+     * phone, so this is the only diagnostic signal available in practice.
+     */
+    fun apply(context: Context): String {
         try {
             val dpm = context.getSystemService(DevicePolicyManager::class.java)
-            if (!dpm.isDeviceOwnerApp(context.packageName)) return
+            if (!dpm.isDeviceOwnerApp(context.packageName)) return "לא Device Owner"
 
             // WallpaperManager silently hands back a built-in placeholder
             // instead of throwing when read access isn't actually there -
             // branding that placeholder would overwrite the customer's real
             // photo with it. Never proceed without confirming the grant
             // really took effect, rather than hoping it did.
-            if (!wallpaperReadPermissionGranted(context, dpm)) return
+            if (!wallpaperReadPermissionGranted(context, dpm)) return "אין הרשאת קריאת רקע"
 
             val wallpaperManager = WallpaperManager.getInstance(context)
             val currentId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
@@ -67,7 +72,7 @@ object WallpaperBranding {
                 prefs.getInt(KEY_LAST_ID, Int.MIN_VALUE) == currentId
 
             if (isOurOwnComposite && prefs.getInt(KEY_RECIPE_VERSION, -1) == RECIPE_VERSION) {
-                return // Already branded this exact photo with the current recipe.
+                return "כבר מעודכן" // Already branded this exact photo with the current recipe.
             }
 
             // The live wallpaper is our own previous composite (not the
@@ -75,9 +80,10 @@ object WallpaperBranding {
             // re-source from the saved original so a recipe change re-brands
             // cleanly instead of stamping the new emblem onto the old one.
             val original = if (isOurOwnComposite && originalFile.exists()) {
-                BitmapFactory.decodeFile(originalFile.absolutePath) ?: return
+                BitmapFactory.decodeFile(originalFile.absolutePath)
+                    ?: return "שגיאה: לא ניתן לקרוא את הרקע השמור"
             } else {
-                val drawable = wallpaperManager.drawable ?: return
+                val drawable = wallpaperManager.drawable ?: return "שגיאה: אין ציור רקע"
                 val fresh = drawableToBitmap(drawable)
                 try {
                     context.openFileOutput(ORIGINAL_FILE, Context.MODE_PRIVATE).use {
@@ -90,7 +96,7 @@ object WallpaperBranding {
             }
 
             val emblem = BitmapFactory.decodeResource(context.resources, R.drawable.emblem_transparent)
-                ?: return
+                ?: return "שגיאה: קובץ הסמל חסר"
 
             val branded = compositeEmblem(original, emblem)
 
@@ -102,8 +108,10 @@ object WallpaperBranding {
                 .putInt(KEY_LAST_ID, newId)
                 .putInt(KEY_RECIPE_VERSION, RECIPE_VERSION)
                 .apply()
+            return "עודכן בהצלחה"
         } catch (e: Exception) {
             Log.w(TAG, "Could not brand the wallpaper", e)
+            return "שגיאה: ${e.message}"
         }
     }
 

@@ -38,7 +38,7 @@ object PolicySync {
         val enforcement = enforcer.apply(result.policy)
         SyncScheduler.schedule(context)
         PushRegistration.ensureRegistered(context)
-        WallpaperBranding.apply(context)
+        val wallpaperResult = WallpaperBranding.apply(context)
 
         val executor = CommandExecutor(context)
         val outcomes = result.commands.map { queued ->
@@ -56,7 +56,8 @@ object PolicySync {
             append("נכשלו ${enforcement.failed.size} · ")
             append("דולגו ${enforcement.systemAppsSkipped} מערכת · ")
             append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
-            append("סנכרון כל ${result.policy.syncIntervalMinutes} דק'")
+            append("סנכרון כל ${result.policy.syncIntervalMinutes} דק' · ")
+            append("רקע: $wallpaperResult")
             outcomes.forEach { append("\n• $it") }
         }
     }

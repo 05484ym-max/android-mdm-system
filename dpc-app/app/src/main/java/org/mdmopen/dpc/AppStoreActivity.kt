@@ -153,7 +153,7 @@ class AppStoreActivity : Activity() {
 
                 Thread {
                     try {
-                        PolicySync.run(applicationContext)
+                        val result = PolicySync.run(applicationContext)
                         AutoUpdater.check(applicationContext)
                         Config.setLastSyncNow(applicationContext)
 
@@ -161,8 +161,8 @@ class AppStoreActivity : Activity() {
                             text = "✓ סונכרן"
                             Toast.makeText(
                                 this@AppStoreActivity,
-                                "המכשיר סונכרן בהצלחה",
-                                Toast.LENGTH_SHORT
+                                "המכשיר סונכרן בהצלחה\n$result",
+                                Toast.LENGTH_LONG
                             ).show()
                             // Newly approved apps only show up here after a
                             // full rebuild - the grid is drawn once at onCreate.
