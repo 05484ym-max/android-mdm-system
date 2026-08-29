@@ -134,3 +134,6 @@ jobs:
             git commit -m "Update MDM APK and provisioning payload [skip ci]"
             git push
           fi
+      - name: Trigger Render deploy
+        if: success()
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
