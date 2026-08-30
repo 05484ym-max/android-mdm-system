@@ -28,6 +28,23 @@ const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH ||
 const JWT_SECRET = process.env.JWT_SECRET;
 const AUTH_ENABLED = Boolean(ADMIN_USERNAME && ADMIN_PASSWORD_HASH && JWT_SECRET);
 
+// Booting with AUTH_ENABLED false makes requireAdmin a no-op, which opens
+// every admin endpoint (device list, commands including WIPE, apps catalog)
+// to anyone with no authentication at all. That must never happen silently
+// from a missing/misconfigured environment variable - refuse to start
+// unless an operator explicitly opts into it for local development.
+const ALLOW_INSECURE_ADMIN = process.env.ALLOW_INSECURE_ADMIN === '1';
+if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
+  console.error(
+    'FATAL: admin credentials are not fully configured - need ADMIN_USERNAME, ' +
+    'JWT_SECRET, and either ADMIN_PASSWORD_HASH or ADMIN_PASSWORD. Refusing to ' +
+    'start with the admin panel unprotected. Set the missing environment ' +
+    'variable(s), or set ALLOW_INSECURE_ADMIN=1 to run without admin auth for ' +
+    'local development only.'
+  );
+  process.exit(1);
+}
+
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
