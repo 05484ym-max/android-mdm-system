@@ -166,4 +166,19 @@ function summarize(classifiedDevices) {
   return summary;
 }
 
-module.exports = { classify, summarize };
+module.exports = {
+  classify,
+  summarize,
+  // Exported so diagnostics.js can reuse the exact same rules/thresholds
+  // instead of re-implementing them - the two modules must never disagree
+  // about whether a given condition applies to a device.
+  HOUR_MS,
+  DEFAULT_WARNING_AFTER_MS,
+  BATTERY_WARNING_MAX,
+  FREE_STORAGE_WARNING_MAX_BYTES,
+  LAST_SYNC_STALE_AFTER_MS,
+  UNKNOWN_TO_CRITICAL_AFTER_MS,
+  seenThresholds,
+  hasAnyHealthData,
+  updateFailureResolved,
+};

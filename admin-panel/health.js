@@ -110,8 +110,8 @@
       </div>`;
   }
 
-  function openDiagnosePlaceholder(deviceId) {
-    alert('אבחון ותיקון מרחוק עבור מכשיר ' + deviceId + ' — בקרוב.');
+  function openDiagnostics(deviceId) {
+    if (window.openDeviceDiagnostics) window.openDeviceDiagnostics(deviceId);
   }
 
   function renderDevices(devices) {
@@ -122,7 +122,7 @@
     }
     root.innerHTML = devices.map(deviceCard).join('');
     root.querySelectorAll('[data-diagnose]').forEach(btn => {
-      btn.addEventListener('click', () => openDiagnosePlaceholder(btn.getAttribute('data-diagnose')));
+      btn.addEventListener('click', () => openDiagnostics(btn.getAttribute('data-diagnose')));
     });
   }
 

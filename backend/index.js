@@ -12,6 +12,7 @@ const db = require('./db');
 const push = require('./push');
 const deviceHealth = require('./deviceHealth');
 const healthPanel = require('./healthPanel');
+const diagnostics = require('./diagnostics');
 
 const app = express();
 app.use(express.json());
@@ -316,6 +317,20 @@ app.get('/api/health/devices', requireAdmin, wrap(async (req, res) => {
 app.get('/api/health/summary', requireAdmin, wrap(async (req, res) => {
   const devices = await db.listDeviceHealth();
   res.json(healthPanel.summarize(devices.map(device => healthPanel.classify(device))));
+}));
+
+// Read-only diagnosis for one device - no command is ever queued here.
+app.get('/api/health/devices/:deviceId/diagnostics', requireAdmin, wrap(async (req, res) => {
+  const devices = await db.listDeviceHealth();
+  const device = devices.find(d => d.deviceId === req.params.deviceId);
+  if (!device) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+  res.json({
+    deviceId: device.deviceId,
+    health: { ...device, ...healthPanel.classify(device) },
+    faults: diagnostics.diagnose(device),
+  });
 }));
 
 app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, res) => {

@@ -227,6 +227,7 @@
   .nav-btn.active { background: var(--accent-tint); color: var(--accent); }
 </style>
 <link rel="stylesheet" href="health.css">
+<link rel="stylesheet" href="diagnostics.css">
 </head>
 <body>
 
@@ -329,6 +330,14 @@
     <div id="detailTitle" class="detail-title"></div>
   </div>
   <div id="detailContent" class="detail-body"></div>
+</div>
+
+<div id="diagnosticsModal" class="diagnostics-view">
+  <div class="diag-header">
+    <button class="diag-back-btn" id="diagnosticsBackBtn">→ סגור אבחון</button>
+    <div id="diagnosticsTitle" class="diag-title"></div>
+  </div>
+  <div id="diagnosticsContent" class="diag-body"></div>
 </div>
 
 <div id="wipeModal" class="login-screen">
@@ -958,5 +967,6 @@ document.getElementById('deviceSearch').addEventListener('input', () => {
 loadDevices();
 </script>
 <script src="health.js"></script>
+<script src="diagnostics.js"></script>
 </body>
 </html>
