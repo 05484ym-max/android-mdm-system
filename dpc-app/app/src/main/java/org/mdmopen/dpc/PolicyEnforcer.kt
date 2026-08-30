@@ -160,6 +160,8 @@ class PolicyEnforcer(private val context: Context) {
             "com.sec.android.app.voicenote",
             "com.samsung.android.app.voicenote",
             "com.sec.android.app.popupcalculator",
+            "com.google.android.gms",
+            "com.google.android.gsf",
             "com.google.android.calculator",
         )
         val installed = pm.getInstalledApplications(0).map { it.packageName }.toSet()
