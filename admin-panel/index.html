@@ -226,6 +226,7 @@
   .nav-btn .nav-label { font-size: 0.72rem; font-weight: 600; }
   .nav-btn.active { background: var(--accent-tint); color: var(--accent); }
 </style>
+<link rel="stylesheet" href="health.css">
 </head>
 <body>
 
@@ -287,6 +288,14 @@
   </div>
 </div>
 
+<div class="tab-content" data-tab-content="health">
+  <div class="health-toolbar">
+    <button class="health-refresh-btn" id="healthRefreshBtn">⟳ רענן</button>
+  </div>
+  <div id="healthSummary" class="health-summary"></div>
+  <div id="healthDevices"></div>
+</div>
+
 <div class="tab-content" data-tab-content="enroll">
   <div class="enroll-card">
     <h2>רישום מכשיר חדש</h2>
@@ -307,6 +316,10 @@
   <button class="nav-btn active" data-tab="customers">
     <span class="nav-icon">👤</span>
     <span class="nav-label">לקוחות</span>
+  </button>
+  <button class="nav-btn" data-tab="health">
+    <span class="nav-icon">🩺</span>
+    <span class="nav-label">בריאות מכשירים</span>
   </button>
 </nav>
 
@@ -944,5 +957,6 @@ document.getElementById('deviceSearch').addEventListener('input', () => {
 
 loadDevices();
 </script>
+<script src="health.js"></script>
 </body>
 </html>

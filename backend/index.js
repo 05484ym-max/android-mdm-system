@@ -11,6 +11,7 @@ const bcrypt = require('bcryptjs');
 const db = require('./db');
 const push = require('./push');
 const deviceHealth = require('./deviceHealth');
+const healthPanel = require('./healthPanel');
 
 const app = express();
 app.use(express.json());
@@ -301,6 +302,20 @@ app.post('/api/devices/:deviceId/heartbeat', requireDevice, wrap(async (req, res
 app.get('/api/devices', requireAdmin, wrap(async (req, res) => {
   const devices = await db.listDevices();
   res.json(devices.map(publicDevice));
+}));
+
+// ---------- device health dashboard (admin, read-only) ----------
+// All classification logic lives in healthPanel.js - these routes only wire
+// requireAdmin to a DB read and hand the result to that module.
+
+app.get('/api/health/devices', requireAdmin, wrap(async (req, res) => {
+  const devices = await db.listDeviceHealth();
+  res.json(devices.map(device => ({ ...device, ...healthPanel.classify(device) })));
+}));
+
+app.get('/api/health/summary', requireAdmin, wrap(async (req, res) => {
+  const devices = await db.listDeviceHealth();
+  res.json(healthPanel.summarize(devices.map(device => healthPanel.classify(device))));
 }));
 
 app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, res) => {

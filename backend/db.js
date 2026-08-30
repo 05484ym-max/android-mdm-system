@@ -285,6 +285,49 @@ async function markSyncSuccessful(deviceId) {
   await pool.query(`UPDATE devices SET last_sync_at = now() WHERE device_id = $1`, [deviceId]);
 }
 
+/**
+ * Everything the admin-panel health dashboard needs, one row per device.
+ * model/androidVersion still live inside the status JSONB (unchanged, set by
+ * the existing /sync route) - every other field is a first-class column from
+ * the device-health migration. Classification (ok/warning/critical) is not
+ * done here; this is just a flat read, kept separate from healthPanel.js's
+ * pure logic so that module stays testable without a database.
+ */
+async function listDeviceHealth() {
+  const { rows } = await pool.query(
+    `SELECT device_id, registered_at, customer_name, customer_number, policy, status,
+            current_version_code, current_version_name, last_seen_at, last_sync_at,
+            is_device_owner, device_owner_lost_at, last_update_status, last_update_version,
+            last_update_error, battery_level, free_storage_bytes, manufacturer
+       FROM devices
+      ORDER BY registered_at`,
+  );
+  return rows.map(row => {
+    const status = row.status || {};
+    return {
+      deviceId: row.device_id,
+      registeredAt: row.registered_at.toISOString(),
+      customerName: row.customer_name,
+      customerNumber: row.customer_number,
+      model: status.model || null,
+      androidVersion: status.androidVersion || null,
+      manufacturer: row.manufacturer,
+      currentVersionCode: row.current_version_code,
+      currentVersionName: row.current_version_name,
+      lastSeenAt: row.last_seen_at ? row.last_seen_at.toISOString() : null,
+      lastSyncAt: row.last_sync_at ? row.last_sync_at.toISOString() : null,
+      isDeviceOwner: row.is_device_owner,
+      deviceOwnerLostAt: row.device_owner_lost_at ? row.device_owner_lost_at.toISOString() : null,
+      lastUpdateStatus: row.last_update_status,
+      lastUpdateVersion: row.last_update_version,
+      lastUpdateError: row.last_update_error,
+      batteryLevel: row.battery_level,
+      freeStorageBytes: row.free_storage_bytes,
+      syncIntervalMinutes: (row.policy && row.policy.syncIntervalMinutes) || null,
+    };
+  });
+}
+
 // ---------- apps catalog ----------
 
 async function listAppsCatalog() {
@@ -397,6 +440,7 @@ module.exports = {
   setCustomerInfo,
   recordDeviceHealth,
   markSyncSuccessful,
+  listDeviceHealth,
   queueCommand,
   takePendingCommands,
   completeCommand,
