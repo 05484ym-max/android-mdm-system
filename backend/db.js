@@ -53,6 +53,55 @@ CREATE TABLE IF NOT EXISTS enrollments (
   used_at    TIMESTAMPTZ,
   device_id  TEXT
 );
+
+-- Device health / version reporting. Additive only - the existing "status"
+-- JSONB column is untouched, these are parallel first-class columns so the
+-- new health dashboard can query/sort/index without unpacking JSONB.
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS current_version_code INTEGER;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS current_version_name TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS is_device_owner BOOLEAN;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_owner_lost_at TIMESTAMPTZ;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_update_status TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_update_version INTEGER;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_update_error TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_level INTEGER;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS free_storage_bytes BIGINT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS manufacturer TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS is_test_device BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS devices_last_seen_idx ON devices (last_seen_at);
+
+-- Versioned release metadata for staged rollout. Rollout/rollback logic
+-- itself is not implemented yet - this step only adds the table shape.
+CREATE TABLE IF NOT EXISTS app_releases (
+  version_code       INTEGER PRIMARY KEY,
+  version_name       TEXT,
+  apk_url            TEXT NOT NULL,
+  sha256             TEXT NOT NULL,
+  release_status     TEXT NOT NULL DEFAULT 'TEST',
+  rollout_percentage INTEGER NOT NULL DEFAULT 0,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  notes              TEXT
+);
+
+CREATE INDEX IF NOT EXISTS app_releases_status_idx ON app_releases (release_status);
+
+-- id is supplied by the backend (crypto.randomUUID()), same convention
+-- already used for commands.id and enrollments.id above - no gen_random_uuid()/
+-- pgcrypto extension dependency needed.
+CREATE TABLE IF NOT EXISTS alerts (
+  id          UUID PRIMARY KEY,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  severity    TEXT NOT NULL,
+  category    TEXT NOT NULL,
+  message     TEXT NOT NULL,
+  device_id   TEXT REFERENCES devices(device_id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS alerts_unresolved_idx ON alerts (created_at) WHERE resolved_at IS NULL;
 `;
 
 async function init() {
