@@ -2,7 +2,7 @@ const https = require('https');
 
 const PLAY_HOST = 'play.google.com';
 const MAX_SEARCH_BYTES = 2 * 1024 * 1024;
-const MAX_DETAILS_BYTES = 600 * 1024;
+const MAX_DETAILS_BYTES = 2 * 1024 * 1024;
 const MAX_RESULTS = 8;
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 
@@ -74,6 +74,7 @@ function extractPackages(html) {
   const packages = [];
   const seen = new Set();
   const patterns = [
+    /details\?id=([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+)/g,
     /\/store\/apps\/details(?:\/[^?"'<>]*)?\?[^"'<>]*?\bid=([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+)/g,
     /\/store\/apps\/details%3F[^"'<>]*?id%3D([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+)/g,
     /id\\u003d([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+)/g,
