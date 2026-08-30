@@ -396,6 +396,57 @@ app.post('/api/health/devices/:deviceId/actions/retry-sync', requireAdmin, wrap(
   res.json({ status: 'sent', message: 'בקשת סנכרון נשלחה למכשיר' });
 }));
 
+const retryUpdateAttempts = new Map();
+const RETRY_UPDATE_COOLDOWN_MS = 15 * 1000;
+
+/** "Retry update" for one device only. Sends a push carrying a distinct
+ * action value ({action:'retry_update'}) that MdmMessagingService uses to
+ * also run AutoUpdater.check() after its normal sync - see push.js and
+ * MdmMessagingService.kt. The device decides the version and APK URL itself
+ * by re-fetching version.json from the server's existing downloads path;
+ * this endpoint never sends (and req.body is never read for) any command
+ * type, version, or APK URL - there is nothing here for a client to inject. */
+app.post('/api/health/devices/:deviceId/actions/retry-update', requireAdmin, wrap(async (req, res) => {
+  const devices = await db.listDeviceHealth();
+  const device = devices.find(d => d.deviceId === req.params.deviceId);
+  if (!device) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+
+  const faults = diagnostics.diagnose(device);
+  if (!faults.some(f => f.code === 'UPDATE_FAILED')) {
+    return res.status(409).json({ error: 'המכשיר אינו במצב של עדכון שנכשל כרגע' });
+  }
+
+  const now = Date.now();
+  const last = retryUpdateAttempts.get(req.params.deviceId);
+  if (last && now - last < RETRY_UPDATE_COOLDOWN_MS) {
+    return res.status(429).json({ error: 'בקשת עדכון כבר נשלחה למכשיר זה - יש להמתין מספר שניות לפני ניסיון נוסף' });
+  }
+  retryUpdateAttempts.set(req.params.deviceId, now);
+
+  const fullDevice = await db.getDevice(req.params.deviceId);
+  const result = await push.wake(fullDevice ? fullDevice.pushToken : null, { action: 'retry_update' });
+  console.log(
+    `[retry-update] device=${req.params.deviceId} result=${result.sent ? 'sent' : 'not_sent:' + result.reason}`,
+  );
+
+  if (!result.sent) {
+    const messages = {
+      no_push_token: 'לא ניתן ליזום כרגע ניסיון עדכון מרחוק כי אין למכשיר Push Token פעיל',
+      push_not_configured: 'לא ניתן ליזום כרגע ניסיון עדכון מרחוק כי שירות ה-Push אינו מוגדר בשרת',
+      send_failed: 'שליחת בקשת העדכון למכשיר נכשלה - נסה שוב בעוד רגע',
+    };
+    return res.json({
+      status: 'not_sent',
+      reason: result.reason,
+      message: messages[result.reason] || 'לא ניתן היה לשלוח בקשת עדכון',
+    });
+  }
+
+  res.json({ status: 'sent', message: 'בקשת ניסיון עדכון נשלחה למכשיר' });
+}));
+
 app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, res) => {
   const { price } = req.body;
   if (typeof price !== 'number' || price < 0) {

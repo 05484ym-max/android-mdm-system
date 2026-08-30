@@ -22,14 +22,20 @@ if (serviceAccount) {
  * Returns { sent, reason } so a caller that cares (e.g. an explicit "retry
  * sync" action) can report the real outcome; existing callers that don't
  * check the return value are unaffected.
+ *
+ * `data` defaults to the plain sync nudge every existing caller relies on
+ * (savePolicyAndWake, the /commands route, retry-sync). A caller that needs
+ * the device to do something more than a routine sync - e.g. retry-update
+ * also running AutoUpdater.check() - passes a different `action` value;
+ * MdmMessagingService on the device branches on it.
  */
-async function wake(pushToken) {
+async function wake(pushToken, data = { action: 'sync' }) {
   if (!messaging) return { sent: false, reason: 'push_not_configured' };
   if (!pushToken) return { sent: false, reason: 'no_push_token' };
   try {
     await messaging.send({
       token: pushToken,
-      data: { action: 'sync' },
+      data,
       android: { priority: 'high' },
     });
     return { sent: true };

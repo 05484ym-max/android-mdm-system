@@ -14,6 +14,23 @@ class MdmMessagingService : FirebaseMessagingService() {
             } catch (e: Exception) {
                 Log.w(PolicySync.TAG, "Push sync failed", e)
             }
+
+            // A routine push ("sync") only refreshes policy/health - it never
+            // implies an update attempt. Only the admin's explicit "retry
+            // update" action sends this distinct action value, mirroring the
+            // manual sync-then-check pattern already used by the on-device
+            // "sync now" buttons in CustomerActivity/AppStoreActivity. This runs
+            // in its own try/catch, independent of whether the sync above
+            // succeeded - an explicit admin retry-update request should still
+            // attempt the update check even when the routine sync failed, and
+            // a failure here must not crash this thread either.
+            if (message.data["action"] == "retry_update") {
+                try {
+                    AutoUpdater.check(applicationContext)
+                } catch (e: Exception) {
+                    Log.w(PolicySync.TAG, "Retry-update check failed", e)
+                }
+            }
         }.start()
     }
 
