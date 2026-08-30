@@ -33,6 +33,9 @@
     position: fixed; inset: 0; background: var(--bg); z-index: 20;
     display: none; align-items: center; justify-content: center;
   }
+  /* Needs to sit above .detail-view (z-index: 30) - the WIPE dialog opens
+     while the device detail page is still visible underneath it. */
+  #wipeModal { z-index: 40; }
   .login-card {
     background: var(--card-bg); border: 1px solid var(--card-border);
     border-radius: 20px; padding: 32px; width: 100%; max-width: 320px; text-align: center;
@@ -315,6 +318,19 @@
   <div id="detailContent" class="detail-body"></div>
 </div>
 
+<div id="wipeModal" class="login-screen">
+  <div class="login-card">
+    <h2>פעולה זו תמחק את המכשיר לצמיתות</h2>
+    <input id="wipePassword" type="password" class="login-input"
+           placeholder="הזן שוב את סיסמת המנהל" autocomplete="current-password" />
+    <div style="display:flex; gap:8px;">
+      <button class="back-btn" id="wipeCancelBtn" style="flex:1;">ביטול</button>
+      <button class="renew-btn" id="wipeConfirmBtn" style="flex:1; background: var(--danger);">מחק מכשיר</button>
+    </div>
+    <div id="wipeError" class="login-error"></div>
+  </div>
+</div>
+
 <script>
 let currentDetailDeviceId = null;
 
@@ -355,11 +371,11 @@ function subStatus(d) {
   return { text: 'אין מנוי פעיל', cls: 'status-none' };
 }
 
-async function queueCommand(deviceId, command, params) {
+async function queueCommand(deviceId, command, params, extra) {
   const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/commands`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command, params }),
+    body: JSON.stringify({ command, params, ...extra }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -367,6 +383,71 @@ async function queueCommand(deviceId, command, params) {
     return false;
   }
   return true;
+}
+
+/** WIPE needs the admin password re-entered here, in the request body only -
+ * never in a query string, never written to localStorage/sessionStorage, and
+ * the field is cleared immediately after every attempt (success or failure)
+ * so it never lingers in the DOM. Uses its own fetch (not queueCommand) so a
+ * wrong password shows inline in the dialog instead of a browser alert(). */
+function openWipeConfirm(deviceId) {
+  const modal = document.getElementById('wipeModal');
+  const passwordInput = document.getElementById('wipePassword');
+  const errorEl = document.getElementById('wipeError');
+  const confirmBtn = document.getElementById('wipeConfirmBtn');
+  const cancelBtn = document.getElementById('wipeCancelBtn');
+
+  passwordInput.value = '';
+  errorEl.textContent = '';
+  modal.style.display = 'flex';
+  passwordInput.focus();
+
+  function close() {
+    modal.style.display = 'none';
+    passwordInput.value = '';
+    errorEl.textContent = '';
+    confirmBtn.removeEventListener('click', onConfirm);
+    cancelBtn.removeEventListener('click', onCancel);
+  }
+
+  function onCancel() {
+    close();
+  }
+
+  async function onConfirm() {
+    const adminPassword = passwordInput.value;
+    if (!adminPassword) {
+      errorEl.textContent = 'יש להזין סיסמה';
+      return;
+    }
+    confirmBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/commands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'WIPE', params: {}, adminPassword }),
+      });
+      passwordInput.value = '';
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        errorEl.textContent = res.status === 401
+          ? 'סיסמה שגויה - המכשיר לא נמחק'
+          : (err.error || 'הפקודה נדחתה');
+        confirmBtn.disabled = false;
+        return;
+      }
+      close();
+      confirmBtn.disabled = false;
+      loadDevices();
+    } catch (e) {
+      passwordInput.value = '';
+      errorEl.textContent = 'שגיאת תקשורת - נסה שוב';
+      confirmBtn.disabled = false;
+    }
+  }
+
+  confirmBtn.addEventListener('click', onConfirm);
+  cancelBtn.addEventListener('click', onCancel);
 }
 
 let allDevices = [];
@@ -626,7 +707,10 @@ function bindDetailHandlers(d) {
   document.querySelectorAll('#detailContent .cmd-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const command = btn.getAttribute('data-cmd');
-      if (command === 'WIPE' && !confirm('פעולה זו תמחק את המכשיר במלואו. להמשיך?')) return;
+      if (command === 'WIPE') {
+        openWipeConfirm(deviceId);
+        return;
+      }
       if (await queueCommand(deviceId, command, {})) loadDevices();
     });
   });

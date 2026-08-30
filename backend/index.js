@@ -691,6 +691,20 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
       return res.status(502).json({ error: `could not verify apkUrl: ${e.message}` });
     }
   }
+  // WIPE is irreversible, so a valid admin session alone isn't enough - a
+  // stolen/left-open session must not be able to wipe a device on its own.
+  // Re-checked here, independent of req.body.params, so it can never end up
+  // stored on the queued command or forwarded to the device.
+  if (command === 'WIPE') {
+    const adminPassword = req.body.adminPassword;
+    if (
+      !ADMIN_PASSWORD_HASH ||
+      typeof adminPassword !== 'string' ||
+      !bcrypt.compareSync(adminPassword, ADMIN_PASSWORD_HASH)
+    ) {
+      return res.status(401).json({ error: 'invalid admin password' });
+    }
+  }
   const device = await db.getDevice(req.params.deviceId);
   if (!device) {
     return res.status(404).json({ error: 'device not found' });
