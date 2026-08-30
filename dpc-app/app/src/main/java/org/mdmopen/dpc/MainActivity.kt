@@ -31,7 +31,12 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
 
-        val adminMode = intent.getBooleanExtra("admin_mode", false)
+        // Never trust an "admin_mode" Intent extra - any external caller
+        // (Launcher, adb, another app) can set that regardless of exported.
+        // The only proof accepted here is AdminAccess, which is granted
+        // in-process by CustomerActivity's own PIN check right before this
+        // activity starts, and cannot be forged from outside this process.
+        val adminMode = AdminAccess.consume()
 
         if (Config.deviceToken(this) != null && !adminMode) {
             startActivity(Intent(this, CustomerActivity::class.java))
@@ -225,6 +230,36 @@ root.addView(sectionLabel("יומן"))
             log("הקוד חייב להיות באורך 4 ספרות לפחות")
             return
         }
+
+        if (!Config.hasAdminPin(this)) {
+            applyNewAdminPin(pin)
+            return
+        }
+
+        // A PIN already exists - changing it requires proving the current
+        // one first, the same way exitKioskLocally()/releaseDeviceLocally()
+        // already require it for their own actions.
+        val currentPinInput = EditText(this).apply {
+            hint = "קוד מנהל נוכחי"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setSingleLine()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("אימות קוד נוכחי")
+            .setMessage("כדי לשנות את קוד המנהל יש להזין קודם את הקוד הנוכחי")
+            .setView(currentPinInput)
+            .setNegativeButton("ביטול", null)
+            .setPositiveButton("אישור") { _, _ ->
+                if (Config.checkAdminPin(this, currentPinInput.text.toString())) {
+                    applyNewAdminPin(pin)
+                } else {
+                    log("קוד מנהל נוכחי שגוי — הקוד לא שונה")
+                }
+            }
+            .show()
+    }
+
+    private fun applyNewAdminPin(pin: String) {
         Config.setAdminPin(this, pin)
         pinInput.setText("")
         refreshStatus()

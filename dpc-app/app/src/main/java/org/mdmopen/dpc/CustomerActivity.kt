@@ -487,15 +487,14 @@ class CustomerActivity : Activity() {
 
                     Config.setAdminPin(this@CustomerActivity, pin)
 
-                    startActivity(
-                        Intent(this@CustomerActivity, MainActivity::class.java)
-                            .putExtra("admin_mode", true)
-                    )
+                    // Grants access in-process, right before MainActivity
+                    // starts - not via an Intent extra, which any external
+                    // caller could set regardless of who sent the Intent.
+                    AdminAccess.grant()
+                    startActivity(Intent(this@CustomerActivity, MainActivity::class.java))
                 } else if (Config.checkAdminPin(this@CustomerActivity, pin)) {
-                    startActivity(
-                        Intent(this@CustomerActivity, MainActivity::class.java)
-                            .putExtra("admin_mode", true)
-                    )
+                    AdminAccess.grant()
+                    startActivity(Intent(this@CustomerActivity, MainActivity::class.java))
                 } else {
                     Toast.makeText(
                         this@CustomerActivity,
