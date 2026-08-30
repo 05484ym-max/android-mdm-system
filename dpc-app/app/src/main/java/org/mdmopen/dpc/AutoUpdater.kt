@@ -70,9 +70,17 @@ object AutoUpdater {
 
         val apk = File(context.cacheDir, "mdm-update-$remoteVersion.apk")
 
-        downloadFile(apkUrl, apk)
-        verifyApk(context, apk, remoteVersion)
-        installUpdate(context, apk)
+        try {
+            downloadFile(apkUrl, apk)
+            verifyApk(context, apk, remoteVersion)
+            installUpdate(context, apk, remoteVersion)
+        } catch (e: Exception) {
+            // The actual install outcome (once committed) is reported
+            // asynchronously by UpdateInstallReceiver instead - this only
+            // covers a failure before that point (download/verification).
+            DeviceHealth.recordUpdateResult(context, "FAILED", remoteVersion, e.message)
+            throw e
+        }
     }
 
     private fun downloadText(url: String): String {
@@ -167,7 +175,7 @@ object AutoUpdater {
             .digest(data)
             .joinToString("") { "%02x".format(it) }
 
-    private fun installUpdate(context: Context, apk: File) {
+    private fun installUpdate(context: Context, apk: File, remoteVersion: Long) {
         val installer = context.packageManager.packageInstaller
 
         val params =
@@ -211,6 +219,7 @@ object AutoUpdater {
                         UpdateInstallReceiver::class.java
                     ).apply {
                         action = UpdateInstallReceiver.ACTION_UPDATE_RESULT
+                        putExtra(UpdateInstallReceiver.EXTRA_VERSION_CODE, remoteVersion)
                     }
 
                 val pendingIntent =

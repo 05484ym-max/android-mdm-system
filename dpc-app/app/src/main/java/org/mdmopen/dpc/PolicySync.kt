@@ -1,8 +1,6 @@
 package org.mdmopen.dpc
 
 import android.content.Context
-import android.os.Build
-import org.json.JSONObject
 
 object PolicySync {
 
@@ -24,10 +22,7 @@ object PolicySync {
 
         val result = ApiClient(serverUrl, deviceToken).sync(
             deviceId,
-            JSONObject()
-                .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
-                .put("androidVersion", Build.VERSION.RELEASE)
-                .put("isDeviceOwner", enforcer.isDeviceOwner()),
+            DeviceHealth.collect(context, enforcer.isDeviceOwner()),
         )
 
         Config.setAllowedApps(context, result.policy.allowedApps)

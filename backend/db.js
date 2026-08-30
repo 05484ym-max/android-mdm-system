@@ -232,6 +232,59 @@ async function setCustomerInfo(deviceId, name, number) {
   return rows[0] ? toDevice(rows[0]) : null;
 }
 
+/**
+ * Records device-health fields reported on a sync. last_seen_at always
+ * advances; every other column keeps its previous value (via COALESCE)
+ * when the device didn't report that field, so an older app build that
+ * sends none of this still syncs without wiping anything out.
+ *
+ * device_owner_lost_at is set exactly once, atomically within this same
+ * UPDATE against the row's pre-update is_device_owner value (never a
+ * separate read-then-write), the first time a device reports
+ * isDeviceOwner=false after having been true - and is never cleared here
+ * if the device later reports true again, so that history isn't silently
+ * lost without an explicit admin decision.
+ */
+async function recordDeviceHealth(deviceId, fields) {
+  await pool.query(
+    `UPDATE devices SET
+        last_seen_at = now(),
+        current_version_code = COALESCE($2, current_version_code),
+        current_version_name = COALESCE($3, current_version_name),
+        is_device_owner = COALESCE($4, is_device_owner),
+        device_owner_lost_at = CASE
+          WHEN $4 = false AND is_device_owner = true AND device_owner_lost_at IS NULL
+            THEN now()
+          ELSE device_owner_lost_at
+        END,
+        last_update_status = COALESCE($5, last_update_status),
+        last_update_version = COALESCE($6, last_update_version),
+        last_update_error = COALESCE($7, last_update_error),
+        battery_level = COALESCE($8, battery_level),
+        free_storage_bytes = COALESCE($9, free_storage_bytes),
+        manufacturer = COALESCE($10, manufacturer)
+      WHERE device_id = $1`,
+    [
+      deviceId,
+      fields.currentVersionCode ?? null,
+      fields.currentVersionName ?? null,
+      fields.isDeviceOwner ?? null,
+      fields.lastUpdateStatus ?? null,
+      fields.lastUpdateVersion ?? null,
+      fields.lastUpdateError ?? null,
+      fields.batteryLevel ?? null,
+      fields.freeStorageBytes ?? null,
+      fields.manufacturer ?? null,
+    ],
+  );
+}
+
+/** Marks a sync as fully completed - called only once the whole /sync
+ * response (policy, catalog, commands) was built without error. */
+async function markSyncSuccessful(deviceId) {
+  await pool.query(`UPDATE devices SET last_sync_at = now() WHERE device_id = $1`, [deviceId]);
+}
+
 // ---------- apps catalog ----------
 
 async function listAppsCatalog() {
@@ -342,6 +395,8 @@ module.exports = {
   setStatus,
   setPushToken,
   setCustomerInfo,
+  recordDeviceHealth,
+  markSyncSuccessful,
   queueCommand,
   takePendingCommands,
   completeCommand,

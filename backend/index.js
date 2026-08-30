@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 const push = require('./push');
+const deviceHealth = require('./deviceHealth');
 
 const app = express();
 app.use(express.json());
@@ -756,13 +757,22 @@ app.post('/api/devices/:deviceId/push-token', requireDevice, wrap(async (req, re
 }));
 
 app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => {
-  const { model, androidVersion, isDeviceOwner } = req.body;
-  const str = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
+  const validation = deviceHealth.validateHealthPayload(req.body);
+  if (validation.error) {
+    return res.status(400).json({ error: validation.error });
+  }
 
+  // Advances last_seen_at and the new first-class health columns. Only
+  // fields the device actually sent are changed - see recordDeviceHealth().
+  await db.recordDeviceHealth(req.params.deviceId, validation.value);
+
+  // The existing status JSONB stays populated exactly as before (the admin
+  // panel already reads model/androidVersion/isDeviceOwner/lastSeen from it
+  // directly) - untouched by this change, still driven from the raw body.
   await db.setStatus(req.params.deviceId, {
-    model: str(model, 100),
-    androidVersion: str(androidVersion, 20),
-    isDeviceOwner: isDeviceOwner === true,
+    model: validation.value.model,
+    androidVersion: validation.value.androidVersion,
+    isDeviceOwner: req.body.isDeviceOwner === true,
     lastSeen: new Date().toISOString(),
   });
 
@@ -772,11 +782,13 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
     .filter(app => allowed.has(app.packageName))
     .map(({ packageName, name, iconUrl }) => ({ packageName, name, iconUrl }));
 
-  res.json({
-    policy,
-    catalog,
-    commands: await db.takePendingCommands(req.params.deviceId),
-  });
+  const commands = await db.takePendingCommands(req.params.deviceId);
+
+  // Only reached once the whole sync succeeded - last_sync_at must not
+  // advance on a failed sync (an exception above skips this and 500s instead).
+  await db.markSyncSuccessful(req.params.deviceId);
+
+  res.json({ policy, catalog, commands });
 }));
 
 app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,

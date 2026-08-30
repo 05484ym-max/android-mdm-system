@@ -29,29 +29,44 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                 PackageInstaller.EXTRA_STATUS_MESSAGE
             )
 
+        val versionCode = intent.getLongExtra(EXTRA_VERSION_CODE, -1L).takeIf { it >= 0 }
+
         AutoUpdater.restoreInstallBlock(context)
 
         when (status) {
-            PackageInstaller.STATUS_SUCCESS ->
+            PackageInstaller.STATUS_SUCCESS -> {
                 Log.i(TAG, "MDM updated successfully")
+                DeviceHealth.recordUpdateResult(context, "SUCCESS", versionCode, null)
+            }
 
-            PackageInstaller.STATUS_PENDING_USER_ACTION ->
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 Log.w(
                     TAG,
                     "Unexpected user action required"
                 )
+                DeviceHealth.recordUpdateResult(
+                    context,
+                    "FAILED",
+                    versionCode,
+                    "Update unexpectedly requires user action"
+                )
+            }
 
-            else ->
+            else -> {
                 Log.e(
                     TAG,
                     "MDM update failed: $status $message"
                 )
+                DeviceHealth.recordUpdateResult(context, "FAILED", versionCode, message)
+            }
         }
     }
 
     companion object {
         const val ACTION_UPDATE_RESULT =
             "org.mdmopen.dpc.UPDATE_RESULT"
+        const val EXTRA_VERSION_CODE =
+            "org.mdmopen.dpc.EXTRA_VERSION_CODE"
 
         private const val TAG = "MdmAutoUpdater"
     }
