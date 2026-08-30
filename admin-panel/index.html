@@ -32,8 +32,17 @@
   .login-screen {
     position: fixed; inset: 0; background: var(--bg); z-index: 20;
     display: none; align-items: center; justify-content: center;
-  }
-  /* Needs to sit above .detail-view (z-index: 30) - the WIPE dialog opens
+}
+.play-search-modal {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Needs to sit above .detail-view (z-index: 30) - the WIPE dialog opens
      while the device detail page is still visible underneath it. */
   #wipeModal { z-index: 40; }
   .login-card {
@@ -282,7 +291,11 @@
     </select>
     <input class="search-input" id="catalogSearch" placeholder="חיפוש בקטלוג לפי שם..." />
     <div id="catalogList"><div class="empty-state">טוען...</div></div>
-    <div class="add-app-row" id="addAppToCatalogRow" style="margin-top:10px;">
+    <div class="add-app-row" id="appImportActions" style="margin-top:10px;">
+      <button class="add-app-btn" id="openPlaySearchBtn">חפש ב-Google Play</button>
+      <button class="add-app-btn" id="openApkUploadBtn" disabled title="העלאת APK תחובר בשלב הבא אחרי בחירת אחסון קבוע">העלה APK</button>
+    </div>
+    <div class="add-app-row" id="addAppToCatalogRow">
       <input class="package-input" id="newAppName" placeholder="שם האפליקציה (לדוגמה: וויז)" />
       <input class="package-input" id="newAppPackage" placeholder="com.waze" />
       <button class="add-app-btn" id="addAppToCatalogBtn">הוסף לקטלוג</button>
@@ -351,6 +364,18 @@
     <div id="diagnosticsTitle" class="diag-title"></div>
   </div>
   <div id="diagnosticsContent" class="diag-body"></div>
+</div>
+
+<div id="playSearchModal" class="play-search-modal" style="display:none; z-index:45;">
+  <div class="login-card" style="max-width:720px; max-height:88vh; overflow-y:auto;">
+    <h2>חיפוש ב-Google Play</h2>
+    <input class="login-input" id="playSearchInput" placeholder="לדוגמה: בנק הפועלים" />
+    <div class="add-app-row">
+      <button class="add-app-btn" id="playSearchBtn">חפש</button>
+      <button class="toggle-btn" id="closePlaySearchBtn">סגור</button>
+    </div>
+    <div id="playSearchResults"><div class="empty-state">חפש אפליקציה לפי שם</div></div>
+  </div>
 </div>
 
 <div id="wipeModal" class="login-screen">
@@ -834,6 +859,7 @@ document.querySelectorAll('[data-catalog-mode]').forEach(btn => {
     document.querySelectorAll('[data-catalog-mode]').forEach(b => b.classList.toggle('active', b === btn));
     document.getElementById('catalogCustomerSelect').style.display = catalogMode === 'customer' ? 'block' : 'none';
     document.getElementById('addAppToCatalogRow').style.display = catalogMode === 'all' ? 'flex' : 'none';
+    document.getElementById('appImportActions').style.display = catalogMode === 'all' ? 'flex' : 'none';
     renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
   });
 });
@@ -979,6 +1005,7 @@ document.getElementById('deviceSearch').addEventListener('input', () => {
 
 loadDevices();
 </script>
+<script src="app-import.js"></script>
 <script src="health.js"></script>
 <script src="diagnostics.js"></script>
 <script src="alerts.js"></script>

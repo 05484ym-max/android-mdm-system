@@ -14,6 +14,7 @@ const deviceHealth = require('./deviceHealth');
 const healthPanel = require('./healthPanel');
 const diagnostics = require('./diagnostics');
 const alerts = require('./alerts');
+const playStoreSearch = require('./playStoreSearch');
 
 const app = express();
 app.use(express.json());
@@ -519,6 +520,34 @@ app.post('/api/apps', requireAdmin, wrap(async (req, res) => {
   const iconUrl = await fetchPlayStoreIcon(packageName);
   await db.addAppToCatalog(packageName, name.trim().slice(0, 100), iconUrl);
   res.json(await db.listAppsCatalog());
+}));
+
+app.get('/api/apps/play-search', requireAdmin, wrap(async (req, res) => {
+  const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (query.length < 2 || query.length > 80) {
+    return res.status(400).json({ error: 'search query must be 2-80 characters' });
+  }
+  try {
+    res.json(await playStoreSearch.searchPlayStore(query));
+  } catch (e) {
+    console.warn('[play-search] failed:', e.message);
+    res.status(502).json({ error: 'לא ניתן לחפש כרגע ב-Google Play. נסה שוב בעוד רגע.' });
+  }
+}));
+
+app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
+  const { packageName } = req.body || {};
+  if (typeof packageName !== 'string' || !PACKAGE_NAME_REGEX.test(packageName)) {
+    return res.status(400).json({ error: 'invalid packageName format' });
+  }
+  try {
+    const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
+    await db.addAppToCatalog(appInfo.packageName, appInfo.name, appInfo.iconUrl);
+    res.json({ status: 'ok', app: appInfo, catalog: await db.listAppsCatalog() });
+  } catch (e) {
+    console.warn(`[play-add] ${packageName} failed:`, e.message);
+    res.status(502).json({ error: 'לא ניתן לאמת כרגע את האפליקציה מול Google Play.' });
+  }
 }));
 
 app.post('/api/apps/:packageName/assign-all', requireAdmin, wrap(async (req, res) => {
