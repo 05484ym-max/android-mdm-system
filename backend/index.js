@@ -3,6 +3,8 @@ const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
+const dns = require('dns');
+const net = require('net');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -422,9 +424,9 @@ app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, r
 
 function validateCommandParams(command, params) {
   if (command === 'INSTALL_APP') {
-    return /^https?:\/\//.test(params.apkUrl || '')
+    return /^https:\/\//.test(params.apkUrl || '')
       ? null
-      : 'apkUrl must be an http(s) URL';
+      : 'apkUrl must be an https URL';
   }
   if (command === 'UNINSTALL_APP' || command === 'OPEN_PLAY_STORE_INSTALL') {
     return PACKAGE_NAME_REGEX.test(params.packageName || '')
@@ -432,6 +434,243 @@ function validateCommandParams(command, params) {
       : 'packageName is invalid';
   }
   return null;
+}
+
+// ---------- INSTALL_APP: server-side download + SHA-256, with SSRF guards ----------
+//
+// The admin panel only ever supplies apkUrl - the backend is the sole source of
+// expectedSha256, computed here by actually downloading the bytes and hashing
+// them, so the device always has something real to verify against regardless
+// of what the panel sends. Any client-supplied expectedSha256 is ignored.
+
+const APK_DOWNLOAD_TIMEOUT_MS = 30_000;
+const APK_MAX_BYTES = 300 * 1024 * 1024;
+const APK_MAX_REDIRECTS = 5;
+const BLOCKED_HOSTNAMES = new Set(['localhost']);
+
+const BLOCKED_IPV4_CIDRS = [
+  '0.0.0.0/8',
+  '10.0.0.0/8',
+  '127.0.0.0/8',
+  '169.254.0.0/16', // includes the 169.254.169.254 cloud metadata address
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+];
+
+function ipv4ToInt(ip) {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(p => !Number.isInteger(p) || p < 0 || p > 255)) {
+    return null;
+  }
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+function ipv4InCidr(ip, cidr) {
+  const [range, bitsStr] = cidr.split('/');
+  const bits = parseInt(bitsStr, 10);
+  const ipInt = ipv4ToInt(ip);
+  const rangeInt = ipv4ToInt(range);
+  if (ipInt === null || rangeInt === null) return false;
+  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+  return (ipInt & mask) === (rangeInt & mask);
+}
+
+function isBlockedIpv4(ip) {
+  return BLOCKED_IPV4_CIDRS.some(cidr => ipv4InCidr(ip, cidr));
+}
+
+/** Expands any valid textual IPv6 address to its 8 groups (each 0-65535),
+ * resolving "::" compression and a trailing IPv4 dotted-quad tail (e.g. the
+ * "127.0.0.1" in "::ffff:127.0.0.1"). Returns null for anything that can't
+ * be confidently parsed, so the caller can fail closed. */
+function expandIpv6Groups(address) {
+  let addr = address;
+  const ipv4TailMatch = addr.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (ipv4TailMatch) {
+    const ipInt = ipv4ToInt(ipv4TailMatch[1]);
+    if (ipInt === null) return null;
+    const hi = ((ipInt >>> 16) & 0xffff).toString(16);
+    const lo = (ipInt & 0xffff).toString(16);
+    addr = addr.slice(0, addr.length - ipv4TailMatch[1].length) + hi + ':' + lo;
+  }
+
+  const halves = addr.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':').filter(Boolean) : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':').filter(Boolean) : [];
+
+  let groups;
+  if (halves.length === 2) {
+    const missing = 8 - head.length - tail.length;
+    if (missing < 0) return null;
+    groups = [...head, ...Array(missing).fill('0'), ...tail];
+  } else {
+    groups = addr.split(':');
+  }
+  if (groups.length !== 8) return null;
+
+  const values = groups.map(g => parseInt(g || '0', 16));
+  if (values.some(v => Number.isNaN(v) || v < 0 || v > 0xffff)) return null;
+  return values;
+}
+
+/** Only the specific ranges named in the audit - exact loopback, the two
+ * fixed-length prefixes for link-local and unique-local, and any IPv4-mapped
+ * (::ffff:0:0/96) or the deprecated IPv4-compatible (::/96) address reduced
+ * to the IPv4 check above - structurally, so a hex-group form like
+ * "::ffff:7f00:1" is caught the same as the equivalent dotted-quad form
+ * "::ffff:127.0.0.1" instead of relying on one specific textual pattern.
+ * Not full generic IPv6 CIDR math beyond that. */
+function isBlockedIpv6(address) {
+  const lower = address.toLowerCase();
+  if (lower === '::1' || lower === '::') return true;
+
+  const groups = expandIpv6Groups(lower);
+  if (!groups) return true; // couldn't confidently parse it - fail closed
+
+  const first5Zero = groups.slice(0, 5).every(g => g === 0);
+  if (first5Zero && (groups[5] === 0xffff || groups[5] === 0)) {
+    const ipInt = (groups[6] << 16) | groups[7];
+    const ipv4 = [24, 16, 8, 0].map(shift => (ipInt >>> shift) & 0xff).join('.');
+    return isBlockedIpv4(ipv4);
+  }
+
+  if (groups[0] >= 0xfe80 && groups[0] <= 0xfebf) return true; // fe80::/10
+  if (groups[0] >= 0xfc00 && groups[0] <= 0xfdff) return true; // fc00::/7
+  return false;
+}
+
+function isBlockedAddress(address, family) {
+  return family === 4 ? isBlockedIpv4(address) : isBlockedIpv6(address);
+}
+
+/** Resolves the hostname once, rejects the whole hostname if any resolved
+ * address is blocked, and hands the actual TCP connection the exact address
+ * it just validated - so a later re-resolution (DNS rebinding) can never
+ * land the connection somewhere different from what was checked. */
+function createPinnedLookup(hostname) {
+  return function pinnedLookup(_host, options, callback) {
+    // Node's http/https client calls this with (hostname, options, callback),
+    // but dns.lookup()'s own documented contract also allows (hostname,
+    // callback) - support both. It may also ask for every resolved address
+    // at once (options.all, used for Happy Eyeballs dual-stack racing) rather
+    // than a single address/family pair - both response shapes are handled.
+    if (typeof options === 'function') {
+      callback = options;
+      options = {};
+    }
+    dns.lookup(hostname, { all: true, verbatim: true }, (err, addresses) => {
+      if (err) return callback(err);
+      if (addresses.length === 0) return callback(new Error('no addresses resolved'));
+      const blocked = addresses.find(a => isBlockedAddress(a.address, a.family));
+      if (blocked) {
+        return callback(new Error(`resolved to a blocked address (${blocked.address})`));
+      }
+      if (options && options.all) {
+        return callback(null, addresses);
+      }
+      callback(null, addresses[0].address, addresses[0].family);
+    });
+  };
+}
+
+/** Downloads apkUrl and returns its SHA-256 hex digest, hashing as a stream
+ * so the full file never sits in memory. Rejects (without ever having
+ * queued anything) on: non-https URLs or redirects, a blocked/private/
+ * loopback/link-local/metadata address, a response over APK_MAX_BYTES, or
+ * no response within APK_DOWNLOAD_TIMEOUT_MS. */
+function fetchApkSha256(apkUrl, redirectsLeft = APK_MAX_REDIRECTS) {
+  return new Promise((resolve, reject) => {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(apkUrl);
+    } catch {
+      return reject(new Error('invalid apkUrl'));
+    }
+    if (parsedUrl.protocol !== 'https:') {
+      return reject(new Error('apkUrl must use https'));
+    }
+    // URL.hostname keeps the brackets for an IPv6 literal (e.g. "[::1]") -
+    // strip them so both the literal-IP check below and dns.lookup() get a
+    // plain address/hostname either way.
+    const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, '');
+    if (BLOCKED_HOSTNAMES.has(hostname.toLowerCase())) {
+      return reject(new Error('apkUrl host is not allowed'));
+    }
+    // When the URL's host is already a literal IP address, Node connects to
+    // it directly and never invokes the custom `lookup` option below at all -
+    // that hook only fires for an actual hostname needing DNS resolution.
+    // Without this separate check, https://127.0.0.1/... or a private/
+    // metadata IP given directly (no hostname involved) would bypass every
+    // check that follows.
+    const literalIpFamily = net.isIP(hostname);
+    if (literalIpFamily && isBlockedAddress(hostname, literalIpFamily)) {
+      return reject(new Error('apkUrl host is not allowed'));
+    }
+
+    const hash = crypto.createHash('sha256');
+    let totalBytes = 0;
+    let settled = false;
+    const overallTimer = setTimeout(() => {
+      req.destroy(new Error('APK download timed out'));
+    }, APK_DOWNLOAD_TIMEOUT_MS);
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(overallTimer);
+      fn(value);
+    };
+
+    const req = https.get(apkUrl, {
+      lookup: createPinnedLookup(hostname),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    }, res => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) {
+          return settle(reject, new Error('too many redirects while downloading apkUrl'));
+        }
+        let nextUrl;
+        try {
+          nextUrl = new URL(res.headers.location, apkUrl);
+        } catch {
+          return settle(reject, new Error('invalid redirect location'));
+        }
+        if (nextUrl.protocol !== 'https:') {
+          return settle(reject, new Error('redirect to a non-https URL is not allowed'));
+        }
+        fetchApkSha256(nextUrl.toString(), redirectsLeft - 1)
+          .then(sha => settle(resolve, sha))
+          .catch(err => settle(reject, err));
+        return;
+      }
+
+      if (res.statusCode !== 200) {
+        res.resume();
+        return settle(reject, new Error(`APK download failed: HTTP ${res.statusCode}`));
+      }
+
+      const contentLength = parseInt(res.headers['content-length'] || '0', 10);
+      if (contentLength > APK_MAX_BYTES) {
+        res.destroy();
+        return settle(reject, new Error('APK exceeds the maximum allowed size'));
+      }
+
+      res.on('data', chunk => {
+        totalBytes += chunk.length;
+        if (totalBytes > APK_MAX_BYTES) {
+          res.destroy();
+          settle(reject, new Error('APK exceeds the maximum allowed size'));
+          return;
+        }
+        hash.update(chunk);
+      });
+      res.on('end', () => settle(resolve, hash.digest('hex')));
+      res.on('error', err => settle(reject, err));
+    });
+
+    req.on('error', err => settle(reject, err));
+  });
 }
 
 app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) => {
@@ -444,6 +683,13 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
   const paramError = validateCommandParams(command, params);
   if (paramError) {
     return res.status(400).json({ error: paramError });
+  }
+  if (command === 'INSTALL_APP') {
+    try {
+      params.expectedSha256 = await fetchApkSha256(params.apkUrl);
+    } catch (e) {
+      return res.status(502).json({ error: `could not verify apkUrl: ${e.message}` });
+    }
   }
   const device = await db.getDevice(req.params.deviceId);
   if (!device) {

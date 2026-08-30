@@ -26,10 +26,16 @@ class CommandExecutor(private val context: Context) {
             dpm.wipeData(0)
             "מחיקת המכשיר הופעלה"
         }
-        "INSTALL_APP" -> installer.installFromUrl(
-            queued.params.getString("apkUrl"),
-            queued.id
-        )
+        "INSTALL_APP" -> {
+            val apkUrl = queued.params.getString("apkUrl")
+            val expectedSha256 = queued.params.getString("expectedSha256")
+            try {
+                installer.installFromUrl(apkUrl, expectedSha256, queued.id)
+            } catch (e: Exception) {
+                reportInstallFailure(queued.id, e)
+                throw e
+            }
+        }
         "UNINSTALL_APP" -> installer.uninstall(queued.params.getString("packageName"))
         "OPEN_PLAY_STORE_INSTALL" -> {
             val packageName = queued.params.getString("packageName")
@@ -37,5 +43,19 @@ class CommandExecutor(private val context: Context) {
             "נפתח Play Store להתקנת $packageName"
         }
         else -> "פקודה לא מוכרת: ${queued.command}"
+    }
+
+    /** Best-effort - a failed report must never crash the command loop itself;
+     * the original install failure is already being propagated by the caller. */
+    private fun reportInstallFailure(commandId: String, error: Exception) {
+        try {
+            val serverUrl = Config.serverUrl(context)
+            val deviceToken = Config.deviceToken(context) ?: return
+            val deviceId = Config.deviceId(context)
+            ApiClient(serverUrl, deviceToken).reportCommandResult(
+                deviceId, commandId, "FAILED", error.message ?: "התקנה נכשלה"
+            )
+        } catch (_: Exception) {
+        }
     }
 }
