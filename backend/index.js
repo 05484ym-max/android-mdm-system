@@ -333,6 +333,69 @@ app.get('/api/health/devices/:deviceId/diagnostics', requireAdmin, wrap(async (r
   });
 }));
 
+const retrySyncAttempts = new Map();
+const RETRY_SYNC_COOLDOWN_MS = 15 * 1000;
+
+/** "Retry sync" for one device only. This deliberately queues nothing in
+ * `commands` and touches no policy - it just re-sends the exact same
+ * wake-on-push nudge every policy/command change already sends (see
+ * savePolicyAndWake and the /commands route below). MdmMessagingService on
+ * the device treats any push as "sync now" and runs the normal PolicySync
+ * cycle, so this reuses that existing path instead of inventing a new
+ * command type. A short per-device cooldown absorbs an accidental double
+ * click without needing new persisted state. */
+app.post('/api/health/devices/:deviceId/actions/retry-sync', requireAdmin, wrap(async (req, res) => {
+  const devices = await db.listDeviceHealth();
+  const device = devices.find(d => d.deviceId === req.params.deviceId);
+  if (!device) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+
+  // Never trust the UI's own gating on which fault codes it shows a button
+  // for - re-derive the same diagnosis server-side, from the same device
+  // row diagnose() already uses elsewhere, and require SYNC_STALE to
+  // actually be present right now. The client sends no fault/command type
+  // at all (req.body is never read here), so there is nothing for a direct
+  // call to this endpoint to override.
+  const faults = diagnostics.diagnose(device);
+  if (!faults.some(f => f.code === 'SYNC_STALE')) {
+    return res.status(409).json({ error: 'המכשיר אינו דורש כרגע סנכרון מחדש' });
+  }
+
+  const now = Date.now();
+  const last = retrySyncAttempts.get(req.params.deviceId);
+  if (last && now - last < RETRY_SYNC_COOLDOWN_MS) {
+    return res.status(429).json({ error: 'בקשת סנכרון כבר נשלחה למכשיר זה - יש להמתין מספר שניות לפני ניסיון נוסף' });
+  }
+  retrySyncAttempts.set(req.params.deviceId, now);
+
+  // pushToken deliberately isn't part of the health-row shape listDeviceHealth()
+  // returns (that shape is also what /api/health/devices sends to the panel,
+  // and a push token has no business leaving the server) - so it's looked up
+  // separately here, only once SYNC_STALE is confirmed and we're actually
+  // about to wake the device.
+  const fullDevice = await db.getDevice(req.params.deviceId);
+  const result = await push.wake(fullDevice ? fullDevice.pushToken : null);
+  console.log(
+    `[retry-sync] device=${req.params.deviceId} result=${result.sent ? 'sent' : 'not_sent:' + result.reason}`,
+  );
+
+  if (!result.sent) {
+    const messages = {
+      no_push_token: 'למכשיר זה אין push token רשום - הוא יסתנכרן במחזור הסנכרון הרגיל הבא שלו',
+      push_not_configured: 'שירות ה-push אינו מוגדר בשרת - המכשיר יסתנכרן במחזור הסנכרון הרגיל הבא שלו',
+      send_failed: 'שליחת בקשת הסנכרון למכשיר נכשלה - נסה שוב בעוד רגע',
+    };
+    return res.json({
+      status: 'not_sent',
+      reason: result.reason,
+      message: messages[result.reason] || 'לא ניתן היה לשלוח בקשת סנכרון',
+    });
+  }
+
+  res.json({ status: 'sent', message: 'בקשת סנכרון נשלחה למכשיר' });
+}));
+
 app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, res) => {
   const { price } = req.body;
   if (typeof price !== 'number' || price < 0) {

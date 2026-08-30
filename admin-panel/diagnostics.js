@@ -55,8 +55,20 @@
     return '<span class="diag-fix-badge neutral">אין פעולה נדרשת כרגע</span>';
   }
 
-  function faultCard(f) {
+  /** SYNC_STALE only. Sending this request is not the same as the sync
+   * actually succeeding - see handleRetrySync(), which never marks the
+   * fault resolved just because the push went out. */
+  function retrySyncBlock(deviceId) {
+    return `
+      <div class="diag-retry-row">
+        <button class="diag-retry-btn" id="retrySyncBtn" data-device-id="${escapeHtml(deviceId)}">נסה סנכרון מחדש</button>
+        <span class="diag-retry-status" id="retrySyncStatus"></span>
+      </div>`;
+  }
+
+  function faultCard(f, deviceId) {
     const fixBadge = fixBadgeHtml(f);
+    const retryHtml = f.code === 'SYNC_STALE' ? retrySyncBlock(deviceId) : '';
     return `
       <div class="diag-fault-card severity-${escapeHtml(f.severity)}">
         <div class="diag-fault-header">
@@ -68,7 +80,64 @@
         <div class="diag-fault-row"><span class="k">סיבה סבירה: </span>${escapeHtml(f.likelyCause)}</div>
         <div class="diag-fault-row"><span class="k">מה לעשות עכשיו: </span>${escapeHtml(f.recommendedAction)}</div>
         ${technicalDetailsHtml(f.technicalDetails)}
+        ${retryHtml}
       </div>`;
+  }
+
+  /** Sends the retry-sync request and reports the raw outcome only - never
+   * re-fetches/re-renders the fault list, and never claims the fault is
+   * resolved. A sent push and an actual completed sync are two different
+   * things; only reopening (or refreshing) the diagnostics screen, which
+   * re-reads real health data from the server, can show whether SYNC_STALE
+   * actually cleared. */
+  async function handleRetrySync(btn) {
+    const deviceId = btn.getAttribute('data-device-id');
+    const statusEl = document.getElementById('retrySyncStatus');
+    const originalText = btn.textContent;
+
+    btn.disabled = true;
+    btn.textContent = 'שולח...';
+    statusEl.textContent = '';
+    statusEl.className = 'diag-retry-status';
+
+    let res;
+    try {
+      res = await fetch(`/api/health/devices/${encodeURIComponent(deviceId)}/actions/retry-sync`, {
+        method: 'POST',
+      });
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = originalText;
+      statusEl.textContent = 'שגיאת תקשורת - נסה שוב';
+      statusEl.classList.add('error');
+      return;
+    }
+
+    if (res.status === 401) {
+      document.getElementById('diagnosticsModal').style.display = 'none';
+      document.getElementById('loginScreen').style.display = 'flex';
+      return;
+    }
+
+    let body = {};
+    try { body = await res.json(); } catch (e) { /* leave body empty */ }
+
+    btn.disabled = false;
+    btn.textContent = originalText;
+
+    if (!res.ok) {
+      statusEl.textContent = body.error || 'שגיאה בשליחת בקשת הסנכרון';
+      statusEl.classList.add('error');
+      return;
+    }
+
+    if (body.status === 'sent') {
+      statusEl.textContent = body.message || 'בקשת סנכרון נשלחה למכשיר';
+      statusEl.classList.add('sent');
+    } else {
+      statusEl.textContent = body.message || 'לא ניתן היה לשלוח בקשת סנכרון';
+      statusEl.classList.add('info');
+    }
   }
 
   function renderDiagnostics(data) {
@@ -93,11 +162,14 @@
       </div>`;
 
     const faultsHtml = data.faults && data.faults.length
-      ? data.faults.map(faultCard).join('')
+      ? data.faults.map(f => faultCard(f, data.deviceId)).join('')
       : '<div class="empty-state">לא נמצאו תקלות פעילות במכשיר</div>';
 
     document.getElementById('diagnosticsContent').innerHTML = headerHtml +
       `<div class="diag-section"><h3>אבחון פעיל</h3>${faultsHtml}</div>`;
+
+    const retryBtn = document.getElementById('retrySyncBtn');
+    if (retryBtn) retryBtn.addEventListener('click', () => handleRetrySync(retryBtn));
   }
 
   async function openDeviceDiagnostics(deviceId) {

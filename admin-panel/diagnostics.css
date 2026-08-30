@@ -50,3 +50,17 @@
 .diag-fault-row { font-size: 0.82rem; color: var(--text); margin-bottom: 4px; }
 .diag-fault-row .k { color: var(--text-dim); }
 .diag-fault-tech { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--card-border); }
+
+.diag-retry-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--card-border);
+}
+.diag-retry-btn {
+  background: var(--accent); color: #fff; border: none; border-radius: 10px;
+  padding: 8px 14px; cursor: pointer; font-family: inherit; font-size: 0.8rem; font-weight: 700;
+}
+.diag-retry-btn:disabled { opacity: 0.6; cursor: default; }
+.diag-retry-status { font-size: 0.8rem; }
+.diag-retry-status.sent { color: var(--ok); }
+.diag-retry-status.error { color: var(--danger); }
+.diag-retry-status.info { color: var(--text-dim); }

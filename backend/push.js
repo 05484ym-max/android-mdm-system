@@ -19,17 +19,23 @@ if (serviceAccount) {
 /**
  * Tells one device that something changed, so it syncs now instead of waiting
  * for its next poll. A failure here is never fatal: the poll is the fallback.
+ * Returns { sent, reason } so a caller that cares (e.g. an explicit "retry
+ * sync" action) can report the real outcome; existing callers that don't
+ * check the return value are unaffected.
  */
 async function wake(pushToken) {
-  if (!messaging || !pushToken) return;
+  if (!messaging) return { sent: false, reason: 'push_not_configured' };
+  if (!pushToken) return { sent: false, reason: 'no_push_token' };
   try {
     await messaging.send({
       token: pushToken,
       data: { action: 'sync' },
       android: { priority: 'high' },
     });
+    return { sent: true };
   } catch (err) {
     console.warn('Push failed:', err.message);
+    return { sent: false, reason: 'send_failed' };
   }
 }
 
