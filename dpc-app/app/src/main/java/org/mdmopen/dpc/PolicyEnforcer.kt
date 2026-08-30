@@ -45,6 +45,13 @@ class PolicyEnforcer(private val context: Context) {
         // uninstall through the normal flow regardless of this restriction.
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
+        // Without these, the customer can sidestep every restriction above:
+        // enabling USB debugging lets adb start any exported activity
+        // directly (bypassing in-app PIN checks entirely), and Safe Mode
+        // disables every non-system app - including this one - taking the
+        // whole kiosk/allowlist enforcement down with it.
+        dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
+        dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
 
         val allowed = policy.allowedApps.toSet() + playStoreTemporaryAllowance()
         val essential = essentialPackages()
@@ -211,6 +218,8 @@ class PolicyEnforcer(private val context: Context) {
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
 
         // Release Device Owner ownership.
         dpm.clearDeviceOwnerApp(context.packageName)
