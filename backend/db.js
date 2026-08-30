@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 
 CREATE INDEX IF NOT EXISTS alerts_unresolved_idx ON alerts (created_at) WHERE resolved_at IS NULL;
+
+-- The alerts table has had zero readers/writers until now (schema-only from
+-- an earlier migration) - "category" is repurposed here to hold the stable
+-- fault code (e.g. "DEVICE_OWNER_LOST"), not a column rename, so this needs
+-- no new column. This unique index is the only schema change: it guarantees
+-- at the database level that a device can never have two OPEN alerts for
+-- the same fault code (one open alert per deviceId+faultCode), closing the
+-- check-then-insert race a purely application-level dedupe check would
+-- leave open between concurrent /sync requests for the same device.
+CREATE UNIQUE INDEX IF NOT EXISTS alerts_open_unique_idx
+  ON alerts (device_id, category) WHERE resolved_at IS NULL;
 `;
 
 async function init() {
@@ -285,6 +296,36 @@ async function markSyncSuccessful(deviceId) {
   await pool.query(`UPDATE devices SET last_sync_at = now() WHERE device_id = $1`, [deviceId]);
 }
 
+const HEALTH_ROW_COLUMNS = `device_id, registered_at, customer_name, customer_number, policy, status,
+            current_version_code, current_version_name, last_seen_at, last_sync_at,
+            is_device_owner, device_owner_lost_at, last_update_status, last_update_version,
+            last_update_error, battery_level, free_storage_bytes, manufacturer`;
+
+function mapHealthRow(row) {
+  const status = row.status || {};
+  return {
+    deviceId: row.device_id,
+    registeredAt: row.registered_at.toISOString(),
+    customerName: row.customer_name,
+    customerNumber: row.customer_number,
+    model: status.model || null,
+    androidVersion: status.androidVersion || null,
+    manufacturer: row.manufacturer,
+    currentVersionCode: row.current_version_code,
+    currentVersionName: row.current_version_name,
+    lastSeenAt: row.last_seen_at ? row.last_seen_at.toISOString() : null,
+    lastSyncAt: row.last_sync_at ? row.last_sync_at.toISOString() : null,
+    isDeviceOwner: row.is_device_owner,
+    deviceOwnerLostAt: row.device_owner_lost_at ? row.device_owner_lost_at.toISOString() : null,
+    lastUpdateStatus: row.last_update_status,
+    lastUpdateVersion: row.last_update_version,
+    lastUpdateError: row.last_update_error,
+    batteryLevel: row.battery_level,
+    freeStorageBytes: row.free_storage_bytes,
+    syncIntervalMinutes: (row.policy && row.policy.syncIntervalMinutes) || null,
+  };
+}
+
 /**
  * Everything the admin-panel health dashboard needs, one row per device.
  * model/androidVersion still live inside the status JSONB (unchanged, set by
@@ -295,37 +336,20 @@ async function markSyncSuccessful(deviceId) {
  */
 async function listDeviceHealth() {
   const { rows } = await pool.query(
-    `SELECT device_id, registered_at, customer_name, customer_number, policy, status,
-            current_version_code, current_version_name, last_seen_at, last_sync_at,
-            is_device_owner, device_owner_lost_at, last_update_status, last_update_version,
-            last_update_error, battery_level, free_storage_bytes, manufacturer
-       FROM devices
-      ORDER BY registered_at`,
+    `SELECT ${HEALTH_ROW_COLUMNS} FROM devices ORDER BY registered_at`,
   );
-  return rows.map(row => {
-    const status = row.status || {};
-    return {
-      deviceId: row.device_id,
-      registeredAt: row.registered_at.toISOString(),
-      customerName: row.customer_name,
-      customerNumber: row.customer_number,
-      model: status.model || null,
-      androidVersion: status.androidVersion || null,
-      manufacturer: row.manufacturer,
-      currentVersionCode: row.current_version_code,
-      currentVersionName: row.current_version_name,
-      lastSeenAt: row.last_seen_at ? row.last_seen_at.toISOString() : null,
-      lastSyncAt: row.last_sync_at ? row.last_sync_at.toISOString() : null,
-      isDeviceOwner: row.is_device_owner,
-      deviceOwnerLostAt: row.device_owner_lost_at ? row.device_owner_lost_at.toISOString() : null,
-      lastUpdateStatus: row.last_update_status,
-      lastUpdateVersion: row.last_update_version,
-      lastUpdateError: row.last_update_error,
-      batteryLevel: row.battery_level,
-      freeStorageBytes: row.free_storage_bytes,
-      syncIntervalMinutes: (row.policy && row.policy.syncIntervalMinutes) || null,
-    };
-  });
+  return rows.map(mapHealthRow);
+}
+
+/** Same row shape as listDeviceHealth(), for exactly one device - used on
+ * the /sync hot path (alerts reconciliation) so every device check-in
+ * doesn't have to fetch the whole fleet just to diagnose itself. */
+async function getDeviceHealth(deviceId) {
+  const { rows } = await pool.query(
+    `SELECT ${HEALTH_ROW_COLUMNS} FROM devices WHERE device_id = $1`,
+    [deviceId],
+  );
+  return rows[0] ? mapHealthRow(rows[0]) : null;
 }
 
 // ---------- apps catalog ----------
@@ -349,6 +373,64 @@ async function addAppToCatalog(packageName, name, iconUrl) {
      ON CONFLICT (package_name) DO UPDATE SET name = $2, icon_url = $3`,
     [packageName, name, iconUrl || null],
   );
+}
+
+// ---------- alerts ----------
+// Plain CRUD only - which fault codes are alert-worthy, when to open/resolve
+// one, and de-duplication policy all live in alerts.js. `category` holds the
+// stable fault code (e.g. "DEVICE_OWNER_LOST"); `message` holds the fault's
+// Hebrew title captured at open time, so the panel never has to re-derive it.
+
+/** Currently-open alerts for one device, for alerts.js to diff against the
+ * device's current fault list. */
+async function listOpenAlertsForDevice(deviceId) {
+  const { rows } = await pool.query(
+    `SELECT id, category FROM alerts WHERE device_id = $1 AND resolved_at IS NULL`,
+    [deviceId],
+  );
+  return rows;
+}
+
+/** No-ops (via the partial unique index in SCHEMA) if an open alert for this
+ * device+fault code already exists - callers don't need their own locking. */
+async function createAlert(id, deviceId, category, severity, message) {
+  await pool.query(
+    `INSERT INTO alerts (id, device_id, category, severity, message)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (device_id, category) WHERE resolved_at IS NULL DO NOTHING`,
+    [id, deviceId, category, severity, message],
+  );
+}
+
+async function resolveAlert(id) {
+  await pool.query(
+    `UPDATE alerts SET resolved_at = now() WHERE id = $1 AND resolved_at IS NULL`,
+    [id],
+  );
+}
+
+/** Active alerts for the admin panel, most severe and most recent first. */
+async function listActiveAlerts() {
+  const { rows } = await pool.query(
+    `SELECT alerts.id, alerts.device_id, alerts.category, alerts.severity, alerts.message,
+            alerts.created_at, alerts.resolved_at,
+            devices.customer_name, devices.status->>'model' AS model
+       FROM alerts
+       LEFT JOIN devices ON devices.device_id = alerts.device_id
+      WHERE alerts.resolved_at IS NULL
+      ORDER BY CASE WHEN alerts.severity = 'critical' THEN 0 ELSE 1 END, alerts.created_at DESC`,
+  );
+  return rows.map(row => ({
+    id: row.id,
+    deviceId: row.device_id,
+    customerName: row.customer_name,
+    model: row.model,
+    faultCode: row.category,
+    severity: row.severity,
+    message: row.message,
+    createdAt: row.created_at.toISOString(),
+    resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
+  }));
 }
 
 // ---------- commands ----------
@@ -441,6 +523,7 @@ module.exports = {
   recordDeviceHealth,
   markSyncSuccessful,
   listDeviceHealth,
+  getDeviceHealth,
   queueCommand,
   takePendingCommands,
   completeCommand,
@@ -449,4 +532,8 @@ module.exports = {
   listEnrollments,
   listAppsCatalog,
   addAppToCatalog,
+  listOpenAlertsForDevice,
+  createAlert,
+  resolveAlert,
+  listActiveAlerts,
 };

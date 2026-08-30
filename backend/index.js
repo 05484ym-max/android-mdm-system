@@ -13,6 +13,7 @@ const push = require('./push');
 const deviceHealth = require('./deviceHealth');
 const healthPanel = require('./healthPanel');
 const diagnostics = require('./diagnostics');
+const alerts = require('./alerts');
 
 const app = express();
 app.use(express.json());
@@ -303,6 +304,18 @@ app.post('/api/devices/:deviceId/heartbeat', requireDevice, wrap(async (req, res
 app.get('/api/devices', requireAdmin, wrap(async (req, res) => {
   const devices = await db.listDevices();
   res.json(devices.map(publicDevice));
+}));
+
+// ---------- alerts (admin, read-only) ----------
+// Alerts are opened/resolved as a side effect of /sync (see alerts.js) - this
+// route only reads the current active list, no logic of its own.
+
+app.get('/api/alerts', requireAdmin, wrap(async (req, res) => {
+  // DEVICE_OFFLINE/NEVER_CONTACTED can only ever be caught here - see
+  // alerts.reconcileAllDevices() for why sync-time reconciliation alone
+  // can't reach them.
+  await alerts.reconcileAllDevices();
+  res.json(await alerts.listActiveAlerts());
 }));
 
 // ---------- device health dashboard (admin, read-only) ----------
@@ -909,6 +922,16 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   // Advances last_seen_at and the new first-class health columns. Only
   // fields the device actually sent are changed - see recordDeviceHealth().
   await db.recordDeviceHealth(req.params.deviceId, validation.value);
+
+  // Best-effort only: an alerts bug must never fail a device's sync. Reads
+  // the just-saved health back (not `validation.value`, which only has the
+  // fields this particular payload sent) so diagnose() sees the full picture.
+  try {
+    const freshDevice = await db.getDeviceHealth(req.params.deviceId);
+    if (freshDevice) await alerts.syncAlertsForDevice(freshDevice);
+  } catch (e) {
+    console.warn(`[alerts] sync failed for device ${req.params.deviceId}:`, e.message);
+  }
 
   // The existing status JSONB stays populated exactly as before (the admin
   // panel already reads model/androidVersion/isDeviceOwner/lastSeen from it

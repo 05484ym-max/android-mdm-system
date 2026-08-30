@@ -228,6 +228,7 @@
 </style>
 <link rel="stylesheet" href="health.css">
 <link rel="stylesheet" href="diagnostics.css">
+<link rel="stylesheet" href="alerts.css">
 </head>
 <body>
 
@@ -297,6 +298,14 @@
   <div id="healthDevices"></div>
 </div>
 
+<div class="tab-content" data-tab-content="alerts">
+  <div class="alerts-toolbar">
+    <button class="alerts-refresh-btn" id="alertsRefreshBtn">⟳ רענן</button>
+  </div>
+  <div id="alertsSummary" class="alerts-summary"></div>
+  <div id="alertsList"></div>
+</div>
+
 <div class="tab-content" data-tab-content="enroll">
   <div class="enroll-card">
     <h2>רישום מכשיר חדש</h2>
@@ -321,6 +330,10 @@
   <button class="nav-btn" data-tab="health">
     <span class="nav-icon">🩺</span>
     <span class="nav-label">בריאות מכשירים</span>
+  </button>
+  <button class="nav-btn" data-tab="alerts">
+    <span class="nav-icon">🔔</span>
+    <span class="nav-label">התראות</span>
   </button>
 </nav>
 
@@ -968,5 +981,6 @@ loadDevices();
 </script>
 <script src="health.js"></script>
 <script src="diagnostics.js"></script>
+<script src="alerts.js"></script>
 </body>
 </html>
