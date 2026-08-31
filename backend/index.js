@@ -55,7 +55,7 @@ if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
-   'OPEN_PLAY_STORE_INSTALL'];
+   'OPEN_PLAY_STORE_INSTALL', 'RELEASE_DEVICE_OWNER'];
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -459,6 +459,16 @@ app.post('/api/health/devices/:deviceId/actions/retry-update', requireAdmin, wra
   }
 
   res.json({ status: 'sent', message: 'בקשת ניסיון עדכון נשלחה למכשיר' });
+}));
+
+app.delete('/api/devices/:deviceId', requireAdmin, wrap(async (req, res) => {
+  const deleted = await db.deleteDevice(req.params.deviceId);
+
+  if (!deleted) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+
+  res.json({ status: 'ok' });
 }));
 
 app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, res) => {

@@ -493,6 +493,14 @@ async function consumeEnrollment(tokenHash, deviceId) {
   return rowCount > 0;
 }
 
+async function deleteDevice(deviceId) {
+  const { rowCount } = await pool.query(
+    'DELETE FROM devices WHERE device_id = $1',
+    [deviceId]
+  );
+  return rowCount > 0;
+}
+
 async function listEnrollments() {
   const { rows } = await pool.query(
     `SELECT id, created_at, expires_at, used_at, device_id
@@ -513,6 +521,7 @@ module.exports = {
   init,
   getDevice,
   listDevices,
+  deleteDevice,
   generateUniqueDeviceId,
   createDevice,
   setSubscription,

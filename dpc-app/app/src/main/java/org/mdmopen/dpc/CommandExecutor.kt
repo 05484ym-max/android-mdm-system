@@ -42,6 +42,10 @@ class CommandExecutor(private val context: Context) {
             PlayStoreGate.openForInstall(context, packageName)
             "נפתח Play Store להתקנת $packageName"
         }
+        "RELEASE_DEVICE_OWNER" -> {
+            PolicyEnforcer(context).releaseDeviceOwner()
+            "ניהול המכשיר הוסר בהצלחה"
+        }
         else -> "פקודה לא מוכרת: ${queued.command}"
     }
 

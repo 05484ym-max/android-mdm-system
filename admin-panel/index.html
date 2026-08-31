@@ -580,6 +580,8 @@ function renderDeviceList(devices) {
         </div>
         <div class="device-actions">
           <button class="open-detail-btn" data-open-detail="${id}">פרטי לקוח</button>
+          <button class="open-detail-btn" data-delete-device="${id}">הסר מהפאנל</button>
+          <button class="open-detail-btn" data-release-device="${id}">הסר חסימה מרחוק</button>
         </div>
       </div>
     `;
@@ -588,7 +590,84 @@ function renderDeviceList(devices) {
   document.querySelectorAll('[data-open-detail]').forEach(btn => {
     btn.addEventListener('click', () => openDeviceDetail(btn.getAttribute('data-open-detail')));
   });
+
+  document.querySelectorAll('[data-delete-device]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const deviceId = btn.getAttribute('data-delete-device');
+
+      if (!confirm(`להסיר את המכשיר ${deviceId} מהפאנל?
+הפעולה לא מסירה את החסימה מהמכשיר עצמו.`)) {
+        return;
+      }
+
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+          method: 'DELETE'
+        });
+
+        const body = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          alert(body.error || 'מחיקת המכשיר נכשלה');
+          return;
+        }
+
+        await loadDevices();
+      } catch (e) {
+        alert('שגיאה במחיקת המכשיר');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
 }
+
+  document.querySelectorAll('[data-release-device]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const deviceId = btn.getAttribute('data-release-device');
+
+      if (!confirm(`להסיר את החסימה מהמכשיר ${deviceId}?\nהמכשיר יפסיק להיות מנוהל על ידי המערכת.`)) {
+        return;
+      }
+
+      if (!confirm('אישור אחרון: לאחר הסרת Device Owner לא יהיה ניתן להחזיר את הניהול מרחוק ללא הגדרה מחדש של המכשיר. להמשיך?')) {
+        return;
+      }
+
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = 'שולח...';
+
+      try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/commands`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            command: 'RELEASE_DEVICE_OWNER',
+            params: {}
+          })
+        });
+
+        const body = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          alert(body.error || 'שליחת פקודת הסרת החסימה נכשלה');
+          return;
+        }
+
+        alert('פקודת הסרת החסימה נשלחה למכשיר.');
+        await loadDevices();
+      } catch (e) {
+        alert('שגיאה בשליחת פקודת הסרת החסימה');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    });
+  });
+
 
 function openDeviceDetail(deviceId) {
   currentDetailDeviceId = deviceId;
@@ -1034,7 +1113,16 @@ document.getElementById('catalogSearch').addEventListener('input', () => {
 });
 
 document.getElementById('deviceSearch').addEventListener('input', () => {
-  renderDeviceList(filterDevices(document.getElementById('deviceSearch').value));
+  const query = document.getElementById('deviceSearch').value;
+  const matches = filterDevices(query);
+
+  renderDeviceList(matches);
+
+  if (query.trim() && matches.length === 1) {
+    openDeviceDetail(matches[0].deviceId);
+  } else if (!query.trim()) {
+    closeDeviceDetail();
+  }
 });
 
 loadDevices();
