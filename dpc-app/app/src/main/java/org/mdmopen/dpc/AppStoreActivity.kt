@@ -226,8 +226,13 @@ class AppStoreActivity : Activity() {
         val status = TextView(this).apply {
             text = when {
                 !installed -> "התקן"
-                updateAvailable -> "עדכון זמין"
-                app.playUpdatedAt != null -> "✓ מעודכן"
+                // playUpdatedAt is only a heuristic (Play listing last-touched
+                // time, not a real version check - see backend/playStoreSearch.js)
+                // so this must never claim certainty the way "עדכון זמין" would.
+                updateAvailable -> "ייתכן שקיים עדכון"
+                // Not a confirmed "no update exists" - just that no update
+                // signal was found, same heuristic caveat as above.
+                app.playUpdatedAt != null -> "לא זוהה עדכון"
                 else -> "סטטוס לא ידוע"
             }
             textSize = 10.5f

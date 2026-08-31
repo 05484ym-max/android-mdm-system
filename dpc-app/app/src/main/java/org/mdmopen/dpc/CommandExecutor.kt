@@ -42,6 +42,15 @@ class CommandExecutor(private val context: Context) {
             PlayStoreGate.openForInstall(context, packageName)
             "נפתח Play Store להתקנת $packageName"
         }
+        "OPEN_PLAY_STORE_SYSTEM_COMPONENT" -> {
+            val packageName = queued.params.getString("packageName")
+            // displayName is always server-set for this command (see
+            // backend/index.js's SYSTEM_COMPONENT_DISPLAY_NAMES) - falling
+            // back to the raw package name only if it's ever missing.
+            val displayName = queued.params.optString("displayName", packageName)
+            PlayStoreGate.openForInstall(context, packageName, displayName)
+            "נפתח Play Store עבור $displayName"
+        }
         "RELEASE_DEVICE_OWNER" -> {
             PolicyEnforcer(context).releaseDeviceOwner()
             "ניהול המכשיר הוסר בהצלחה"

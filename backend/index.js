@@ -55,7 +55,15 @@ if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
-   'OPEN_PLAY_STORE_INSTALL', 'RELEASE_DEVICE_OWNER'];
+   'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'RELEASE_DEVICE_OWNER'];
+// Pre-installed system components OPEN_PLAY_STORE_SYSTEM_COMPONENT is allowed
+// to target - deliberately separate from the customer app catalog, since
+// these are never something a customer "installs" or an admin assigns via
+// policy/apps. The display name is always taken from here server-side, never
+// from client input, so the admin panel can't inject an arbitrary label.
+const SYSTEM_COMPONENT_DISPLAY_NAMES = {
+  'com.google.android.gms': 'Google Play Services',
+};
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -552,12 +560,78 @@ app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
   }
   try {
     const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
-    await db.addAppToCatalog(appInfo.packageName, appInfo.name, appInfo.iconUrl);
+    await db.addAppToCatalog(
+      appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+    );
     res.json({ status: 'ok', app: appInfo, catalog: await db.listAppsCatalog() });
   } catch (e) {
     console.warn(`[play-add] ${packageName} failed:`, e.message);
     res.status(502).json({ error: 'לא ניתן לאמת כרגע את האפליקציה מול Google Play.' });
   }
+}));
+
+const REFRESH_PLAY_METADATA_BATCH_SIZE = 5;
+const PLAY_METADATA_ERROR_MAX_LENGTH = 300;
+
+/**
+ * Backfills play_version/play_updated_at for existing catalog apps that
+ * never got it (added before this feature existed, or where an earlier
+ * fetch failed) - deliberately admin-triggered, not run on server startup or
+ * on any device sync. Processes a small fixed batch sequentially (not
+ * Promise.all) so this never fires a burst of simultaneous requests at
+ * Google Play.
+ *
+ * "The fetch succeeded" and "Google gave us a usable play_updated_at" are
+ * two different facts - some packages' Play metadata simply never includes
+ * an updated timestamp. Success is recorded via its own explicit call
+ * (recordPlayMetadataCheckSuccess), never inferred from appInfo.updated
+ * being non-null - a successful fetch with no timestamp is still a real
+ * check that happened, not an unresolved one, and must not be re-attempted
+ * on every single call the way a genuinely never-checked or failed package
+ * is.
+ *
+ * Starvation-safe by construction: db.listAppsPendingPlayMetadataRefresh()
+ * orders never-checked apps first, then oldest-checked - and every attempt
+ * in this batch, whichever of the three outcomes below it hits, stamps
+ * play_metadata_checked_at. A package that keeps failing (or keeps
+ * succeeding with no timestamp) still cycles to the back of that ordering,
+ * so it can never permanently block apps further down the catalog from ever
+ * being attempted. remaining/neverChecked are fresh COUNT(*)s from the DB,
+ * not derived from this batch's results, so they stay correct regardless of
+ * this batch's mix of outcomes.
+ */
+app.post('/api/apps/refresh-play-metadata', requireAdmin, wrap(async (req, res) => {
+  const pending = await db.listAppsPendingPlayMetadataRefresh(REFRESH_PLAY_METADATA_BATCH_SIZE);
+
+  const results = [];
+  for (const packageName of pending) {
+    try {
+      const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
+      await db.addAppToCatalog(
+        appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+      );
+      await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
+      const status = appInfo.updated != null ? 'updated' : 'checked_no_update_timestamp';
+      results.push({ packageName, status });
+    } catch (e) {
+      // Only the message, never e.stack - this is stored in the DB, not
+      // just logged, so it must stay a short human-readable reason.
+      const message = String(e.message || 'unknown error').slice(0, PLAY_METADATA_ERROR_MAX_LENGTH);
+      console.warn(`[refresh-play-metadata] ${packageName} failed:`, e.message);
+      await db.recordPlayMetadataCheckFailure(packageName, message);
+      results.push({ packageName, status: 'failed', error: message });
+    }
+  }
+
+  res.json({
+    processed: results.length,
+    updated: results.filter(r => r.status === 'updated').length,
+    checkedWithoutTimestamp: results.filter(r => r.status === 'checked_no_update_timestamp').length,
+    failed: results.filter(r => r.status === 'failed').length,
+    remaining: await db.countAppsPendingPlayMetadataRefresh(),
+    neverChecked: await db.countAppsNeverCheckedPlayMetadata(),
+    results,
+  });
 }));
 
 app.post('/api/apps/:packageName/assign-all', requireAdmin, wrap(async (req, res) => {
@@ -625,7 +699,8 @@ function validateCommandParams(command, params) {
       ? null
       : 'apkUrl must be an https URL';
   }
-  if (command === 'UNINSTALL_APP' || command === 'OPEN_PLAY_STORE_INSTALL') {
+  if (command === 'UNINSTALL_APP' || command === 'OPEN_PLAY_STORE_INSTALL' ||
+      command === 'OPEN_PLAY_STORE_SYSTEM_COMPONENT') {
     return PACKAGE_NAME_REGEX.test(params.packageName || '')
       ? null
       : 'packageName is invalid';
@@ -905,6 +980,24 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
   const device = await db.getDevice(req.params.deviceId);
   if (!device) {
     return res.status(404).json({ error: 'device not found' });
+  }
+  // Never trust the panel's own UI gating on which packages it shows a
+  // button for - re-derive the real authorization here, server-side, from
+  // this device's own policy, before anything is queued.
+  if (command === 'OPEN_PLAY_STORE_INSTALL') {
+    const policy = normalizePolicy(device.policy);
+    if (!policy.allowedApps.includes(params.packageName)) {
+      return res.status(403).json({ error: 'packageName is not approved for this device' });
+    }
+  }
+  if (command === 'OPEN_PLAY_STORE_SYSTEM_COMPONENT') {
+    const displayName = SYSTEM_COMPONENT_DISPLAY_NAMES[params.packageName];
+    if (!displayName) {
+      return res.status(403).json({ error: 'packageName is not an allowed system component' });
+    }
+    // Always the server's own trusted label - overwrites anything the
+    // client might have sent under this key.
+    params.displayName = displayName;
   }
   await db.queueCommand(req.params.deviceId, crypto.randomUUID(), command, params);
   await push.wake(device.pushToken);

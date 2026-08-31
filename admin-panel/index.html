@@ -420,6 +420,7 @@ function commandLabel(cmd) {
     LOCK: 'נעילה', SYNC_POLICY: 'סנכרון מדיניות', REBOOT: 'הפעלה מחדש',
     WIPE: 'מחיקת מכשיר', INSTALL_APP: 'התקנת אפליקציה', UNINSTALL_APP: 'הסרת אפליקציה',
     OPEN_PLAY_STORE_INSTALL: 'התקנה דרך Play Store',
+    OPEN_PLAY_STORE_SYSTEM_COMPONENT: 'עדכון רכיב מערכת (Google Play Services)',
   }[cmd] || cmd;
 }
 
@@ -1056,7 +1057,7 @@ document.getElementById('googleServicesUpdateBtn').addEventListener('click', asy
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        command: 'OPEN_PLAY_STORE_INSTALL',
+        command: 'OPEN_PLAY_STORE_SYSTEM_COMPONENT',
         params: { packageName }
       }),
     });

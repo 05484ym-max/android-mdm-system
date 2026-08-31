@@ -34,7 +34,14 @@ object PlayStoreGate {
     private const val POLL_INTERVAL_MS = 1_500L
     private const val PACKAGE = "com.android.vending"
 
-    fun openForInstall(context: Context, packageName: String) {
+    /**
+     * displayName overrides the catalog-name lookup below, for callers (like
+     * a system-component command) whose package will never be in the
+     * customer's app catalog - always a value the caller already trusts
+     * (e.g. resolved server-side against a fixed allowlist), never raw
+     * client input passed straight to a customer-facing overlay.
+     */
+    fun openForInstall(context: Context, packageName: String, displayName: String? = null) {
         val appContext = context.applicationContext
         val dpm = appContext.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(appContext, DpcDeviceAdminReceiver::class.java)
@@ -61,7 +68,7 @@ object PlayStoreGate {
             )
         }
 
-        val appName = Config.appCatalog(appContext)
+        val appName = displayName ?: Config.appCatalog(appContext)
             .firstOrNull { it.packageName == packageName }
             ?.name ?: packageName
 

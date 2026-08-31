@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS apps_catalog (
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS icon_url TEXT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_version TEXT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_updated_at BIGINT;
+-- Bookkeeping for the refresh-play-metadata backfill only - never exposed to
+-- devices. checked_at is stamped on every attempt, success or failure, so a
+-- package that keeps failing still cycles to the back of the refresh queue
+-- instead of being retried forever while other apps that were never even
+-- attempted starve behind it.
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_metadata_checked_at BIGINT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_metadata_error TEXT;
 
 CREATE TABLE IF NOT EXISTS commands (
   id           UUID PRIMARY KEY,
@@ -358,16 +365,32 @@ async function getDeviceHealth(deviceId) {
 
 async function listAppsCatalog() {
   const { rows } = await pool.query(
-    `SELECT package_name, name, icon_url, added_at FROM apps_catalog ORDER BY added_at DESC`,
+    `SELECT package_name, name, icon_url, play_version, play_updated_at, added_at FROM apps_catalog ORDER BY added_at DESC`,
   );
   return rows.map(row => ({
     packageName: row.package_name,
     name: row.name,
     iconUrl: row.icon_url,
+    playVersion: row.play_version,
+    // play_updated_at is BIGINT - node-postgres returns int8 columns as
+    // strings by default (to avoid silent precision loss on values beyond
+    // Number.MAX_SAFE_INTEGER), so this must be explicitly converted or the
+    // JSON response would send a quoted string instead of a number. A Unix
+    // millisecond timestamp is nowhere near unsafe-integer range.
+    playUpdatedAt: row.play_updated_at != null ? Number(row.play_updated_at) : null,
     addedAt: row.added_at.toISOString(),
   }));
 }
 
+/**
+ * Pure data upsert - deliberately knows nothing about whether a Play
+ * metadata *check* happened or succeeded (see recordPlayMetadataCheckSuccess/
+ * Failure for that, which the refresh-play-metadata endpoint calls
+ * separately). Used both for a plain manual add (playVersion/playUpdatedAt
+ * left at their null defaults) and for writing down what a successful Play
+ * fetch returned - COALESCE keeps whatever real metadata a package already
+ * had instead of wiping it out when called with nulls.
+ */
 async function addAppToCatalog(packageName, name, iconUrl, playVersion = null, playUpdatedAt = null) {
   await pool.query(
     `INSERT INTO apps_catalog (package_name, name, icon_url, play_version, play_updated_at)
@@ -375,10 +398,95 @@ async function addAppToCatalog(packageName, name, iconUrl, playVersion = null, p
      ON CONFLICT (package_name) DO UPDATE SET
        name = $2,
        icon_url = $3,
-       play_version = $4,
-       play_updated_at = $5`,
+       play_version = COALESCE($4, apps_catalog.play_version),
+       play_updated_at = COALESCE($5, apps_catalog.play_updated_at)`,
     [packageName, name, iconUrl || null, playVersion, playUpdatedAt],
   );
+}
+
+/**
+ * Starvation-safe candidate list for the refresh-play-metadata backfill:
+ * apps that have never been checked sort first (NULLS FIRST), then whichever
+ * was checked longest ago. Every attempt - success or failure, and a success
+ * that got no play_updated_at from Google is still a success - stamps
+ * play_metadata_checked_at (see recordPlayMetadataCheckSuccess/Failure), so
+ * a package can never be reselected here indefinitely while others that
+ * were never attempted wait behind it. Deliberately does NOT exclude a
+ * package just because it was already checked - a package Google never
+ * gives a real updated timestamp for is expected to stay in this pool
+ * forever (there is no reliable signal to ever satisfy play_updated_at IS
+ * NOT NULL for it), it just cycles to the back of the queue each time
+ * instead of being retried immediately.
+ */
+async function listAppsPendingPlayMetadataRefresh(limit) {
+  const { rows } = await pool.query(
+    `SELECT package_name FROM apps_catalog
+      WHERE play_updated_at IS NULL
+      ORDER BY play_metadata_checked_at ASC NULLS FIRST
+      LIMIT $1`,
+    [limit],
+  );
+  return rows.map(row => row.package_name);
+}
+
+/**
+ * Records that a Play metadata fetch *succeeded*, independent of whether
+ * Google actually returned a usable play_updated_at for this package -
+ * "the check ran and returned real data" and "Google gave us a timestamp"
+ * are two different facts, and only this function's own call (not the
+ * presence of a timestamp) is allowed to mean the former. Never touches
+ * name/icon/version/updated - addAppToCatalog already wrote those from the
+ * same fetch; this only clears a stale error and stamps checked_at so the
+ * starvation-safe ordering above sees this package as freshly checked.
+ */
+async function recordPlayMetadataCheckSuccess(packageName) {
+  await pool.query(
+    `UPDATE apps_catalog SET play_metadata_checked_at = $2, play_metadata_error = NULL
+      WHERE package_name = $1`,
+    [packageName, Date.now()],
+  );
+}
+
+/** Records a failed Play metadata fetch attempt - never touches existing
+ * name/icon/version/updated, only marks that a check happened just now and
+ * why, so the starvation-safe ordering above sees this package as
+ * "recently checked" on the next call. errorMessage is assumed already
+ * truncated to a reasonable length by the caller (a scraper failure message,
+ * never a full stack trace). */
+async function recordPlayMetadataCheckFailure(packageName, errorMessage) {
+  await pool.query(
+    `UPDATE apps_catalog SET play_metadata_checked_at = $2, play_metadata_error = $3
+      WHERE package_name = $1`,
+    [packageName, Date.now(), errorMessage || null],
+  );
+}
+
+/** Reliable "how many still need a refresh" count, computed fresh from the
+ * DB rather than derived from one batch's results - a batch that had
+ * failures must not be miscounted as if those apps were resolved. Cast to
+ * ::int (not the bare bigint count(*) result) so node-postgres returns a
+ * real JS number, not a string. */
+async function countAppsPendingPlayMetadataRefresh() {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS count FROM apps_catalog WHERE play_updated_at IS NULL`,
+  );
+  return rows[0].count;
+}
+
+/** How many catalog apps still lack play_updated_at AND have never had a
+ * Play metadata check attempted at all (success or failure) - a strict
+ * subset of countAppsPendingPlayMetadataRefresh's count. Requiring both
+ * conditions (not just play_metadata_checked_at IS NULL alone) excludes an
+ * app that already has real metadata from some other path (a manual add
+ * with real values, say) but was never itself run through this refresh
+ * mechanism - that app isn't missing anything, so it must not count as
+ * "still needs its first check". */
+async function countAppsNeverCheckedPlayMetadata() {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS count FROM apps_catalog
+      WHERE play_updated_at IS NULL AND play_metadata_checked_at IS NULL`,
+  );
+  return rows[0].count;
 }
 
 // ---------- alerts ----------
@@ -547,6 +655,11 @@ module.exports = {
   listEnrollments,
   listAppsCatalog,
   addAppToCatalog,
+  listAppsPendingPlayMetadataRefresh,
+  recordPlayMetadataCheckSuccess,
+  recordPlayMetadataCheckFailure,
+  countAppsPendingPlayMetadataRefresh,
+  countAppsNeverCheckedPlayMetadata,
   listOpenAlertsForDevice,
   createAlert,
   resolveAlert,

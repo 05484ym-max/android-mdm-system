@@ -91,6 +91,8 @@ class ApiClient(
                 packageName = item.getString("packageName"),
                 name = item.optString("name", item.getString("packageName")),
                 iconUrl = if (item.isNull("iconUrl")) null else item.optString("iconUrl", null),
+                playVersion = if (item.isNull("playVersion")) null else item.optString("playVersion", null),
+                playUpdatedAt = if (item.isNull("playUpdatedAt")) null else item.optLong("playUpdatedAt"),
             )
         }
 
