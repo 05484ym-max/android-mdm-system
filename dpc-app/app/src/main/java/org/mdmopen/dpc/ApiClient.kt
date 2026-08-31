@@ -25,6 +25,8 @@ data class CatalogApp(
     val packageName: String,
     val name: String,
     val iconUrl: String?,
+    val playVersion: String? = null,
+    val playUpdatedAt: Long? = null,
 )
 
 data class SyncResult(

@@ -212,8 +212,24 @@ class AppStoreActivity : Activity() {
         // it's a separate clickable label (own click listener wins over the
         // tile's) that reopens the same guarded Play Store page, which shows
         // "Update" there when one is available and does nothing otherwise.
+        val updateAvailable = if (installed && app.playUpdatedAt != null) {
+            try {
+                val info = packageManager.getPackageInfo(app.packageName, 0)
+                app.playUpdatedAt > info.lastUpdateTime
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+
         val status = TextView(this).apply {
-            text = if (installed) "✓ מותקן · בדוק עדכון" else "התקנה"
+            text = when {
+                !installed -> "התקן"
+                updateAvailable -> "עדכון זמין"
+                app.playUpdatedAt != null -> "✓ מעודכן"
+                else -> "סטטוס לא ידוע"
+            }
             textSize = 10.5f
             typeface = mediumFont
             setTextColor(Color.parseColor(if (installed) OK else ACCENT))

@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS apps_catalog (
 );
 
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS icon_url TEXT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_version TEXT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_updated_at BIGINT;
 
 CREATE TABLE IF NOT EXISTS commands (
   id           UUID PRIMARY KEY,
@@ -366,12 +368,16 @@ async function listAppsCatalog() {
   }));
 }
 
-async function addAppToCatalog(packageName, name, iconUrl) {
+async function addAppToCatalog(packageName, name, iconUrl, playVersion = null, playUpdatedAt = null) {
   await pool.query(
-    `INSERT INTO apps_catalog (package_name, name, icon_url)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (package_name) DO UPDATE SET name = $2, icon_url = $3`,
-    [packageName, name, iconUrl || null],
+    `INSERT INTO apps_catalog (package_name, name, icon_url, play_version, play_updated_at)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (package_name) DO UPDATE SET
+       name = $2,
+       icon_url = $3,
+       play_version = $4,
+       play_updated_at = $5`,
+    [packageName, name, iconUrl || null, playVersion, playUpdatedAt],
   );
 }
 

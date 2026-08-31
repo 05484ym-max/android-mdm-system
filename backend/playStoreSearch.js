@@ -1,4 +1,5 @@
 const https = require('https');
+const googlePlayScraper = require('google-play-scraper').default;
 
 const PLAY_HOST = 'play.google.com';
 const MAX_SEARCH_BYTES = 2 * 1024 * 1024;
@@ -114,10 +115,24 @@ async function getPlayStoreApp(packageName) {
   const html = await fetchPlayHtml(url, MAX_DETAILS_BYTES);
   const title = cleanPlayTitle(metaContent(html, 'og:title'), packageName);
   const iconUrl = metaContent(html, 'og:image');
+
+  let playMetadata = null;
+  try {
+    playMetadata = await googlePlayScraper.app({
+      appId: packageName,
+      lang: 'he',
+      country: 'il'
+    });
+  } catch (e) {
+    console.warn(`[play-metadata] ${packageName}: ${e.message}`);
+  }
+
   return {
     packageName,
     name: title.slice(0, 100),
     iconUrl: iconUrl || null,
+    version: playMetadata?.version || null,
+    updated: Number.isFinite(playMetadata?.updated) ? playMetadata.updated : null,
     playUrl: `https://${PLAY_HOST}/store/apps/details?id=${encodeURIComponent(packageName)}`,
   };
 }
