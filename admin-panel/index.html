@@ -289,6 +289,10 @@
     <select class="customer-picker" id="catalogCustomerSelect" style="display:none;">
       <option value="">בחר לקוח...</option>
     </select>
+      <button class="add-app-btn" id="googleServicesUpdateBtn"
+              style="display:none; margin-bottom:10px;">
+        עדכן Google Play Services
+      </button>
     <input class="search-input" id="catalogSearch" placeholder="חיפוש בקטלוג לפי שם..." />
     <div id="catalogList"><div class="empty-state">טוען...</div></div>
     <div class="add-app-row" id="appImportActions" style="margin-top:10px;">
@@ -858,6 +862,7 @@ document.querySelectorAll('[data-catalog-mode]').forEach(btn => {
     catalogMode = btn.getAttribute('data-catalog-mode');
     document.querySelectorAll('[data-catalog-mode]').forEach(b => b.classList.toggle('active', b === btn));
     document.getElementById('catalogCustomerSelect').style.display = catalogMode === 'customer' ? 'block' : 'none';
+    document.getElementById('googleServicesUpdateBtn').style.display = catalogMode === 'customer' ? 'inline-block' : 'none';
     document.getElementById('addAppToCatalogRow').style.display = catalogMode === 'all' ? 'flex' : 'none';
     document.getElementById('appImportActions').style.display = catalogMode === 'all' ? 'flex' : 'none';
     renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
@@ -953,7 +958,36 @@ function renderCatalog(apps) {
     });
   });
 
-  document.querySelectorAll('[data-install-store]').forEach(btn => {
+
+document.getElementById('googleServicesUpdateBtn').addEventListener('click', async () => {
+  if (!catalogCustomerId) {
+    alert('יש לבחור לקוח');
+    return;
+  }
+
+  const btn = document.getElementById('googleServicesUpdateBtn');
+  const packageName = 'com.google.android.gms';
+
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'פותח עדכון...';
+
+  try {
+    await fetch(`/api/devices/${encodeURIComponent(catalogCustomerId)}/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        command: 'OPEN_PLAY_STORE_INSTALL',
+        params: { packageName }
+      }),
+    });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+});
+
+document.querySelectorAll('[data-install-store]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const packageName = btn.getAttribute('data-install-store');
       btn.disabled = true;
