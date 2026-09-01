@@ -88,6 +88,13 @@ async function createFamily(b){
 async function listCompatibilityProfiles(){
  return (await pool.query('SELECT id,family_id AS "familyId",name,status,profile,created_at AS "createdAt" FROM lab_compatibility_profiles ORDER BY created_at DESC')).rows;
 }
+async function getCompatibilityProfile(profileId){
+ const {rows}=await pool.query(
+  'SELECT id,family_id AS "familyId",name,status,profile FROM lab_compatibility_profiles WHERE id=$1',
+  [profileId]
+ );
+ return rows[0]||null;
+}
 async function createCompatibilityProfile(b){
  const profileId=id();
  const {rows}=await pool.query(`
@@ -130,4 +137,4 @@ async function getMdmCompatibility(deviceId){
 }
 async function listAudit(){return (await pool.query('SELECT * FROM lab_audit_log ORDER BY created_at DESC LIMIT 300')).rows}
 module.exports={init,createScan,saveDecision,listScans,getScan,listFamilies,createFamily,listCompatibilityProfiles,
- createCompatibilityProfile,listFlashProfiles,createFlashProfile,getFlashProfile,linkMdm,getMdmCompatibility,listAudit,audit};
+ getCompatibilityProfile,createCompatibilityProfile,listFlashProfiles,createFlashProfile,getFlashProfile,linkMdm,getMdmCompatibility,listAudit,audit};
