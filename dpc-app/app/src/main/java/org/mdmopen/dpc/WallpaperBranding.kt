@@ -52,7 +52,12 @@ object WallpaperBranding {
     // v5: replaced emblem_transparent.png with a higher-quality 3D metallic
     // gold render supplied directly (not re-extracted from the launcher
     // icon), matching the same content/layout at native ~1167px resolution.
-    private const val RECIPE_VERSION = 5
+    // v6: shrunk from 42% to 30% of screen width per customer feedback (too
+    // big); also switched the branding-state write from apply() to commit()
+    // (see below) to fix a real re-branding-every-sync bug, not a sizing one.
+    // v7: emblem now drawn at ~43% opacity (watermark-level) instead of
+    // solid, so it doesn't visually compete with the customer's own photo.
+    private const val RECIPE_VERSION = 7
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
@@ -112,10 +117,16 @@ object WallpaperBranding {
             wallpaperManager.setBitmap(branded, null, true, WallpaperManager.FLAG_LOCK)
 
             val newId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
+            // commit(), not apply(): this runs on every sync (see PolicySync.run()),
+            // often from a background job the OS can kill right after. apply()'s
+            // write to disk is asynchronous - if the process dies before it lands,
+            // the next sync forgets it already branded this exact photo and
+            // re-sets the wallpaper again, which is visible to the customer as a
+            // flash/jump on the home and lock screen every sync cycle.
             prefs.edit()
                 .putInt(KEY_LAST_ID, newId)
                 .putInt(KEY_RECIPE_VERSION, RECIPE_VERSION)
-                .apply()
+                .commit()
             return "עודכן בהצלחה"
         } catch (e: Exception) {
             Log.w(TAG, "Could not brand the wallpaper", e)
@@ -174,13 +185,13 @@ object WallpaperBranding {
         return bitmap
     }
 
-    /** Emblem sized to well under half the screen width, centered
+    /** Emblem sized to well under a third of the screen width, centered
      * horizontally, anchored in the upper third rather than filling it. */
     private fun compositeEmblem(background: Bitmap, emblem: Bitmap): Bitmap {
         val result = background.copy(Bitmap.Config.ARGB_8888, true) ?: return background
         val canvas = Canvas(result)
 
-        val targetWidth = result.width * 0.42f
+        val targetWidth = result.width * 0.30f
         val scale = targetWidth / emblem.width
         val targetHeight = emblem.height * scale
 
@@ -189,6 +200,10 @@ object WallpaperBranding {
 
         val destRect = RectF(left, top, left + targetWidth, top + targetHeight)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        // Watermark-level opacity, not a solid graphic sitting on top of the
+        // customer's own photo - it should read as a subtle mark, not get in
+        // the way of what's actually on their wallpaper.
+        paint.alpha = 110
         canvas.drawBitmap(emblem, null, destRect, paint)
 
         return result
