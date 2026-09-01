@@ -1,0 +1,14 @@
+{
+  "name":"דוגמת פרופיל צריבה - לא מאושר",
+  "status":"REVIEW",
+  "profile":{
+    "codenames":["example"],"familyFingerprint":null,"allowedExactFingerprints":[],
+    "targetFirmware":"TBD","targetAndroidVersion":"TBD","region":"TBD","flashingTransport":"FASTBOOT",
+    "requiredBootMode":"FASTBOOT","requiredTool":"OEM_OFFICIAL_TOOL","requiredToolVersion":"TBD",
+    "requiredHostOs":"WINDOWS","requiredDriver":"TBD","unlockRequired":false,
+    "oemAuthorizationRequired":false,"antiRollbackConstraints":"UNKNOWN","wipeRequired":true,
+    "expectedDataLoss":"ALL_USER_DATA",
+    "steps":["אין להשתמש בפרופיל זה עד מעבר ל-APPROVED."],
+    "postFlash":["וודא Setup Wizard","בצע Device Owner provisioning","בצע sync ו-health check"]
+  }
+}
