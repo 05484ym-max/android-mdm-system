@@ -18,7 +18,9 @@
     <application
         android:allowBackup="false"
         android:label="מעבדת מכשירים"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:icon="@drawable/ic_technician"
+        android:roundIcon="@drawable/ic_technician"
+        android:theme="@android:style/Theme.Material.NoActionBar"
         android:supportsRtl="true">
 
         <activity
