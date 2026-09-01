@@ -123,7 +123,15 @@ class MainActivity : Activity() {
         val tick = object : Runnable {
             override fun run() {
                 if (!polling) return
-                refreshState()
+                try {
+                    refreshState()
+                } catch (e: Exception) {
+                    // USB stacks on some OEM builds can throw while roles are
+                    // changing or a cable is being attached/detached. Never let
+                    // a transient USB enumeration failure crash the whole app.
+                    stateLabel.text = "⚠ שגיאת USB זמנית"
+                    guidanceLabel.text = "נתק וחבר את הכבל מחדש ואז נסה שוב."
+                }
                 mainHandler.postDelayed(this, 1500)
             }
         }
@@ -131,6 +139,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshState() {
+        if (isFinishing || isDestroyed) return
         val devices = usbTransportManager.currentDevices()
         val single = devices.singleOrNull()
         val state = usbTransportManager.currentState()
@@ -164,7 +173,12 @@ class MainActivity : Activity() {
     }
 
     private fun onScanClicked() {
-        val devices = usbTransportManager.currentDevices()
+        val devices = try {
+            usbTransportManager.currentDevices()
+        } catch (e: Exception) {
+            Toast.makeText(this, "לא ניתן לקרוא כרגע את חיבור ה-USB. נתק וחבר מחדש.", Toast.LENGTH_LONG).show()
+            return
+        }
         val device = devices.singleOrNull()
         if (device == null) {
             Toast.makeText(this, "חבר מכשיר יחיד לסריקה", Toast.LENGTH_SHORT).show()
