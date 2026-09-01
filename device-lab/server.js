@@ -5,6 +5,7 @@ const db=require('./db');
 const {normalizeScan}=require('./lib/normalize');
 const {decide}=require('./lib/decision');
 const {listMdmDevices}=require('./lib/mdmSync');
+const {buildFlashPlan}=require('./lib/preflight');
 
 const app=express();
 app.use(express.json({limit:'2mb'}));
@@ -44,6 +45,24 @@ app.post('/api/lab/scans/:id/link-mdm',auth,wrap(async(req,res)=>{
  if(!req.body.deviceId)return res.status(400).json({error:'deviceId required'});
  const row=await db.linkMdm(req.params.id,String(req.body.deviceId));
  if(!row)return res.status(404).json({error:'not found'}); res.json({status:'linked',deviceId:String(req.body.deviceId)});
+}));
+app.get('/api/lab/scans/:id/flash-plan',auth,wrap(async(req,res)=>{
+ const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'});
+ const profileId=row.decision?.flashProfileId;
+ if(!profileId)return res.json(buildFlashPlan(row.normalized,row.decision,null));
+ const flashProfile=await db.getFlashProfile(profileId);
+ res.json(buildFlashPlan(row.normalized,row.decision,flashProfile));
+}));
+app.post('/api/lab/scans/:id/promote-family',auth,wrap(async(req,res)=>{
+ const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'});
+ const n=row.normalized||{};
+ const family=await db.createFamily({
+  displayName:req.body.displayName||[n.manufacturer,n.model,n.device].filter(Boolean).join(' ')||'משפחה חדשה',
+  manufacturer:n.manufacturer,brand:n.brand,device:n.device,board:n.board,hardware:n.hardware,platform:n.platform,
+  familyFingerprint:n.familyFingerprint,status:'REVIEW',notes:'נוצר אוטומטית מסריקה '+row.id
+ });
+ const decision=await classify(n); await db.saveDecision(row.id,decision);
+ res.status(201).json({family,decision});
 }));
 app.get('/api/lab/families',auth,wrap(async(req,res)=>res.json(await db.listFamilies())));
 app.post('/api/lab/families',auth,wrap(async(req,res)=>{
