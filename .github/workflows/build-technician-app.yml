@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -71,3 +71,19 @@ jobs:
           path: device-lab/technician-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish permanent technician APK link
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK="device-lab/technician-app/app/build/outputs/apk/debug/app-debug.apk"
+          cp "$APK" technician.apk
+          if gh release view device-lab-latest >/dev/null 2>&1; then
+            gh release upload device-lab-latest technician.apk --clobber
+          else
+            gh release create device-lab-latest technician.apk \
+              --target device-lab \
+              --title "Device Lab Technician - Latest" \
+              --notes "Latest debug APK for physical USB/ADB testing. Updated automatically from the device-lab branch."
+          fi
