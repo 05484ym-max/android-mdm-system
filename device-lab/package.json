@@ -1,0 +1,7 @@
+{
+  "name":"device-lab","version":"0.1.0","private":true,
+  "description":"Device Compatibility & Flash Manager for android-mdm-system",
+  "main":"server.js",
+  "scripts":{"start":"node server.js","test":"node --test test/*.test.js","scan":"node scanner/scanner.js"},
+  "dependencies":{"dotenv":"^17.4.2","express":"^5.2.1","pg":"^8.23.0"}
+}
