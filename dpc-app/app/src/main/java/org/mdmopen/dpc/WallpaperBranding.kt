@@ -57,7 +57,10 @@ object WallpaperBranding {
     // (see below) to fix a real re-branding-every-sync bug, not a sizing one.
     // v7: emblem now drawn at ~43% opacity (watermark-level) instead of
     // solid, so it doesn't visually compete with the customer's own photo.
-    private const val RECIPE_VERSION = 7
+    // v8: setBitmap() for FLAG_SYSTEM and FLAG_LOCK combined into one call
+    // instead of two sequential ones - a customer reported the emblem only
+    // showing on the lock screen, not the home screen, on their device.
+    private const val RECIPE_VERSION = 8
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
@@ -113,8 +116,15 @@ object WallpaperBranding {
 
             val branded = compositeEmblem(original, emblem)
 
-            wallpaperManager.setBitmap(branded, null, true, WallpaperManager.FLAG_SYSTEM)
-            wallpaperManager.setBitmap(branded, null, true, WallpaperManager.FLAG_LOCK)
+            // One call for both targets, not two sequential ones: some OEM wallpaper
+            // services only reliably repaint the home screen (unlike the lock screen,
+            // which keyguard always redraws fresh on every lock) when system+lock are
+            // set together in a single call, rather than two rapid separate calls that
+            // can trigger only one "wallpaper changed" refresh instead of two.
+            wallpaperManager.setBitmap(
+                branded, null, true,
+                WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
+            )
 
             val newId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
             // commit(), not apply(): this runs on every sync (see PolicySync.run()),
