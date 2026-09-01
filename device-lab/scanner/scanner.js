@@ -9,9 +9,9 @@ function cmd(bin,args,timeout=5000){
 }
 function adbShell(...args){return cmd('adb',['shell',...args])}
 function prop(name){return adbShell('getprop',name)}
-function parseOwner(text){
- const line=text.split(/\r?\n/).find(x=>/Device Owner/i.test(x)||/admin=/i.test(x));
- return line?.trim()||null;
+function parseDeviceOwner(text){
+  if(!/Device Owner/i.test(text)) return null;
+  return text.trim() || 'Device Owner';
 }
 function fastbootVar(name){
  const text=cmd('sh',['-lc','fastboot getvar '+name+' 2>&1'],4000);
@@ -26,6 +26,7 @@ function usbProbe(){
 }
 const serial=cmd('adb',['get-serialno']);
 const state=cmd('adb',['get-state']);
+const ownersRaw=adbShell('dpm','list','owners');
 const raw={
  source:'termux-scanner',
  hostType:process.platform==='android'?'ANDROID':'NODE_HOST',
@@ -44,7 +45,7 @@ const raw={
   dynamicPartitions:prop('ro.boot.dynamic_partitions')
  },
  setupWizardPackage:adbShell('cmd','package','resolve-activity','--brief','-a','android.intent.action.MAIN','-c','android.intent.category.SETUP_WIZARD'),
- deviceOwner:parseOwner(adbShell('dpm','list','owners')),
+ deviceOwner:parseDeviceOwner(ownersRaw),
  provisioningAllowed:null,
  usb:usbProbe(),
  fastboot:{product:fastbootVar('product'),unlocked:fastbootVar('unlocked'),secure:fastbootVar('secure'),currentSlot:fastbootVar('current-slot')}
