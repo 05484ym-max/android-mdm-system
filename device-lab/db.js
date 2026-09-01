@@ -116,6 +116,18 @@ async function linkMdm(scanId,deviceId){
  const {rows}=await pool.query('UPDATE lab_device_scans SET linked_mdm_device_id=$2 WHERE id=$1 RETURNING *',[scanId,deviceId]);
  await audit('MDM_LINKED','scan',scanId,{deviceId}); return rows[0]||null;
 }
+async function getMdmCompatibility(deviceId){
+ const {rows}=await pool.query(`
+  SELECT s.id AS scan_id,s.created_at,s.normalized,s.decision,s.family_fingerprint,
+         cp.id AS compatibility_profile_id,cp.name AS compatibility_profile_name,
+         cp.status AS compatibility_profile_status,cp.profile AS compatibility_profile
+    FROM lab_device_scans s
+    LEFT JOIN lab_compatibility_profiles cp
+      ON cp.id::text = s.decision->>'compatibilityProfileId'
+   WHERE s.linked_mdm_device_id=$1
+   ORDER BY s.created_at DESC LIMIT 1`,[deviceId]);
+ return rows[0]||null;
+}
 async function listAudit(){return (await pool.query('SELECT * FROM lab_audit_log ORDER BY created_at DESC LIMIT 300')).rows}
 module.exports={init,createScan,saveDecision,listScans,getScan,listFamilies,createFamily,listCompatibilityProfiles,
- createCompatibilityProfile,listFlashProfiles,createFlashProfile,getFlashProfile,linkMdm,listAudit,audit};
+ createCompatibilityProfile,listFlashProfiles,createFlashProfile,getFlashProfile,linkMdm,getMdmCompatibility,listAudit,audit};
