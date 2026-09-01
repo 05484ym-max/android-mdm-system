@@ -81,7 +81,7 @@ app.post('/api/lab/flash-profiles',auth,wrap(async(req,res)=>{
 }));
 app.get('/api/lab/mdm/devices',auth,wrap(async(req,res)=>res.json(await listMdmDevices())));
 app.get('/api/lab/audit',auth,wrap(async(req,res)=>res.json(await db.listAudit())));
-app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'admin-panel/index.html')));
+app.use((req,res,next)=>{ if(req.method==='GET'&&!req.path.startsWith('/api/')) return res.sendFile(path.join(__dirname,'admin-panel/index.html')); next(); });
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'internal error'})});
 const port=Number(process.env.PORT||3100);
 db.init().then(()=>app.listen(port,()=>console.log('Device Lab listening on',port)))
