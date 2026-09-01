@@ -19,7 +19,7 @@ function buildFlashPlan(scan, decision, flashProfile) {
     blocks,
     summary:{
       model:scan?.model||null,device:scan?.device||null,buildFingerprint:scan?.buildFingerprint||null,
-      targetFirmware:p.targetFirmware||null,requiredTool:p.requiredTool||null,requiredHostOs:p.requiredHostOs||null,
+      targetFirmware:p.targetFirmware||null,requiredTool:p.requiredTool||null,requiredToolVersion:p.requiredToolVersion||null,requiredHostOs:p.requiredHostOs||null,requiredDriver:p.requiredDriver||null,requiredBootMode:p.requiredBootMode||null,oemAuthorizationRequired:p.oemAuthorizationRequired===true,
       wipeRequired:p.wipeRequired===true,expectedDataLoss:p.expectedDataLoss||null
     },
     prerequisites:safe?[
