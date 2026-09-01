@@ -1,0 +1,69 @@
+require('dotenv').config();
+const express=require('express');
+const path=require('path');
+const db=require('./db');
+const {normalizeScan}=require('./lib/normalize');
+const {decide}=require('./lib/decision');
+const {listMdmDevices}=require('./lib/mdmSync');
+
+const app=express();
+app.use(express.json({limit:'2mb'}));
+app.use(express.static(path.join(__dirname,'admin-panel')));
+const key=process.env.LAB_ADMIN_KEY;
+if(!key){console.error('FATAL: LAB_ADMIN_KEY is required');process.exit(1)}
+function auth(req,res,next){
+ const supplied=req.get('x-lab-key')||(req.get('authorization')||'').replace(/^Bearer\s+/,'');
+ if(supplied!==key)return res.status(401).json({error:'unauthorized'}); next();
+}
+const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
+async function classify(normalized){
+ const [families,flashProfiles,compatibilityProfiles]=await Promise.all([
+  db.listFamilies(),db.listFlashProfiles(),db.listCompatibilityProfiles()
+ ]);
+ const mapped=families.map(f=>({id:f.id,displayName:f.display_name,manufacturer:f.manufacturer,brand:f.brand,
+  device:f.device,board:f.board,hardware:f.hardware,platform:f.platform,
+  familyFingerprint:f.family_fingerprint,status:f.status}));
+ return decide(normalized,mapped,flashProfiles,compatibilityProfiles);
+}
+app.get('/health',(req,res)=>res.json({status:'ok',service:'device-lab'}));
+app.post('/api/lab/scans',auth,wrap(async(req,res)=>{
+ const normalized=normalizeScan(req.body||{});
+ const row=await db.createScan(req.body,normalized,req.body.source||'scanner');
+ const decision=await classify(normalized); await db.saveDecision(row.id,decision);
+ res.status(201).json({id:row.id,normalized,decision});
+}));
+app.get('/api/lab/scans',auth,wrap(async(req,res)=>res.json(await db.listScans())));
+app.get('/api/lab/scans/:id',auth,wrap(async(req,res)=>{
+ const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'}); res.json(row);
+}));
+app.post('/api/lab/scans/:id/reclassify',auth,wrap(async(req,res)=>{
+ const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'});
+ const decision=await classify(row.normalized); await db.saveDecision(row.id,decision); res.json(decision);
+}));
+app.post('/api/lab/scans/:id/link-mdm',auth,wrap(async(req,res)=>{
+ if(!req.body.deviceId)return res.status(400).json({error:'deviceId required'});
+ const row=await db.linkMdm(req.params.id,String(req.body.deviceId));
+ if(!row)return res.status(404).json({error:'not found'}); res.json({status:'linked',deviceId:String(req.body.deviceId)});
+}));
+app.get('/api/lab/families',auth,wrap(async(req,res)=>res.json(await db.listFamilies())));
+app.post('/api/lab/families',auth,wrap(async(req,res)=>{
+ if(!req.body.displayName)return res.status(400).json({error:'displayName required'});
+ res.status(201).json(await db.createFamily(req.body));
+}));
+app.get('/api/lab/compatibility-profiles',auth,wrap(async(req,res)=>res.json(await db.listCompatibilityProfiles())));
+app.post('/api/lab/compatibility-profiles',auth,wrap(async(req,res)=>{
+ if(!req.body.familyId||!req.body.name)return res.status(400).json({error:'familyId and name required'});
+ res.status(201).json(await db.createCompatibilityProfile(req.body));
+}));
+app.get('/api/lab/flash-profiles',auth,wrap(async(req,res)=>res.json(await db.listFlashProfiles())));
+app.post('/api/lab/flash-profiles',auth,wrap(async(req,res)=>{
+ if(!req.body.familyId||!req.body.name)return res.status(400).json({error:'familyId and name required'});
+ res.status(201).json(await db.createFlashProfile(req.body));
+}));
+app.get('/api/lab/mdm/devices',auth,wrap(async(req,res)=>res.json(await listMdmDevices())));
+app.get('/api/lab/audit',auth,wrap(async(req,res)=>res.json(await db.listAudit())));
+app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'admin-panel/index.html')));
+app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'internal error'})});
+const port=Number(process.env.PORT||3100);
+db.init().then(()=>app.listen(port,()=>console.log('Device Lab listening on',port)))
+ .catch(err=>{console.error(err);process.exit(1)});
