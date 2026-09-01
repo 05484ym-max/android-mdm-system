@@ -2,6 +2,8 @@ package org.mdmopen.devicelab.technician
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.os.Handler
@@ -9,6 +11,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
+import android.widget.Space
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -59,6 +62,8 @@ class MainActivity : Activity() {
         // way. Wired to localhost only so the client compiles as a complete, callable unit.
         apiClient = DeviceLabApiClient("http://10.0.2.2:3100", TechnicianAuth(this))
 
+        window.statusBarColor = Color.parseColor("#07182F")
+        window.navigationBarColor = Color.parseColor("#07182F")
         setContentView(buildUi())
         startPolling()
     }
@@ -71,52 +76,180 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi(): View {
-        val root = LinearLayout(this).apply {
+        val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(32, 48, 32, 32)
+            setPadding(dp(20), dp(26), dp(20), dp(28))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.parseColor("#07182F"), Color.parseColor("#09294B"))
+            )
         }
+
         val title = TextView(this).apply {
             text = "מעבדת מכשירים"
-            textSize = 24f
+            textSize = 30f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.END
-            setPadding(0, 0, 0, 24)
         }
-        val connectCard = TextView(this).apply {
-            text = "חבר מכשיר"
-            textSize = 18f
+        val subtitle = TextView(this).apply {
+            text = "ניהול, בדיקה ואבחון מכשירי Android"
+            textSize = 15f
+            setTextColor(Color.parseColor("#91A9C7"))
             gravity = Gravity.END
-            setPadding(24, 24, 24, 24)
-            setBackgroundColor(Color.parseColor("#F0F0F0"))
+            setPadding(0, dp(4), 0, dp(22))
         }
+        page.addView(title)
+        page.addView(subtitle)
+
+        val hero = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            background = roundedGradient("#102B4D", "#0B2140", 24f, "#2F78FF")
+        }
+
         stateLabel = TextView(this).apply {
-            textSize = 16f
+            textSize = 23f
+            setTextColor(Color.parseColor("#FF5A62"))
+            setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.END
-            setPadding(0, 24, 0, 8)
         }
         guidanceLabel = TextView(this).apply {
-            textSize = 14f
+            textSize = 15f
+            setTextColor(Color.parseColor("#D5E5F8"))
             gravity = Gravity.END
-            setPadding(0, 0, 0, 24)
+            setPadding(0, dp(10), 0, dp(18))
+        }
+        hero.addView(stateLabel)
+        hero.addView(guidanceLabel)
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            weightSum = 2f
         }
         val scanButton = Button(this).apply {
             text = "סרוק מכשיר"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            isAllCaps = false
+            background = roundedGradient("#143E72", "#102C55", 18f, "#4F8CFF")
             setOnClickListener { onScanClicked() }
         }
+        val connectButton = Button(this).apply {
+            text = "חבר מכשיר"
+            textSize = 17f
+            setTextColor(Color.parseColor("#041426"))
+            setTypeface(typeface, Typeface.BOLD)
+            isAllCaps = false
+            background = roundedGradient("#20DFFF", "#1DB7FF", 18f, "#68F1FF")
+            setOnClickListener {
+                Toast.makeText(this@MainActivity, "חבר כבל OTG/USB ואשר הרשאת USB", Toast.LENGTH_SHORT).show()
+            }
+        }
+        actions.addView(connectButton, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginEnd = dp(8) })
+        actions.addView(scanButton, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginStart = dp(8) })
+        hero.addView(actions)
+        page.addView(hero, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        val modeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(0, dp(18), 0, dp(8))
+            weightSum = 2f
+        }
+        modeRow.addView(infoCard("חיבור USB", "חיבור קווי באמצעות USB", "USB"), LinearLayout.LayoutParams(0, dp(100), 1f).apply { marginEnd = dp(6) })
+        modeRow.addView(infoCard("Wireless ADB", "חיבור אלחוטי למכשיר", "Wi-Fi"), LinearLayout.LayoutParams(0, dp(100), 1f).apply { marginStart = dp(6) })
+        page.addView(modeRow)
+
+        page.addView(sectionCard("אבחון", "הרצת בדיקות מערכת ואיתור תקלות", "⌕"))
+        page.addView(sectionCard("תוצאות תאימות", "בדיקת תאימות מערכת ואפליקציות", "✓"))
+        page.addView(sectionCard("פרטי מכשיר", "מידע מלא על חומרה, תוכנה וסטטוס", "ⓘ"))
+
         resultArea = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(0, 24, 0, 0)
+            setPadding(0, dp(8), 0, dp(6))
+        }
+        page.addView(resultArea)
+
+        val tip = TextView(this).apply {
+            text = "טיפ חי  •  ודא שהאפשרות לניפוי USB מורשית במכשיר הנשלט"
+            textSize = 14f
+            setTextColor(Color.parseColor("#4EEAFF"))
+            gravity = Gravity.END
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            background = roundedGradient("#0C2A4B", "#0A203C", 18f, "#1E6A9A")
+        }
+        page.addView(tip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
+        })
+
+        return ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(Color.parseColor("#07182F"))
+            addView(page)
+        }
+    }
+
+    private fun infoCard(title: String, subtitle: String, badge: String): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = roundedGradient("#102B4B", "#0D2340", 20f, "#244D78")
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.END
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "$badge  •  $subtitle"
+                textSize = 12f
+                setTextColor(Color.parseColor("#8FA9C7"))
+                gravity = Gravity.END
+                setPadding(0, dp(6), 0, 0)
+            })
         }
 
-        root.addView(title)
-        root.addView(connectCard)
-        root.addView(stateLabel)
-        root.addView(guidanceLabel)
-        root.addView(scanButton)
-        root.addView(resultArea)
-        return ScrollView(this).apply { addView(root) }
-    }
+    private fun sectionCard(title: String, subtitle: String, symbol: String): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            background = roundedGradient("#102945", "#0D223D", 20f, "#244A73")
+            addView(TextView(this@MainActivity).apply {
+                text = "$symbol   $title"
+                textSize = 18f
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.END
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = subtitle
+                textSize = 13f
+                setTextColor(Color.parseColor("#8EA7C4"))
+                gravity = Gravity.END
+                setPadding(0, dp(4), 0, 0)
+            })
+        }.also {
+            (it as View).layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
+        }
+
+    private fun roundedGradient(start: String, end: String, radiusDp: Float, stroke: String): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Color.parseColor(start), Color.parseColor(end))).apply {
+            cornerRadius = dp(radiusDp.toInt()).toFloat()
+            setStroke(dp(1), Color.parseColor(stroke))
+        }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun startPolling() {
         polling = true
@@ -158,7 +291,7 @@ class MainActivity : Activity() {
     }
 
     private fun statusLine(state: ConnectionState): String = when (state) {
-        ConnectionState.NoDevice -> "🔴 לא זוהה מכשיר"
+        ConnectionState.NoDevice -> "● לא זוהה מכשיר"
         ConnectionState.MultipleDevices -> "⚠ כמה מכשירים מחוברים"
         ConnectionState.UsbOnly -> "🟠 USB מחובר ללא ADB"
         ConnectionState.UnknownUsbMode -> "⚠ מצב USB לא מוכר"
@@ -191,7 +324,8 @@ class MainActivity : Activity() {
             return
         }
 
-        stateLabel.text = "⏳ סורק..."
+        stateLabel.text = "סורק מכשיר..."
+        stateLabel.setTextColor(Color.parseColor("#29D8FF"))
         guidanceLabel.text = "קורא מידע מהמכשיר. אין לנתק את הכבל."
         ioExecutor.execute {
             val usbManager = getSystemService(USB_SERVICE) as UsbManager
@@ -290,9 +424,13 @@ class MainActivity : Activity() {
         val status = decision?.optString("status") ?: "UNKNOWN_BUILD"
         val confidence = decision?.optString("confidence") ?: "LOW"
         val line = TextView(this).apply {
-            text = "${statusBadge(status)}   ($confidence)"
-            textSize = 16f
+            text = "${statusBadge(status)}   •   רמת ודאות: $confidence"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.END
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            background = roundedGradient("#10365A", "#0C2746", 18f, "#2C7DB1")
         }
         resultArea.addView(line)
     }
