@@ -1,6 +1,10 @@
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let scans=[],mdm=[],families=[];
+// SECURITY NOTE (MVP/dev only, not fixed in this pass): LAB_ADMIN_KEY is stored in plain
+// localStorage, readable by any script/extension in this origin (XSS would leak it directly).
+// TODO before any real deployment beyond local/dev use: move to a short-lived session token
+// issued by the server after a real login, not the raw long-lived admin key kept client-side.
 const key=()=>localStorage.getItem('labKey')||'';
 async function api(path,options={}){
  const r=await fetch(path,{...options,headers:{'content-type':'application/json','x-lab-key':key(),...(options.headers||{})}});

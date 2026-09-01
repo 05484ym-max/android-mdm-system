@@ -69,3 +69,15 @@ Bridge נפרד יוכל לדווח:
 - קבצי firmware/checksum
 
 גם שם פעולת flash תישאר gated על Flash Profile מאושר.
+
+## ⚠ שינוי אלגוריתם familyFingerprint (audit fix)
+`familyFingerprint` חושב במקור מ-`device|board|hardware|platform|fastbootProduct`.
+`fastbootProduct` תלוי-מצב-חיבור (קיים רק אם המכשיר נסרק במצב fastboot), ולכן אותה חומרה
+פיזית יכלה לקבל fingerprint שונה בין סריקות — תוקן להוציא אותו מהחישוב; הנוסחה הנוכחית
+היא `device|board|hardware|platform` בלבד.
+
+**השפעה על נתונים ישנים:** כל `lab_hardware_families` ו-`lab_flash_profiles` שנוצרו לפני
+התיקון (בכל סביבה שבה כבר רץ scan אמיתי, לא רק בבדיקות עם payload סינתטי) מחזיקים
+fingerprint שחושב עם הנוסחה הישנה. סריקה חדשה של אותה חומרה תחשב fingerprint לפי הנוסחה
+החדשה ולא תתאים אוטומטית למשפחה/פרופיל הישן. **יש להריץ reclassify מחדש** (ולבחון promote-family
+מחדש במידת הצורך) לכל משפחה/פרופיל production שנוצר לפני התיקון הזה, לפני הסתמכות עליו.

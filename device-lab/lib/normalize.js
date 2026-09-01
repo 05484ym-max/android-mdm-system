@@ -32,12 +32,26 @@ function normalizeScan(raw = {}) {
     usbVid: clean(usb.vid), usbPid: clean(usb.pid), usbMode: clean(usb.mode),
     hostType: clean(raw.hostType)
   };
-  const familyMaterial = [lower(normalized.device),lower(normalized.board),lower(normalized.hardware),
-    lower(normalized.platform),lower(normalized.fastbootProduct)].filter(Boolean).join('|');
+  const familyMaterial = familyFingerprintMaterial(normalized);
   const exactMaterial = [familyMaterial,lower(normalized.buildFingerprint),lower(normalized.bootloader),
     lower(normalized.product)].filter(Boolean).join('|');
   normalized.familyFingerprint = familyMaterial ? crypto.createHash('sha256').update(familyMaterial).digest('hex') : null;
   normalized.exactFingerprint = exactMaterial ? crypto.createHash('sha256').update(exactMaterial).digest('hex') : null;
   return normalized;
 }
-module.exports = { normalizeScan };
+
+// device/board/hardware/platform identify the hardware family itself; fastbootProduct is
+// connection-modal (only present while the device happens to be in fastboot mode at scan
+// time) and must be excluded here, or the same physical hardware can hash to a different
+// family fingerprint across scans depending on which mode it was scanned in.
+function familyFingerprintMaterial(fields) {
+  return [lower(fields.device),lower(fields.board),lower(fields.hardware),lower(fields.platform)]
+    .filter(Boolean).join('|');
+}
+
+function computeFamilyFingerprint(fields = {}) {
+  const material = familyFingerprintMaterial(fields);
+  return material ? crypto.createHash('sha256').update(material).digest('hex') : null;
+}
+
+module.exports = { normalizeScan, computeFamilyFingerprint };

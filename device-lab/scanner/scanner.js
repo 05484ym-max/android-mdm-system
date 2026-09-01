@@ -10,11 +10,17 @@ function cmd(bin,args,timeout=5000){
 function adbShell(...args){return cmd('adb',['shell',...args])}
 function prop(name){return adbShell('getprop',name)}
 function parseDeviceOwner(text){
-  if(!/Device Owner/i.test(text)) return null;
+  if(!text) return null;
+  if(/no\s+device\s+owner/i.test(text)) return null;
+  if(!/Device Owner:/i.test(text)) return null;
   return text.trim() || 'Device Owner';
 }
 function fastbootVar(name){
- const text=cmd('sh',['-lc','fastboot getvar '+name+' 2>&1'],4000);
+ // `fastboot getvar` writes its answer to stderr; execFileSync above only captures stdout,
+ // so this one call intentionally shells out with 2>&1 to merge them. Passed as a single
+ // execFileSync arg (no string concatenation into a shell command line), so `name` cannot
+ // break out of the fastboot argv even though the surrounding pipeline is a shell string.
+ const text=cmd('sh',['-c','fastboot getvar "$1" 2>&1','_',name],4000);
  const marker=name+':';
  const line=text.split(/\r?\n/).find(x=>x.toLowerCase().includes(marker.toLowerCase()));
  return line?line.slice(line.toLowerCase().indexOf(marker.toLowerCase())+marker.length).trim():null;

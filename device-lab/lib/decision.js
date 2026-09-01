@@ -1,5 +1,15 @@
 const {pickBestFamily,flashProfileMatches}=require('./matcher');
 
+// `dpm list owners` prints a "no device/profile owner" sentence that also contains the
+// substring "device owner" — a naive /device owner/i.test() false-positives on it and would
+// wrongly report an unmanaged device as already-managed. Check the negative form first, and
+// require the actual header the command prints when an owner IS set.
+function hasDeviceOwner(text){
+  if(!text) return false;
+  if(/no\s+device\s+owner/i.test(text)) return false;
+  return /Device Owner:/i.test(text);
+}
+
 function decide(scan,families,flashProfiles,compatibilityProfiles){
   const best=pickBestFamily(scan,families);
   if(!best||best.confidence==='LOW') return {
@@ -7,7 +17,7 @@ function decide(scan,families,flashProfiles,compatibilityProfiles){
     reasons:['hardware_family_not_confirmed'],recommendedAction:'עצור לבדיקה ידנית. אין לבצע צריבה.'
   };
   const compat=compatibilityProfiles.find(p=>p.familyId===best.family.id&&p.status==='APPROVED');
-  if(scan.deviceOwner&&/device owner/i.test(scan.deviceOwner)) return {
+  if(hasDeviceOwner(scan.deviceOwner)) return {
     status:'SUPPORTED_NO_FLASH',confidence:best.confidence,familyId:best.family.id,
     compatibilityProfileId:compat?.id||null,reasons:['device_owner_already_present'],
     recommendedAction:'המכשיר כבר מנוהל. בצע בדיקות MDM בלבד.'

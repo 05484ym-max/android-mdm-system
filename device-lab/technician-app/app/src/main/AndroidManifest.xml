@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      MVP scope decision: no foreground service. USB host access and an open
+      UsbDeviceConnection are only reliable while this Activity is in the foreground
+      (Android background-execution limits, Android 12+); a technician actively holding
+      the phone with the target device attached matches the real workflow, so background
+      scanning is out of scope rather than half-implemented. See technician-app section
+      of the audit report for the FOREGROUND_SERVICE_CONNECTED_DEVICE follow-up needed
+      if background scanning is ever required.
+    -->
+
+    <application
+        android:allowBackup="false"
+        android:label="מעבדת מכשירים"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

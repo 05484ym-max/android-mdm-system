@@ -1,8 +1,9 @@
 require('dotenv').config();
+const crypto=require('crypto');
 const express=require('express');
 const path=require('path');
 const db=require('./db');
-const {normalizeScan}=require('./lib/normalize');
+const {normalizeScan,computeFamilyFingerprint}=require('./lib/normalize');
 const {decide}=require('./lib/decision');
 const {listMdmDevices}=require('./lib/mdmSync');
 const {buildFlashPlan}=require('./lib/preflight');
@@ -13,16 +14,24 @@ app.use(express.static(path.join(__dirname,'admin-panel')));
 const key=process.env.LAB_ADMIN_KEY;
 const bridgeKey=process.env.LAB_MDM_BRIDGE_KEY||null;
 if(!key){console.error('FATAL: LAB_ADMIN_KEY is required');process.exit(1)}
+function safeEqual(a,b){
+ if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length) return false;
+ return crypto.timingSafeEqual(Buffer.from(a,'utf8'),Buffer.from(b,'utf8'));
+}
 function auth(req,res,next){
  const supplied=req.get('x-lab-key')||(req.get('authorization')||'').replace(/^Bearer\s+/,'');
- if(supplied!==key)return res.status(401).json({error:'unauthorized'}); next();
+ if(!safeEqual(supplied,key))return res.status(401).json({error:'unauthorized'}); next();
 }
 function bridgeAuth(req,res,next){
  if(!bridgeKey)return res.status(503).json({error:'bridge not configured'});
- if(req.get('x-mdm-bridge-key')!==bridgeKey)return res.status(401).json({error:'unauthorized'});
+ if(!safeEqual(req.get('x-mdm-bridge-key')||'',bridgeKey))return res.status(401).json({error:'unauthorized'});
  next();
 }
 const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
+const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function requireUuidParam(name){
+ return (req,res,next)=>{ if(!UUID_RE.test(String(req.params[name]||''))) return res.status(400).json({error:name+' must be a valid uuid'}); next(); };
+}
 
 function approvedFlashProfileErrors(body){
  const p=body?.profile||{};
@@ -59,31 +68,32 @@ app.post('/api/lab/scans',auth,wrap(async(req,res)=>{
  res.status(201).json({id:row.id,normalized,decision});
 }));
 app.get('/api/lab/scans',auth,wrap(async(req,res)=>res.json(await db.listScans())));
-app.get('/api/lab/scans/:id',auth,wrap(async(req,res)=>{
+app.get('/api/lab/scans/:id',auth,requireUuidParam('id'),wrap(async(req,res)=>{
  const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'}); res.json(row);
 }));
-app.post('/api/lab/scans/:id/reclassify',auth,wrap(async(req,res)=>{
+app.post('/api/lab/scans/:id/reclassify',auth,requireUuidParam('id'),wrap(async(req,res)=>{
  const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'});
  const decision=await classify(row.normalized); await db.saveDecision(row.id,decision); res.json(decision);
 }));
-app.post('/api/lab/scans/:id/link-mdm',auth,wrap(async(req,res)=>{
+app.post('/api/lab/scans/:id/link-mdm',auth,requireUuidParam('id'),wrap(async(req,res)=>{
+ // Product decision: never accept an unverified manual link. Without MDM_DATABASE_URL there
+ // is no way to confirm the deviceId is real, so refuse outright instead of silently linking.
+ if(!process.env.MDM_DATABASE_URL) return res.status(503).json({error:'MDM_DATABASE_URL not configured; cannot verify device before linking'});
  if(!req.body.deviceId)return res.status(400).json({error:'deviceId required'});
  const deviceId=String(req.body.deviceId);
- if(process.env.MDM_DATABASE_URL){
-   const devices=await listMdmDevices();
-   if(!devices.some(d=>String(d.deviceId)===deviceId)) return res.status(404).json({error:'MDM device not found'});
- }
+ const devices=await listMdmDevices();
+ if(!devices.some(d=>String(d.deviceId)===deviceId)) return res.status(404).json({error:'MDM device not found'});
  const row=await db.linkMdm(req.params.id,deviceId);
  if(!row)return res.status(404).json({error:'scan not found'}); res.json({status:'linked',deviceId});
 }));
-app.get('/api/lab/scans/:id/flash-plan',auth,wrap(async(req,res)=>{
+app.get('/api/lab/scans/:id/flash-plan',auth,requireUuidParam('id'),wrap(async(req,res)=>{
  const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'});
  const profileId=row.decision?.flashProfileId;
  if(!profileId)return res.json(buildFlashPlan(row.normalized,row.decision,null));
  const flashProfile=await db.getFlashProfile(profileId);
  res.json(buildFlashPlan(row.normalized,row.decision,flashProfile));
 }));
-app.post('/api/lab/scans/:id/promote-family',auth,wrap(async(req,res)=>{
+app.post('/api/lab/scans/:id/promote-family',auth,requireUuidParam('id'),wrap(async(req,res)=>{
  const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'});
  const n=row.normalized||{};
  const family=await db.createFamily({
@@ -97,7 +107,8 @@ app.post('/api/lab/scans/:id/promote-family',auth,wrap(async(req,res)=>{
 app.get('/api/lab/families',auth,wrap(async(req,res)=>res.json(await db.listFamilies())));
 app.post('/api/lab/families',auth,wrap(async(req,res)=>{
  if(!req.body.displayName)return res.status(400).json({error:'displayName required'});
- res.status(201).json(await db.createFamily(req.body));
+ const body={...req.body,familyFingerprint:computeFamilyFingerprint(req.body)};
+ res.status(201).json(await db.createFamily(body));
 }));
 app.get('/api/lab/compatibility-profiles',auth,wrap(async(req,res)=>res.json(await db.listCompatibilityProfiles())));
 app.post('/api/lab/compatibility-profiles',auth,wrap(async(req,res)=>{
@@ -116,12 +127,15 @@ app.get('/api/lab/audit',auth,wrap(async(req,res)=>res.json(await db.listAudit()
 app.get('/api/bridge/mdm/:deviceId/compatibility',bridgeAuth,wrap(async(req,res)=>{
  const row=await db.getMdmCompatibility(String(req.params.deviceId));
  if(!row)return res.status(404).json({error:'no linked compatibility data'});
+ // Recomputed live so the bridge never hands the MDM system a stale cached decision
+ // (e.g. after a flash profile is revoked/edited since this scan was last classified).
+ const decision=await classify(row.normalized);
  res.json({
   deviceId:String(req.params.deviceId),
   scanId:row.scan_id,
   scannedAt:row.created_at,
   normalized:row.normalized,
-  decision:row.decision,
+  decision,
   compatibilityProfile:row.compatibility_profile_id?{
    id:row.compatibility_profile_id,name:row.compatibility_profile_name,
    status:row.compatibility_profile_status,profile:row.compatibility_profile
@@ -129,7 +143,10 @@ app.get('/api/bridge/mdm/:deviceId/compatibility',bridgeAuth,wrap(async(req,res)
  });
 }));
 app.use((req,res,next)=>{ if(req.method==='GET'&&!req.path.startsWith('/api/')) return res.sendFile(path.join(__dirname,'admin-panel/index.html')); next(); });
-app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'internal error'})});
+app.use((err,req,res,next)=>{
+ if(err&&err.code==='22P02') return res.status(400).json({error:'invalid id format'});
+ console.error(err);res.status(500).json({error:'internal error'});
+});
 const port=Number(process.env.PORT||3100);
 db.init().then(()=>app.listen(port,()=>console.log('Device Lab listening on',port)))
  .catch(err=>{console.error(err);process.exit(1)});
