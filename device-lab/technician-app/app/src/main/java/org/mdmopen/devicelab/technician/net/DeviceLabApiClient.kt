@@ -33,7 +33,7 @@ class DeviceLabApiClient(private val baseUrl: String, private val auth: Technici
                 setRequestProperty("content-type", "application/json")
                 setRequestProperty("authorization", "Bearer $token")
             }
-            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(toJson(evidence).toString()) }
+            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(evidenceToJson(evidence).toString()) }
 
             val status = conn.responseCode
             val stream = if (status in 200..299) conn.inputStream else conn.errorStream
@@ -51,7 +51,7 @@ class DeviceLabApiClient(private val baseUrl: String, private val auth: Technici
         }
     }
 
-    private fun toJson(e: DeviceEvidence): JSONObject = JSONObject().apply {
+    fun evidenceToJson(e: DeviceEvidence): JSONObject = JSONObject().apply {
         put("source", e.source)
         put("hostType", e.hostType)
         put("capturedAt", e.capturedAt)
