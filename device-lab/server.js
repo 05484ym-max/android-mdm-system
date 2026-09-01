@@ -23,6 +23,25 @@ function bridgeAuth(req,res,next){
  next();
 }
 const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
+
+function approvedFlashProfileErrors(body){
+ const p=body?.profile||{};
+ if((body?.status||'REVIEW')!=='APPROVED') return [];
+ const errors=[];
+ if(!p.familyFingerprint) errors.push('familyFingerprint required');
+ if(!Array.isArray(p.allowedExactFingerprints)||p.allowedExactFingerprints.length===0) errors.push('allowedExactFingerprints required');
+ if(!Array.isArray(p.codenames)||p.codenames.length===0) errors.push('codenames required');
+ if(!p.targetFirmware||p.targetFirmware==='TBD') errors.push('targetFirmware required');
+ if(!p.requiredTool||p.requiredTool==='TBD') errors.push('requiredTool required');
+ if(!p.requiredHostOs||p.requiredHostOs==='TBD') errors.push('requiredHostOs required');
+ if(!p.requiredBootMode||p.requiredBootMode==='TBD') errors.push('requiredBootMode required');
+ if(!p.antiRollbackConstraints||p.antiRollbackConstraints==='UNKNOWN') errors.push('antiRollbackConstraints required');
+ if(!Array.isArray(p.files)||p.files.length===0) errors.push('files required');
+ else if(p.files.some(f=>!f?.name||!/^[a-f0-9]{64}$/i.test(String(f.sha256||'')))) errors.push('all files need name + SHA-256');
+ if(!Array.isArray(p.steps)||p.steps.length===0) errors.push('steps required');
+ if(!Array.isArray(p.postFlash)||p.postFlash.length===0) errors.push('postFlash required');
+ return errors;
+}
 async function classify(normalized){
  const [families,flashProfiles,compatibilityProfiles]=await Promise.all([
   db.listFamilies(),db.listFlashProfiles(),db.listCompatibilityProfiles()
@@ -49,8 +68,13 @@ app.post('/api/lab/scans/:id/reclassify',auth,wrap(async(req,res)=>{
 }));
 app.post('/api/lab/scans/:id/link-mdm',auth,wrap(async(req,res)=>{
  if(!req.body.deviceId)return res.status(400).json({error:'deviceId required'});
- const row=await db.linkMdm(req.params.id,String(req.body.deviceId));
- if(!row)return res.status(404).json({error:'not found'}); res.json({status:'linked',deviceId:String(req.body.deviceId)});
+ const deviceId=String(req.body.deviceId);
+ if(process.env.MDM_DATABASE_URL){
+   const devices=await listMdmDevices();
+   if(!devices.some(d=>String(d.deviceId)===deviceId)) return res.status(404).json({error:'MDM device not found'});
+ }
+ const row=await db.linkMdm(req.params.id,deviceId);
+ if(!row)return res.status(404).json({error:'scan not found'}); res.json({status:'linked',deviceId});
 }));
 app.get('/api/lab/scans/:id/flash-plan',auth,wrap(async(req,res)=>{
  const row=await db.getScan(req.params.id); if(!row)return res.status(404).json({error:'not found'});
@@ -83,6 +107,8 @@ app.post('/api/lab/compatibility-profiles',auth,wrap(async(req,res)=>{
 app.get('/api/lab/flash-profiles',auth,wrap(async(req,res)=>res.json(await db.listFlashProfiles())));
 app.post('/api/lab/flash-profiles',auth,wrap(async(req,res)=>{
  if(!req.body.familyId||!req.body.name)return res.status(400).json({error:'familyId and name required'});
+ const errors=approvedFlashProfileErrors(req.body);
+ if(errors.length)return res.status(400).json({error:'approved flash profile is incomplete',details:errors});
  res.status(201).json(await db.createFlashProfile(req.body));
 }));
 app.get('/api/lab/mdm/devices',auth,wrap(async(req,res)=>res.json(await listMdmDevices())));
