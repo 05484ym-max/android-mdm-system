@@ -108,10 +108,14 @@ async function createFlashProfile(b){
  [profileId,b.familyId,b.name,b.status||'REVIEW',b.profile||{}]);
  await audit('FLASH_PROFILE_CREATED','flash_profile',profileId,{familyId:b.familyId,status:b.status||'REVIEW'}); return rows[0];
 }
+async function getFlashProfile(profileId){
+ const {rows}=await pool.query('SELECT id,family_id AS "familyId",name,status,profile FROM lab_flash_profiles WHERE id=$1',[profileId]);
+ return rows[0]||null;
+}
 async function linkMdm(scanId,deviceId){
  const {rows}=await pool.query('UPDATE lab_device_scans SET linked_mdm_device_id=$2 WHERE id=$1 RETURNING *',[scanId,deviceId]);
  await audit('MDM_LINKED','scan',scanId,{deviceId}); return rows[0]||null;
 }
 async function listAudit(){return (await pool.query('SELECT * FROM lab_audit_log ORDER BY created_at DESC LIMIT 300')).rows}
 module.exports={init,createScan,saveDecision,listScans,getScan,listFamilies,createFamily,listCompatibilityProfiles,
- createCompatibilityProfile,listFlashProfiles,createFlashProfile,linkMdm,listAudit,audit};
+ createCompatibilityProfile,listFlashProfiles,createFlashProfile,getFlashProfile,linkMdm,listAudit,audit};
