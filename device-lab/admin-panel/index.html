@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>מעבדת מכשירים</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div><h1>מעבדת מכשירים</h1><p>זיהוי, תאימות והכנה ל-MDM</p></div>
+  <button id="refresh">רענן</button>
+</header>
+<main>
+  <section class="auth card">
+    <label>מפתח גישה</label>
+    <input id="key" type="password" placeholder="LAB_ADMIN_KEY">
+    <button id="saveKey">שמור במכשיר הזה</button>
+  </section>
+  <section class="stats" id="stats"></section>
+  <section class="card">
+    <div class="row"><h2>מכשירים שנסרקו</h2><span id="updated"></span></div>
+    <div id="scans" class="list"></div>
+  </section>
+  <section class="card" id="detailCard" hidden>
+    <div class="row"><h2>פרטי מכשיר</h2><button id="closeDetail">סגור</button></div>
+    <div id="detail"></div>
+  </section>
+  <section class="card">
+    <h2>מכשירי MDM מקושרים</h2>
+    <p class="muted">קריאה בלבד מהמערכת הקיימת. אין שינוי ב-MDM.</p>
+    <div id="mdmDevices" class="list"></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
