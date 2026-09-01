@@ -5,6 +5,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -25,6 +26,7 @@ object DeviceHealth {
     private const val KEY_LAST_UPDATE_STATUS = "last_update_status"
     private const val KEY_LAST_UPDATE_VERSION = "last_update_version"
     private const val KEY_LAST_UPDATE_ERROR = "last_update_error"
+    private const val KEY_NO_LAUNCHER_CANDIDATES = "no_launcher_dry_run_candidates"
 
     /** Called from AutoUpdater/UpdateInstallReceiver once an update attempt
      * has an outcome. status should be one of "SUCCESS", "FAILED", "SKIPPED". */
@@ -36,6 +38,26 @@ object DeviceHealth {
         if (error != null) editor.putString(KEY_LAST_UPDATE_ERROR, error.take(500))
         else editor.remove(KEY_LAST_UPDATE_ERROR)
         editor.apply()
+    }
+
+    /**
+     * Called from PolicySync right after PolicyEnforcer.apply() so the *next*
+     * sync's health payload can report this cycle's DRY-RUN result - same
+     * one-cycle-behind pattern as recordUpdateResult() above, since apply()
+     * always runs after this sync's own health payload was already sent.
+     * Always overwrites (never accumulates) so a package that got approved
+     * or gained a launcher since the last cycle stops being reported.
+     */
+    fun recordNoLauncherDryRun(context: Context, candidates: List<NoLauncherCandidate>) {
+        val array = JSONArray()
+        candidates.forEach { candidate ->
+            array.put(
+                JSONObject()
+                    .put("packageName", candidate.packageName)
+                    .put("label", candidate.label)
+            )
+        }
+        prefs(context).edit().putString(KEY_NO_LAUNCHER_CANDIDATES, array.toString()).apply()
     }
 
     /** Builds the JSON body reported on every sync. */
@@ -60,6 +82,9 @@ object DeviceHealth {
             json.put("lastUpdateVersion", p.getLong(KEY_LAST_UPDATE_VERSION, 0))
         }
         p.getString(KEY_LAST_UPDATE_ERROR, null)?.let { json.put("lastUpdateError", it) }
+        p.getString(KEY_NO_LAUNCHER_CANDIDATES, null)?.let {
+            json.put("wouldHideNoLauncherPackages", JSONArray(it))
+        }
 
         return json
     }

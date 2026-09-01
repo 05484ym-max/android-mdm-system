@@ -5,10 +5,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.UserManager
 import android.provider.AlarmClock
 import android.provider.MediaStore
+import android.provider.Settings
 import android.provider.Telephony
 
 data class EnforcementResult(
@@ -17,7 +19,14 @@ data class EnforcementResult(
     val failed: List<String>,
     val systemAppsSkipped: Int,
     val kioskEnabled: Boolean,
+    // DRY-RUN only, see apply() - never suspended/hidden by this build.
+    val wouldHideNoLauncher: List<NoLauncherCandidate> = emptyList(),
 )
+
+/** One package apply() found with no launcher entry that isn't essential,
+ * a system app, the active keyboard, or already approved - reported so a
+ * future policy change closing this gap can be sized before it's enforced. */
+data class NoLauncherCandidate(val packageName: String, val label: String?)
 
 class PolicyEnforcer(private val context: Context) {
 
@@ -55,8 +64,10 @@ class PolicyEnforcer(private val context: Context) {
 
         val allowed = policy.allowedApps.toSet() + playStoreTemporaryAllowance()
         val essential = essentialPackages()
+        val currentImePackage = currentInputMethodPackage()
         val toSuspend = mutableListOf<String>()
         val toUnsuspend = mutableListOf<String>()
+        val noLauncherCandidates = mutableListOf<NoLauncherCandidate>()
         var systemSkipped = 0
 
         for (app in context.packageManager.getInstalledApplications(0)) {
@@ -73,6 +84,16 @@ class PolicyEnforcer(private val context: Context) {
             // suspending them only risks breaking a background system service for no gain.
             if (context.packageManager.getLaunchIntentForPackage(app.packageName) == null) {
                 systemSkipped++
+                // DRY-RUN only: report what a future policy closing this gap would catch,
+                // without acting on it now. Never added to toSuspend/toUnsuspend below -
+                // enforcement behavior in this build is unchanged. Preinstalled system
+                // components (FLAG_SYSTEM) and the customer's active keyboard are never
+                // reported, since hiding either carries a much bigger blast radius than
+                // this dry-run is meant to size up.
+                val isSystemApp = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                if (!isSystemApp && app.packageName != currentImePackage && app.packageName !in allowed) {
+                    noLauncherCandidates += NoLauncherCandidate(app.packageName, labelFor(app))
+                }
                 continue
             }
             if (app.packageName in allowed) toUnsuspend += app.packageName
@@ -97,7 +118,27 @@ class PolicyEnforcer(private val context: Context) {
             failed = failed,
             systemAppsSkipped = systemSkipped,
             kioskEnabled = policy.kioskEnabled,
+            wouldHideNoLauncher = noLauncherCandidates,
         )
+    }
+
+    /** The package backing the customer's currently active keyboard, or null if it
+     * can't be read - resolved the same way Telephony.Sms.getDefaultSmsPackage
+     * resolves the SMS role above, just for input method instead. */
+    private fun currentInputMethodPackage(): String? = try {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.substringBefore('/')
+            ?.takeIf { it.isNotEmpty() }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Best-effort display label for the DRY-RUN report only - never used for
+     * any enforcement decision, so a lookup failure just means no label. */
+    private fun labelFor(app: ApplicationInfo): String? = try {
+        context.packageManager.getApplicationLabel(app).toString()
+    } catch (_: Exception) {
+        null
     }
 
     /**

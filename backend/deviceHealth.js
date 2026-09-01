@@ -5,6 +5,7 @@
 const MAX_TEXT_LENGTH = 200;
 const MAX_ERROR_LENGTH = 500;
 const UPDATE_STATUSES = ['SUCCESS', 'FAILED', 'SKIPPED'];
+const MAX_NO_LAUNCHER_CANDIDATES = 200;
 
 function str(value, max) {
   return typeof value === 'string' ? value.slice(0, max) : null;
@@ -93,6 +94,23 @@ function validateHealthPayload(body) {
       return { error: 'manufacturer must be a string' };
     }
     value.manufacturer = str(body.manufacturer, MAX_TEXT_LENGTH);
+  }
+
+  // Read-only DRY-RUN report (see PolicyEnforcer.kt / DeviceHealth.kt) - no
+  // enforcement anywhere reads this back, so a malformed entry is dropped
+  // rather than failing the whole sync. Only the field being present but not
+  // an array at all is treated as a real bug worth rejecting.
+  if (body.wouldHideNoLauncherPackages !== undefined) {
+    if (!Array.isArray(body.wouldHideNoLauncherPackages)) {
+      return { error: 'wouldHideNoLauncherPackages must be an array' };
+    }
+    value.wouldHideNoLauncherPackages = body.wouldHideNoLauncherPackages
+      .filter(item => item && typeof item.packageName === 'string' && item.packageName.length > 0)
+      .slice(0, MAX_NO_LAUNCHER_CANDIDATES)
+      .map(item => ({
+        packageName: str(item.packageName, MAX_TEXT_LENGTH),
+        label: typeof item.label === 'string' ? str(item.label, MAX_TEXT_LENGTH) : null,
+      }));
   }
 
   return { value };

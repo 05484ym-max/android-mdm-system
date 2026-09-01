@@ -31,6 +31,9 @@ object PolicySync {
         Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)
 
         val enforcement = enforcer.apply(result.policy)
+        // Reported on the *next* sync's health payload, same lag as
+        // recordUpdateResult() - see DeviceHealth.recordNoLauncherDryRun().
+        DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
         SyncScheduler.schedule(context)
         PushRegistration.ensureRegistered(context)
         val wallpaperResult = WallpaperBranding.apply(context)

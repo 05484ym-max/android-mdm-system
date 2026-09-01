@@ -149,6 +149,19 @@
     }
   }
 
+  // DRY-RUN only (see PolicyEnforcer.kt) - nothing on this list is actually
+  // hidden by the device today, this just sizes up a future policy change.
+  // Reuses existing diag-section/diag-fault-row styling, no new CSS.
+  function noLauncherDryRunHtml(candidates) {
+    if (!candidates || !candidates.length) return '';
+    const rows = candidates.map(c => {
+      const label = c.label ? escapeHtml(c.label) : escapeHtml(c.packageName);
+      const pkgSuffix = c.label ? ` <span class="k">(${escapeHtml(c.packageName)})</span>` : '';
+      return `<div class="diag-fault-row">${label}${pkgSuffix}</div>`;
+    }).join('');
+    return `<div class="diag-section"><h3>מועמדים לחסימה ללא launcher (DRY-RUN, לא נחסמים בפועל)</h3>${rows}</div>`;
+  }
+
   function renderDiagnostics(data) {
     const h = data.health;
     document.getElementById('diagnosticsTitle').textContent = h.customerName || 'לקוח ללא שם';
@@ -175,7 +188,8 @@
       : '<div class="empty-state">לא נמצאו תקלות פעילות במכשיר</div>';
 
     document.getElementById('diagnosticsContent').innerHTML = headerHtml +
-      `<div class="diag-section"><h3>אבחון פעיל</h3>${faultsHtml}</div>`;
+      `<div class="diag-section"><h3>אבחון פעיל</h3>${faultsHtml}</div>` +
+      noLauncherDryRunHtml(h.wouldHideNoLauncherPackages);
 
     document.querySelectorAll('#diagnosticsContent .diag-retry-btn').forEach(btn => {
       btn.addEventListener('click', () => handleRetryAction(btn));

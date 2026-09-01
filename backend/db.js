@@ -79,6 +79,10 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_level INTEGER;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS free_storage_bytes BIGINT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS manufacturer TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS is_test_device BOOLEAN NOT NULL DEFAULT false;
+-- DRY-RUN report only (see PolicyEnforcer.kt) - packages with no launcher
+-- entry that a future policy change closing that gap would hide; nothing
+-- reads this back to actually hide anything today.
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS no_launcher_dry_run JSONB;
 
 CREATE INDEX IF NOT EXISTS devices_last_seen_idx ON devices (last_seen_at);
 
@@ -282,7 +286,8 @@ async function recordDeviceHealth(deviceId, fields) {
         last_update_error = COALESCE($7, last_update_error),
         battery_level = COALESCE($8, battery_level),
         free_storage_bytes = COALESCE($9, free_storage_bytes),
-        manufacturer = COALESCE($10, manufacturer)
+        manufacturer = COALESCE($10, manufacturer),
+        no_launcher_dry_run = COALESCE($11::jsonb, no_launcher_dry_run)
       WHERE device_id = $1`,
     [
       deviceId,
@@ -295,6 +300,9 @@ async function recordDeviceHealth(deviceId, fields) {
       fields.batteryLevel ?? null,
       fields.freeStorageBytes ?? null,
       fields.manufacturer ?? null,
+      fields.wouldHideNoLauncherPackages != null
+        ? JSON.stringify(fields.wouldHideNoLauncherPackages)
+        : null,
     ],
   );
 }
@@ -308,7 +316,7 @@ async function markSyncSuccessful(deviceId) {
 const HEALTH_ROW_COLUMNS = `device_id, registered_at, customer_name, customer_number, policy, status,
             current_version_code, current_version_name, last_seen_at, last_sync_at,
             is_device_owner, device_owner_lost_at, last_update_status, last_update_version,
-            last_update_error, battery_level, free_storage_bytes, manufacturer`;
+            last_update_error, battery_level, free_storage_bytes, manufacturer, no_launcher_dry_run`;
 
 function mapHealthRow(row) {
   const status = row.status || {};
@@ -331,6 +339,7 @@ function mapHealthRow(row) {
     lastUpdateError: row.last_update_error,
     batteryLevel: row.battery_level,
     freeStorageBytes: row.free_storage_bytes,
+    wouldHideNoLauncherPackages: row.no_launcher_dry_run || null,
     syncIntervalMinutes: (row.policy && row.policy.syncIntervalMinutes) || null,
   };
 }
