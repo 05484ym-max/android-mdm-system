@@ -1,0 +1,10 @@
+{
+  "name":"דוגמה - Samsung Android 12",
+  "status":"REVIEW",
+  "profile":{
+    "hardwareFamily":"example","androidMin":12,"androidMax":12,"oem":"Samsung","romFamily":"stock",
+    "provisioningMethod":"QR_DEVICE_OWNER","essentialPackagesAdd":[],"essentialPackagesRemove":[],
+    "privateDnsSupported":true,"appHidingSupported":true,"kioskSupported":true,
+    "playStoreGateSupported":true,"knownOemQuirks":[],"disabledFeatures":[],"testStatus":"NOT_TESTED"
+  }
+}
