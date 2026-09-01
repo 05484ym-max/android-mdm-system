@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const {decide}=require('../lib/decision');
 const {scoreFamily,flashProfileMatches}=require('../lib/matcher');
 const {buildFlashPlan}=require('../lib/preflight');
+const {normalizeScan}=require('../lib/normalize');
 
 const scan={device:'foo',board:'b',hardware:'h',platform:'p',manufacturer:'X',
  familyFingerprint:'fam',exactFingerprint:'exact',provisioningAllowed:false};
@@ -75,4 +76,18 @@ test('fully scoped approved profile may expose instructions',()=>{
  const plan=buildFlashPlan(scan,d,p);
  assert.equal(plan.safeToShowInstructions,true);
  assert.deepEqual(plan.steps,['flash']);
+});
+
+
+test('matching derived fingerprint alone never makes sparse hardware HIGH',()=>{
+ const sparseScan={device:'foo',familyFingerprint:'same'};
+ const sparseFamily={id:'f',device:'foo',familyFingerprint:'same'};
+ const result=scoreFamily(sparseScan,sparseFamily);
+ assert.equal(result.confidence,'LOW');
+ assert.ok(result.coreEvidenceCount<3);
+});
+
+test('exact fingerprint requires a real build fingerprint',()=>{
+ const n=normalizeScan({properties:{device:'foo',board:'b',hardware:'h',platform:'p',bootloader:'bl'}});
+ assert.equal(n.exactFingerprint,null);
 });
