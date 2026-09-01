@@ -29,12 +29,35 @@ object PolicySync {
         Config.setAppCatalog(context, result.catalog)
         Config.setKioskEnabled(context, result.policy.kioskEnabled)
         Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)
+        Config.setDnsPolicy(
+            context,
+            result.dns.desiredProviderHost,
+            result.dns.filteringRequested,
+            result.dns.allowCustomerToggle,
+            result.dns.desiredProviderFilters,
+        )
+        // Whatever pending customer request was included in this sync's health
+        // payload (see DeviceHealth.collect()) has now been seen and answered
+        // by the server either way (honored or not, e.g. permission revoked in
+        // the meantime) - result.dns above already reflects the outcome, so
+        // there is nothing left to retry.
+        Config.setDnsPendingCustomerRequest(context, null)
+
+        // Server-desired DNS state applied first (mirrors PolicyEnforcer.apply()
+        // below for apps), then the fully-local fail-safe watchdog runs - see
+        // AdBlockDns.reconcile()'s own comment for why a rollback in progress
+        // isn't immediately undone by this reconcile call.
+        val dnsReconcileResult = AdBlockDns.reconcile(context)
+        val dnsFailSafeResult = AdBlockDns.runFailSafeCheckCycle(context)
 
         val enforcement = enforcer.apply(result.policy)
         // Reported on the *next* sync's health payload, same lag as
         // recordUpdateResult() - see DeviceHealth.recordNoLauncherDryRun().
         DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
         SyncScheduler.schedule(context)
+        // Independent of the sync interval on purpose - see
+        // DnsFailSafeScheduler's own doc for cadence/battery reasoning.
+        DnsFailSafeScheduler.scheduleIfNeeded(context)
         PushRegistration.ensureRegistered(context)
         val wallpaperResult = WallpaperBranding.apply(context)
 
@@ -56,6 +79,8 @@ object PolicySync {
             append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
             append("סנכרון כל ${result.policy.syncIntervalMinutes} דק' · ")
             append("רקע: $wallpaperResult")
+            dnsReconcileResult?.let { append("\n• DNS: $it") }
+            dnsFailSafeResult?.let { append("\n• $it") }
             outcomes.forEach { append("\n• $it") }
         }
     }

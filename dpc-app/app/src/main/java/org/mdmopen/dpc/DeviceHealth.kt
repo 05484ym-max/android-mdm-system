@@ -86,6 +86,27 @@ object DeviceHealth {
             json.put("wouldHideNoLauncherPackages", JSONArray(it))
         }
 
+        val dns = AdBlockDns.currentStatus(context)
+        json.put("dnsMode", dns.dnsMode.name)
+        json.put("dnsActualProviderHost", dns.dnsActualProviderHost)
+        json.put("dnsFilteringRequested", dns.dnsFilteringRequested)
+        json.put("dnsFilteringActual", dns.dnsFilteringActual)
+        json.put("dnsFailSafeState", dns.dnsFailSafeState.name)
+        json.put("dnsResolutionOk", dns.dnsResolutionOk)
+        json.put("dotProviderReachable", dns.dotProviderReachable)
+        json.put("currentNetworkType", dns.currentNetworkType.name)
+        json.put("consecutiveDnsFailures", dns.consecutiveDnsFailures)
+        json.put("lastDnsCheckAt", dns.lastDnsCheckAt)
+        json.put("lastDnsModeChangeAt", dns.lastDnsModeChangeAt)
+        json.put("lastRollbackAt", dns.lastRollbackAt)
+        json.put("failureReason", dns.failureReason)
+        json.put("previousDnsMode", dns.previousDnsMode?.name)
+        // Only present when the customer flipped the DNS switch locally and
+        // the server hasn't confirmed it yet (see Config.setDnsPendingCustomerRequest) -
+        // absent on every other sync, same optional-field convention as the
+        // rest of this file.
+        Config.dnsPendingCustomerRequest(context)?.let { json.put("customerDnsToggleRequest", it) }
+
         return json
     }
 

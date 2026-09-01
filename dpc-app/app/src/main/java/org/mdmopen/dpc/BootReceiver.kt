@@ -10,5 +10,6 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         if (Config.serverUrl(context).isEmpty()) return
         SyncScheduler.schedule(context)
+        DnsFailSafeScheduler.scheduleIfNeeded(context)
     }
 }

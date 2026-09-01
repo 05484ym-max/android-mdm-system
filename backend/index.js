@@ -55,7 +55,8 @@ if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
-   'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'RELEASE_DEVICE_OWNER'];
+   'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'RELEASE_DEVICE_OWNER',
+   'ENABLE_DNS_FILTERING', 'DISABLE_DNS_FILTERING'];
 // Pre-installed system components OPEN_PLAY_STORE_SYSTEM_COMPONENT is allowed
 // to target - deliberately separate from the customer app catalog, since
 // these are never something a customer "installs" or an admin assigns via
@@ -64,6 +65,17 @@ const ALLOWED_COMMANDS =
 const SYSTEM_COMPONENT_DISPLAY_NAMES = {
   'com.google.android.gms': 'Google Play Services',
 };
+// Placeholder - the real DNS-over-TLS provider for kosher filtering hasn't
+// been chosen yet (see the design round that preceded this implementation).
+// Never trust ENABLE_DNS_FILTERING's target host from client input; this is
+// the sole source of truth for it, same principle as SYSTEM_COMPONENT_DISPLAY_NAMES.
+const DNS_PROVIDER_HOST = process.env.DNS_PROVIDER_HOST || 'dns.google';
+// dns.google is a plain encrypted resolver, not a content filter - this must
+// stay false until a real filtering provider is configured, so neither the
+// customer app nor the admin panel ever claims ad/content blocking is
+// active when it isn't. Same '1'-string convention as TRUST_PROXY/
+// SECURE_COOKIES/ALLOW_INSECURE_ADMIN above.
+const DNS_PROVIDER_FILTERS_CONTENT = process.env.DNS_PROVIDER_FILTERS_CONTENT === '1';
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -352,6 +364,10 @@ app.get('/api/health/devices/:deviceId/diagnostics', requireAdmin, wrap(async (r
     deviceId: device.deviceId,
     health: { ...device, ...healthPanel.classify(device) },
     faults: diagnostics.diagnose(device),
+    // Global, not per-device (same provider for the whole fleet today) - see
+    // DNS_PROVIDER_FILTERS_CONTENT. The panel must not label this as ad/
+    // content blocking while it's false.
+    dnsProviderFilters: DNS_PROVIDER_FILTERS_CONTENT,
   });
 }));
 
@@ -518,6 +534,25 @@ app.post('/api/devices/:deviceId/customer', requireAdmin, wrap(async (req, res) 
     name ? name.slice(0, 100) : null,
     number ? number.slice(0, 50) : null,
   );
+  res.json(publicDevice(updated));
+}));
+
+// ---------- DNS filtering (admin) ----------
+// ENABLE_DNS_FILTERING/DISABLE_DNS_FILTERING reuse the existing generic
+// /commands route above for actually controlling a device - this route only
+// covers the one thing that isn't a device command: whether the customer's
+// own in-app switch is allowed to act at all.
+
+app.post('/api/devices/:deviceId/dns/allow-customer-toggle', requireAdmin, wrap(async (req, res) => {
+  const { allow } = req.body;
+  if (typeof allow !== 'boolean') {
+    return res.status(400).json({ error: 'allow must be a boolean' });
+  }
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+  const updated = await db.setAllowCustomerDnsToggle(req.params.deviceId, allow);
   res.json(publicDevice(updated));
 }));
 
@@ -999,6 +1034,19 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
     // client might have sent under this key.
     params.displayName = displayName;
   }
+  if (command === 'ENABLE_DNS_FILTERING') {
+    // Always the server's own configured host - overwrites anything the
+    // client might have sent under this key, same principle as displayName
+    // above.
+    params.providerHost = DNS_PROVIDER_HOST;
+    // Written immediately so the panel shows "desired: on" right away,
+    // before the device has even had a chance to sync and confirm it - see
+    // setDnsDesiredState.
+    await db.setDnsDesiredState(req.params.deviceId, DNS_PROVIDER_HOST, true);
+  }
+  if (command === 'DISABLE_DNS_FILTERING') {
+    await db.setDnsDesiredState(req.params.deviceId, null, false);
+  }
   await db.queueCommand(req.params.deviceId, crypto.randomUUID(), command, params);
   await push.wake(device.pushToken);
   const refreshed = await db.getDevice(req.params.deviceId);
@@ -1087,7 +1135,33 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   // advance on a failed sync (an exception above skips this and 500s instead).
   await db.markSyncSuccessful(req.params.deviceId);
 
-  res.json({ policy, catalog, commands });
+  // A customer's own in-app toggle not yet confirmed by the server (see
+  // Config.setDnsPendingCustomerRequest in the app) - honored only if this
+  // device is actually allowed to self-toggle, re-derived here from our own
+  // stored value rather than trusted from the client. Applied before
+  // building the "dns" response below so this same round trip reflects the
+  // outcome immediately instead of making the device wait for a second sync.
+  let desiredProviderHost = req.device.dnsDesiredProviderHost || null;
+  let desiredFilteringRequested = Boolean(req.device.dnsFilteringRequested);
+  if (
+    validation.value.customerDnsToggleRequest !== undefined &&
+    req.device.allowCustomerDnsToggle === true
+  ) {
+    const updated = await db.setDnsDesiredState(
+      req.params.deviceId, DNS_PROVIDER_HOST, validation.value.customerDnsToggleRequest,
+    );
+    desiredProviderHost = updated.dnsDesiredProviderHost || null;
+    desiredFilteringRequested = Boolean(updated.dnsFilteringRequested);
+  }
+
+  const dns = {
+    desiredProviderHost,
+    filteringRequested: desiredFilteringRequested,
+    allowCustomerToggle: Boolean(req.device.allowCustomerDnsToggle),
+    desiredProviderFilters: DNS_PROVIDER_FILTERS_CONTENT,
+  };
+
+  res.json({ policy, catalog, commands, dns });
 }));
 
 app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,

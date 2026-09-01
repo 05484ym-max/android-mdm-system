@@ -6,6 +6,9 @@ const MAX_TEXT_LENGTH = 200;
 const MAX_ERROR_LENGTH = 500;
 const UPDATE_STATUSES = ['SUCCESS', 'FAILED', 'SKIPPED'];
 const MAX_NO_LAUNCHER_CANDIDATES = 200;
+const DNS_MODES = ['OFF', 'OPPORTUNISTIC', 'PROVIDER_HOSTNAME', 'UNKNOWN', 'ERROR'];
+const DNS_FAIL_SAFE_STATES = ['NORMAL', 'DEGRADED', 'ROLLED_BACK', 'RECOVERING'];
+const DNS_NETWORK_TYPES = ['WIFI', 'CELLULAR', 'OTHER', 'NONE'];
 
 function str(value, max) {
   return typeof value === 'string' ? value.slice(0, max) : null;
@@ -94,6 +97,113 @@ function validateHealthPayload(body) {
       return { error: 'manufacturer must be a string' };
     }
     value.manufacturer = str(body.manufacturer, MAX_TEXT_LENGTH);
+  }
+
+  // DNS filtering status (see AdBlockDns.kt). dnsFilteringRequested is
+  // deliberately not read here - the server owns that value (see
+  // setDnsDesiredState); the device's own echo of it is inert and ignored
+  // rather than validated, since nothing ever stores it back.
+  if (body.dnsMode !== undefined) {
+    if (!DNS_MODES.includes(body.dnsMode)) {
+      return { error: 'dnsMode must be one of ' + DNS_MODES.join(', ') };
+    }
+    value.dnsMode = body.dnsMode;
+  }
+
+  if (body.dnsActualProviderHost !== undefined) {
+    if (typeof body.dnsActualProviderHost !== 'string') {
+      return { error: 'dnsActualProviderHost must be a string' };
+    }
+    value.dnsActualProviderHost = str(body.dnsActualProviderHost, MAX_TEXT_LENGTH);
+  }
+
+  if (body.dnsFilteringActual !== undefined) {
+    if (typeof body.dnsFilteringActual !== 'boolean') {
+      return { error: 'dnsFilteringActual must be a boolean' };
+    }
+    value.dnsFilteringActual = body.dnsFilteringActual;
+  }
+
+  if (body.dnsFailSafeState !== undefined) {
+    if (!DNS_FAIL_SAFE_STATES.includes(body.dnsFailSafeState)) {
+      return { error: 'dnsFailSafeState must be one of ' + DNS_FAIL_SAFE_STATES.join(', ') };
+    }
+    value.dnsFailSafeState = body.dnsFailSafeState;
+  }
+
+  if (body.dnsResolutionOk !== undefined) {
+    if (typeof body.dnsResolutionOk !== 'boolean') {
+      return { error: 'dnsResolutionOk must be a boolean' };
+    }
+    value.dnsResolutionOk = body.dnsResolutionOk;
+  }
+
+  if (body.dotProviderReachable !== undefined) {
+    if (typeof body.dotProviderReachable !== 'boolean') {
+      return { error: 'dotProviderReachable must be a boolean' };
+    }
+    value.dotProviderReachable = body.dotProviderReachable;
+  }
+
+  if (body.currentNetworkType !== undefined) {
+    if (!DNS_NETWORK_TYPES.includes(body.currentNetworkType)) {
+      return { error: 'currentNetworkType must be one of ' + DNS_NETWORK_TYPES.join(', ') };
+    }
+    value.currentNetworkType = body.currentNetworkType;
+  }
+
+  if (body.consecutiveDnsFailures !== undefined) {
+    const n = body.consecutiveDnsFailures;
+    if (!Number.isInteger(n) || n < 0) {
+      return { error: 'consecutiveDnsFailures must be a non-negative integer' };
+    }
+    value.consecutiveDnsFailures = n;
+  }
+
+  if (body.lastDnsCheckAt !== undefined) {
+    if (!Number.isInteger(body.lastDnsCheckAt) || body.lastDnsCheckAt <= 0) {
+      return { error: 'lastDnsCheckAt must be a positive integer' };
+    }
+    value.lastDnsCheckAt = body.lastDnsCheckAt;
+  }
+
+  if (body.lastDnsModeChangeAt !== undefined) {
+    if (!Number.isInteger(body.lastDnsModeChangeAt) || body.lastDnsModeChangeAt <= 0) {
+      return { error: 'lastDnsModeChangeAt must be a positive integer' };
+    }
+    value.lastDnsModeChangeAt = body.lastDnsModeChangeAt;
+  }
+
+  if (body.lastRollbackAt !== undefined) {
+    if (!Number.isInteger(body.lastRollbackAt) || body.lastRollbackAt <= 0) {
+      return { error: 'lastRollbackAt must be a positive integer' };
+    }
+    value.lastRollbackAt = body.lastRollbackAt;
+  }
+
+  if (body.failureReason !== undefined) {
+    if (typeof body.failureReason !== 'string') {
+      return { error: 'failureReason must be a string' };
+    }
+    value.failureReason = str(body.failureReason, MAX_TEXT_LENGTH);
+  }
+
+  if (body.previousDnsMode !== undefined) {
+    if (!DNS_MODES.includes(body.previousDnsMode)) {
+      return { error: 'previousDnsMode must be one of ' + DNS_MODES.join(', ') };
+    }
+    value.previousDnsMode = body.previousDnsMode;
+  }
+
+  // A customer-initiated DNS toggle not yet confirmed by the server (see
+  // Config.setDnsPendingCustomerRequest in the app) - handled directly in
+  // index.js's /sync route (re-derives allowCustomerDnsToggle server-side
+  // before honoring it), not stored via recordDeviceHealth.
+  if (body.customerDnsToggleRequest !== undefined) {
+    if (typeof body.customerDnsToggleRequest !== 'boolean') {
+      return { error: 'customerDnsToggleRequest must be a boolean' };
+    }
+    value.customerDnsToggleRequest = body.customerDnsToggleRequest;
   }
 
   // Read-only DRY-RUN report (see PolicyEnforcer.kt / DeviceHealth.kt) - no

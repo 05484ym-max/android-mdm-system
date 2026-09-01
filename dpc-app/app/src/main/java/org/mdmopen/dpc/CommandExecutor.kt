@@ -55,6 +55,18 @@ class CommandExecutor(private val context: Context) {
             PolicyEnforcer(context).releaseDeviceOwner()
             "ניהול המכשיר הוסר בהצלחה"
         }
+        "ENABLE_DNS_FILTERING" -> {
+            // providerHost is always server-set (see backend/index.js) - never
+            // trusts arbitrary client-controlled params for this. enable()
+            // itself records the new desired state locally on success - no
+            // need to pre-set it here too (the server's own desired_state
+            // columns are already updated the moment the command was queued,
+            // regardless of whether applying it here succeeds or not).
+            AdBlockDns.enable(context, queued.params.getString("providerHost"))
+        }
+        "DISABLE_DNS_FILTERING" -> {
+            AdBlockDns.disable(context)
+        }
         else -> "פקודה לא מוכרת: ${queued.command}"
     }
 

@@ -41,6 +41,11 @@ object Config {
     private const val KEY_PUSH_TOKEN = "push_token"
     private const val KEY_LAST_SYNC_AT = "last_sync_at"
     private const val KEY_PLAY_STORE_ALLOWED_UNTIL = "play_store_allowed_until"
+    private const val KEY_DNS_PROVIDER_HOST = "dns_provider_host"
+    private const val KEY_DNS_FILTERING_REQUESTED = "dns_filtering_requested"
+    private const val KEY_DNS_ALLOW_CUSTOMER_TOGGLE = "dns_allow_customer_toggle"
+    private const val KEY_DNS_PROVIDER_FILTERS = "dns_provider_filters"
+    private const val KEY_DNS_PENDING_CUSTOMER_REQUEST = "dns_pending_customer_request"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -146,6 +151,74 @@ object Config {
 
     fun setPlayStoreAllowedUntil(context: Context, until: Long) {
         prefs(context).edit().putLong(KEY_PLAY_STORE_ALLOWED_UNTIL, until).apply()
+    }
+
+    /**
+     * Server-authoritative DNS policy, delivered every sync (see PolicySync /
+     * ApiClient's SyncResult.dns) - the device never hardcodes a provider
+     * host or decides on its own whether filtering should be on.
+     * dnsDesiredProviderHost is deliberately separate from
+     * AdBlockDns.currentActualProviderHost() (a live read of what's really
+     * configured on the device right now) - conflating the two into one
+     * field previously meant a device's own status report could overwrite
+     * what an admin had just asked for, before the device even applied it.
+     */
+    fun dnsDesiredProviderHost(context: Context): String? =
+        prefs(context).getString(KEY_DNS_PROVIDER_HOST, null)
+
+    fun dnsFilteringRequested(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DNS_FILTERING_REQUESTED, false)
+
+    /** Whether the customer's own in-app switch is allowed to change DNS
+     * filtering - server-controlled per device. Defaults to false (read-only)
+     * so a device that hasn't synced this yet can't be toggled by the customer. */
+    fun dnsAllowCustomerToggle(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DNS_ALLOW_CUSTOMER_TOGGLE, false)
+
+    /** Whether the currently configured provider actually filters content
+     * (ads/adult content/etc.) rather than being a plain encrypted resolver
+     * with no filtering of its own - server-controlled, since only the
+     * server/ops know which real provider is behind dnsDesiredProviderHost
+     * today. Defaults to false: never claim filtering is happening unless
+     * the server has explicitly said so. */
+    fun dnsDesiredProviderFilters(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DNS_PROVIDER_FILTERS, false)
+
+    fun setDnsPolicy(
+        context: Context,
+        providerHost: String?,
+        filteringRequested: Boolean,
+        allowCustomerToggle: Boolean,
+        providerFilters: Boolean,
+    ) {
+        prefs(context).edit()
+            .putString(KEY_DNS_PROVIDER_HOST, providerHost)
+            .putBoolean(KEY_DNS_FILTERING_REQUESTED, filteringRequested)
+            .putBoolean(KEY_DNS_ALLOW_CUSTOMER_TOGGLE, allowCustomerToggle)
+            .putBoolean(KEY_DNS_PROVIDER_FILTERS, providerFilters)
+            .apply()
+    }
+
+    /**
+     * A customer-initiated toggle not yet confirmed by the server - set the
+     * instant the customer flips the switch, cleared only once a sync
+     * response has actually processed it (see PolicySync.run() /
+     * CustomerActivity's toggle handler). Survives an offline click: it
+     * rides along on whichever sync succeeds next, scheduled or manual,
+     * instead of being lost or retried by a separate ad-hoc mechanism.
+     */
+    fun dnsPendingCustomerRequest(context: Context): Boolean? =
+        if (prefs(context).contains(KEY_DNS_PENDING_CUSTOMER_REQUEST)) {
+            prefs(context).getBoolean(KEY_DNS_PENDING_CUSTOMER_REQUEST, false)
+        } else {
+            null
+        }
+
+    fun setDnsPendingCustomerRequest(context: Context, value: Boolean?) {
+        val editor = prefs(context).edit()
+        if (value == null) editor.remove(KEY_DNS_PENDING_CUSTOMER_REQUEST)
+        else editor.putBoolean(KEY_DNS_PENDING_CUSTOMER_REQUEST, value)
+        editor.apply()
     }
 
     /** Enrolment code handed over by the QR code, consumed once at provisioning. */

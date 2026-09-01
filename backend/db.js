@@ -84,6 +84,35 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS is_test_device BOOLEAN NOT NULL DEF
 -- reads this back to actually hide anything today.
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS no_launcher_dry_run JSONB;
 
+-- Private DNS filtering (see AdBlockDns.kt). dns_desired_provider_host/
+-- dns_filtering_requested are written the instant an admin queues ENABLE/
+-- DISABLE_DNS_FILTERING or a customer's own toggle is honored (see
+-- setDnsDesiredState) - server-owned, never touched by recordDeviceHealth.
+-- dns_actual_provider_host/dns_filtering_actual/dns_mode are the device's own
+-- confirmed report instead, written only by recordDeviceHealth. Kept as two
+-- separate pairs of columns on purpose: a single shared pair previously let a
+-- device's own status report overwrite what an admin had just asked for,
+-- before the device even had a chance to apply it.
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_mode TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_desired_provider_host TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_actual_provider_host TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_filtering_requested BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_filtering_actual BOOLEAN;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_fail_safe_state TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_resolution_ok BOOLEAN;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dot_provider_reachable BOOLEAN;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS current_network_type TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS consecutive_dns_failures INTEGER;
+-- Epoch millis as reported by the device (same convention as apps_catalog's
+-- play_updated_at) rather than TIMESTAMPTZ, since these three come straight
+-- from the device's own System.currentTimeMillis(), not a server-side now().
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_dns_check_at BIGINT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_dns_mode_change_at BIGINT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_rollback_at BIGINT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS dns_failure_reason TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS previous_dns_mode TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS allow_customer_dns_toggle BOOLEAN NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS devices_last_seen_idx ON devices (last_seen_at);
 
 -- Versioned release metadata for staged rollout. Rollout/rollback logic
@@ -156,6 +185,13 @@ function toDevice(row, pendingCommands = [], commandHistory = []) {
     pushToken: row.push_token,
     customerName: row.customer_name,
     customerNumber: row.customer_number,
+    // Just the server-owned desired-state slice, needed by the /sync route to
+    // build the "dns" object it sends down - the device-reported half (mode,
+    // actual, fail-safe state...) lives only in the health-dashboard shape
+    // (see mapHealthRow), not here.
+    dnsDesiredProviderHost: row.dns_desired_provider_host,
+    dnsFilteringRequested: row.dns_filtering_requested,
+    allowCustomerDnsToggle: row.allow_customer_dns_toggle,
     pendingCommands,
     commandHistory,
   };
@@ -256,6 +292,30 @@ async function setCustomerInfo(deviceId, name, number) {
   return rows[0] ? toDevice(rows[0]) : null;
 }
 
+const setAllowCustomerDnsToggle = (deviceId, allow) =>
+  updateDeviceField(deviceId, 'allow_customer_dns_toggle', allow);
+
+/**
+ * Written the moment an admin queues ENABLE/DISABLE_DNS_FILTERING, or a
+ * customer's own in-app toggle is honored (see index.js) - the "desired"
+ * side only. dns_actual_provider_host/dns_filtering_actual are a completely
+ * separate pair of columns, written only by recordDeviceHealth() from the
+ * device's own confirmed report - this function never touches them, so a
+ * device's status report can never clobber what was just asked of it here.
+ * providerHost is left untouched on a disable (there's nothing to clear it
+ * to - the next enable reuses whatever was last set).
+ */
+async function setDnsDesiredState(deviceId, providerHost, filteringRequested) {
+  const { rows } = await pool.query(
+    `UPDATE devices SET
+        dns_desired_provider_host = COALESCE($2, dns_desired_provider_host),
+        dns_filtering_requested = $3
+      WHERE device_id = $1 RETURNING *`,
+    [deviceId, providerHost || null, filteringRequested],
+  );
+  return rows[0] ? toDevice(rows[0]) : null;
+}
+
 /**
  * Records device-health fields reported on a sync. last_seen_at always
  * advances; every other column keeps its previous value (via COALESCE)
@@ -287,7 +347,20 @@ async function recordDeviceHealth(deviceId, fields) {
         battery_level = COALESCE($8, battery_level),
         free_storage_bytes = COALESCE($9, free_storage_bytes),
         manufacturer = COALESCE($10, manufacturer),
-        no_launcher_dry_run = COALESCE($11::jsonb, no_launcher_dry_run)
+        no_launcher_dry_run = COALESCE($11::jsonb, no_launcher_dry_run),
+        dns_mode = COALESCE($12::text, dns_mode),
+        dns_actual_provider_host = COALESCE($13::text, dns_actual_provider_host),
+        dns_filtering_actual = COALESCE($14::boolean, dns_filtering_actual),
+        dns_fail_safe_state = COALESCE($15::text, dns_fail_safe_state),
+        dns_resolution_ok = COALESCE($16::boolean, dns_resolution_ok),
+        dot_provider_reachable = COALESCE($17::boolean, dot_provider_reachable),
+        current_network_type = COALESCE($18::text, current_network_type),
+        consecutive_dns_failures = COALESCE($19::int, consecutive_dns_failures),
+        last_dns_check_at = COALESCE($20::bigint, last_dns_check_at),
+        last_dns_mode_change_at = COALESCE($21::bigint, last_dns_mode_change_at),
+        last_rollback_at = COALESCE($22::bigint, last_rollback_at),
+        dns_failure_reason = COALESCE($23::text, dns_failure_reason),
+        previous_dns_mode = COALESCE($24::text, previous_dns_mode)
       WHERE device_id = $1`,
     [
       deviceId,
@@ -303,6 +376,19 @@ async function recordDeviceHealth(deviceId, fields) {
       fields.wouldHideNoLauncherPackages != null
         ? JSON.stringify(fields.wouldHideNoLauncherPackages)
         : null,
+      fields.dnsMode ?? null,
+      fields.dnsActualProviderHost ?? null,
+      fields.dnsFilteringActual ?? null,
+      fields.dnsFailSafeState ?? null,
+      fields.dnsResolutionOk ?? null,
+      fields.dotProviderReachable ?? null,
+      fields.currentNetworkType ?? null,
+      fields.consecutiveDnsFailures ?? null,
+      fields.lastDnsCheckAt ?? null,
+      fields.lastDnsModeChangeAt ?? null,
+      fields.lastRollbackAt ?? null,
+      fields.failureReason ?? null,
+      fields.previousDnsMode ?? null,
     ],
   );
 }
@@ -316,7 +402,12 @@ async function markSyncSuccessful(deviceId) {
 const HEALTH_ROW_COLUMNS = `device_id, registered_at, customer_name, customer_number, policy, status,
             current_version_code, current_version_name, last_seen_at, last_sync_at,
             is_device_owner, device_owner_lost_at, last_update_status, last_update_version,
-            last_update_error, battery_level, free_storage_bytes, manufacturer, no_launcher_dry_run`;
+            last_update_error, battery_level, free_storage_bytes, manufacturer, no_launcher_dry_run,
+            dns_mode, dns_desired_provider_host, dns_actual_provider_host,
+            dns_filtering_requested, dns_filtering_actual,
+            dns_fail_safe_state, dns_resolution_ok, dot_provider_reachable, current_network_type,
+            consecutive_dns_failures, last_dns_check_at, last_dns_mode_change_at, last_rollback_at,
+            dns_failure_reason, previous_dns_mode, allow_customer_dns_toggle`;
 
 function mapHealthRow(row) {
   const status = row.status || {};
@@ -340,6 +431,24 @@ function mapHealthRow(row) {
     batteryLevel: row.battery_level,
     freeStorageBytes: row.free_storage_bytes,
     wouldHideNoLauncherPackages: row.no_launcher_dry_run || null,
+    dnsMode: row.dns_mode,
+    dnsDesiredProviderHost: row.dns_desired_provider_host,
+    dnsActualProviderHost: row.dns_actual_provider_host,
+    dnsFilteringRequested: row.dns_filtering_requested,
+    dnsFilteringActual: row.dns_filtering_actual,
+    dnsFailSafeState: row.dns_fail_safe_state,
+    dnsResolutionOk: row.dns_resolution_ok,
+    dotProviderReachable: row.dot_provider_reachable,
+    currentNetworkType: row.current_network_type,
+    consecutiveDnsFailures: row.consecutive_dns_failures,
+    // BIGINT columns come back from node-postgres as strings - same
+    // Number() conversion already used for apps_catalog.play_updated_at.
+    lastDnsCheckAt: row.last_dns_check_at != null ? Number(row.last_dns_check_at) : null,
+    lastDnsModeChangeAt: row.last_dns_mode_change_at != null ? Number(row.last_dns_mode_change_at) : null,
+    lastRollbackAt: row.last_rollback_at != null ? Number(row.last_rollback_at) : null,
+    dnsFailureReason: row.dns_failure_reason,
+    previousDnsMode: row.previous_dns_mode,
+    allowCustomerDnsToggle: row.allow_customer_dns_toggle,
     syncIntervalMinutes: (row.policy && row.policy.syncIntervalMinutes) || null,
   };
 }
@@ -650,6 +759,8 @@ module.exports = {
   setSubscription,
   setPolicy,
   setStatus,
+  setAllowCustomerDnsToggle,
+  setDnsDesiredState,
   setPushToken,
   setCustomerInfo,
   recordDeviceHealth,

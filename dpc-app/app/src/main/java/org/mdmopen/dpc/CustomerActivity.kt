@@ -17,6 +17,7 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.net.URL
@@ -535,6 +536,178 @@ class CustomerActivity : Activity() {
                 )
             )
         )
+
+        contentArea.addView(sectionTitle("סינון DNS"))
+        contentArea.addView(dnsToggleCard())
+        contentArea.addView(dnsStatusCard())
+    }
+
+    /** Header row with the on/off switch - a separate small card from the
+     * read-only status rows below it, same split as statusCard()/infoRowCard()
+     * above (one bespoke interactive card, one generic read-only list). */
+    private fun dnsToggleCard(): LinearLayout {
+        val allowToggle = Config.dnsAllowCustomerToggle(this)
+        val actualOn = AdBlockDns.currentStatus(this).dnsFilteringActual
+        // Never claim ad/content blocking is happening unless the server has
+        // explicitly confirmed the configured provider actually filters
+        // content - a plain encrypted resolver (the current placeholder,
+        // dns.google) is not that, and the title/subtitle must not imply it.
+        val providerFilters = Config.dnsDesiredProviderFilters(this)
+
+        lateinit var switchView: Switch
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+            background = roundedCardWithBorder()
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(10), 0, dp(16)) }
+
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(TextView(this@CustomerActivity).apply {
+                    text = if (providerFilters) "חסימת אתרים ופרסומות" else "DNS מאובטח"
+                    textSize = 15f
+                    typeface = heavyFont
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+                switchView = Switch(this@CustomerActivity).apply {
+                    isChecked = actualOn
+                    isEnabled = allowToggle
+                }
+                addView(switchView)
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = when {
+                    !allowToggle -> "ההגדרה מנוהלת על ידי מנהל המערכת"
+                    !providerFilters -> "מצפין את תעבורת ה-DNS, אך הספק הנוכחי אינו חוסם תוכן"
+                    else -> "ניתן להפעיל ולכבות בעצמך"
+                }
+                textSize = 11.5f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+
+        switchView.setOnCheckedChangeListener { _, isChecked ->
+            if (!allowToggle) return@setOnCheckedChangeListener
+            switchView.isEnabled = false
+            Thread {
+                // Applied locally right away regardless of network (the switch
+                // must feel instant), and separately marked pending so the
+                // server's own desired-state record catches up as soon as a
+                // sync succeeds - see Config.setDnsPendingCustomerRequest() and
+                // DeviceHealth.collect(). Without this, the server would still
+                // think the old value is desired and the next scheduled sync's
+                // reconcile() would silently undo this exact action.
+                Config.setDnsPendingCustomerRequest(applicationContext, isChecked)
+                if (isChecked) {
+                    Config.dnsDesiredProviderHost(applicationContext)
+                        ?.let { AdBlockDns.enable(applicationContext, it) }
+                } else {
+                    AdBlockDns.disable(applicationContext)
+                }
+                // Eager sync so the server's desired-state record catches up
+                // immediately when there's a connection - also lets reconcile()
+                // finish the job below if the local attempt above couldn't (e.g.
+                // no provider host was known yet locally but the server has one).
+                val syncFailed = try {
+                    PolicySync.run(applicationContext)
+                    false
+                } catch (e: Exception) {
+                    true
+                }
+                // Message is built from the actual post-attempt truth, not from
+                // whichever intermediate step happened to run - so a case like
+                // "no host known locally yet, but the eager sync's own
+                // reconcile() picked one up from the server and applied it"
+                // still reports success rather than the earlier local failure.
+                val status = AdBlockDns.currentStatus(applicationContext)
+                val message = when {
+                    status.dnsFilteringActual == isChecked ->
+                        if (isChecked) "סינון DNS הופעל" else "סינון DNS כובה (עבר ל-Opportunistic)"
+                    syncFailed -> "הבקשה נשמרה במכשיר - תושלם בשרת כשהחיבור יחזור"
+                    else -> "הפעולה לא הושלמה - נסה שוב"
+                }
+                runOnUiThread {
+                    Toast.makeText(this@CustomerActivity, message, Toast.LENGTH_LONG).show()
+                    // Rebuilds with the real post-action state, same pattern as
+                    // the sync badges elsewhere in this app.
+                    refreshPersonalAreaIfShown()
+                }
+            }.start()
+        }
+
+        return card
+    }
+
+    private fun dnsStatusCard(): LinearLayout {
+        val status = AdBlockDns.currentStatus(this)
+        return infoRowCard(
+            listOf(
+                Triple("◈", "מצב", dnsModeLabel(status.dnsMode)),
+                Triple("⌂", "ספק", status.dnsActualProviderHost ?: "—"),
+                Triple("📶", "חיבור", dnsNetworkLabel(status.currentNetworkType)),
+                Triple("✓", "DNS תקין", dnsResolutionLabel(status.dnsResolutionOk)),
+                Triple("⚑", "Fail-safe", dnsFailSafeLabel(status.dnsFailSafeState, status.dnsMode)),
+                Triple("↻", "עודכן", dnsUpdatedLabel(status.lastDnsCheckAt)),
+            )
+        )
+    }
+
+    private fun dnsModeLabel(mode: DnsMode): String = when (mode) {
+        DnsMode.PROVIDER_HOSTNAME -> "מסונן (Strict)"
+        DnsMode.OPPORTUNISTIC -> "Opportunistic"
+        DnsMode.OFF -> "כבוי"
+        DnsMode.UNKNOWN -> "לא ידוע"
+        DnsMode.ERROR -> "שגיאת קריאה"
+    }
+
+    private fun dnsNetworkLabel(type: DnsNetworkType): String = when (type) {
+        DnsNetworkType.WIFI -> "Wi-Fi"
+        DnsNetworkType.CELLULAR -> "סלולרי"
+        DnsNetworkType.OTHER -> "אחר"
+        DnsNetworkType.NONE -> "אין חיבור"
+    }
+
+    private fun dnsResolutionLabel(ok: Boolean?): String = when (ok) {
+        true -> "כן"
+        false -> "לא"
+        null -> "טרם נבדק"
+    }
+
+    /** Deliberately just three outcomes for the customer, matching the design
+     * spec exactly - the admin panel shows the full four-state detail instead. */
+    private fun dnsFailSafeLabel(state: DnsFailSafeState, mode: DnsMode): String = when {
+        mode == DnsMode.ERROR -> "תקלה"
+        state == DnsFailSafeState.ROLLED_BACK -> "בוצע rollback"
+        state == DnsFailSafeState.RECOVERING -> "בתהליך התאוששות"
+        else -> "תקין"
+    }
+
+    private fun dnsUpdatedLabel(lastCheckAt: Long?): String {
+        if (lastCheckAt == null) return "טרם נבדק"
+        val minutes = ((System.currentTimeMillis() - lastCheckAt) / 60000).toInt()
+        return when {
+            minutes < 1 -> "לפני פחות מדקה"
+            minutes < 60 -> "לפני $minutes דקות"
+            else -> "לפני ${minutes / 60} שעות"
+        }
+    }
+
+    /** Same rebuild-in-place idea as refreshLastSyncLabelIfShown() - a no-op
+     * if some other tab is showing when the DNS toggle's own action finishes. */
+    private fun refreshPersonalAreaIfShown() {
+        if (isPersonalAreaActive) showPersonalArea()
     }
 
     private fun identityCard(subtitle: String): LinearLayout {

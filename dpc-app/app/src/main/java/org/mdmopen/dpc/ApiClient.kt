@@ -15,6 +15,20 @@ data class Policy(
     val syncIntervalMinutes: Int,
 )
 
+/** Server-authoritative DNS policy - see Config.setDnsPolicy(). desiredProviderHost
+ * is null until an admin has ever configured one; filteringRequested/
+ * allowCustomerToggle/desiredProviderFilters all default closed (false) for a
+ * device that hasn't been given a DNS policy yet. desiredProviderFilters
+ * being false is not just "unknown" - it's the server explicitly saying the
+ * configured provider doesn't actually filter content, so nothing here
+ * should ever be labeled as ad/content blocking while it's false. */
+data class DnsPolicy(
+    val desiredProviderHost: String?,
+    val filteringRequested: Boolean,
+    val allowCustomerToggle: Boolean,
+    val desiredProviderFilters: Boolean,
+)
+
 data class QueuedCommand(
     val id: String,
     val command: String,
@@ -33,6 +47,7 @@ data class SyncResult(
     val policy: Policy,
     val catalog: List<CatalogApp>,
     val commands: List<QueuedCommand>,
+    val dns: DnsPolicy,
 )
 
 data class EnrollResult(val deviceId: String, val deviceToken: String)
@@ -96,7 +111,17 @@ class ApiClient(
             )
         }
 
-        return SyncResult(policy, catalog, commands)
+        val dnsJson = json.optJSONObject("dns")
+        val dns = DnsPolicy(
+            desiredProviderHost = dnsJson?.let {
+                if (it.isNull("desiredProviderHost")) null else it.optString("desiredProviderHost", null)
+            },
+            filteringRequested = dnsJson?.optBoolean("filteringRequested", false) ?: false,
+            allowCustomerToggle = dnsJson?.optBoolean("allowCustomerToggle", false) ?: false,
+            desiredProviderFilters = dnsJson?.optBoolean("desiredProviderFilters", false) ?: false,
+        )
+
+        return SyncResult(policy, catalog, commands, dns)
     }
 
     fun reportCommandResult(
