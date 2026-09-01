@@ -30,6 +30,8 @@ import org.mdmopen.devicelab.technician.usb.UsbTransportManager
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.Executors
 
 /**
  * RTL, Hebrew, single-screen MVP UI. Programmatic Views (no XML layouts / AppCompat), matching
@@ -46,6 +48,7 @@ class MainActivity : Activity() {
     private lateinit var resultArea: LinearLayout
     private val mainHandler = Handler(Looper.getMainLooper())
     private var polling = false
+    private val ioExecutor = Executors.newSingleThreadExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +65,8 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         polling = false
+        mainHandler.removeCallbacksAndMessages(null)
+        ioExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -132,8 +137,15 @@ class MainActivity : Activity() {
             usbTransportManager.requestPermission(single) { /* next poll tick re-reads state */ }
         }
         val state = usbTransportManager.currentState()
-        stateLabel.text = statusLine(state)
-        guidanceLabel.text = state.guidanceHe
+        if (single != null && usbTransportManager.hasPermission(single) &&
+            usbTransportManager.classifyTransport(single) == UsbTransportGuess.ADB
+        ) {
+            stateLabel.text = "🟡 ADB זוהה"
+            guidanceLabel.text = "לחץ סרוק מכשיר כדי לבצע אימות ADB וקריאת מידע."
+        } else {
+            stateLabel.text = statusLine(state)
+            guidanceLabel.text = state.guidanceHe
+        }
     }
 
     private fun statusLine(state: ConnectionState): String = when (state) {
@@ -158,19 +170,33 @@ class MainActivity : Activity() {
             Toast.makeText(this, "חבר מכשיר יחיד לסריקה", Toast.LENGTH_SHORT).show()
             return
         }
-        val usbManager = getSystemService(USB_SERVICE) as UsbManager
-        val transport = usbTransportManager.classifyTransport(device)
-
-        val evidence = when (transport) {
-            UsbTransportGuess.ADB -> scanViaAdb(usbManager, device)
-            UsbTransportGuess.FASTBOOT -> scanViaFastboot(usbManager, device)
-            else -> null
-        }
-        if (evidence == null) {
-            Toast.makeText(this, "לא ניתן היה לסרוק את המכשיר במצב הנוכחי", Toast.LENGTH_SHORT).show()
+        if (!usbTransportManager.hasPermission(device)) {
+            usbTransportManager.requestPermission(device) { granted ->
+                Toast.makeText(this, if (granted) "הרשאת USB אושרה - לחץ סרוק שוב" else "הרשאת USB נדחתה", Toast.LENGTH_SHORT).show()
+            }
             return
         }
-        submitOrQueue(evidence)
+
+        stateLabel.text = "⏳ סורק..."
+        guidanceLabel.text = "קורא מידע מהמכשיר. אין לנתק את הכבל."
+        ioExecutor.execute {
+            val usbManager = getSystemService(USB_SERVICE) as UsbManager
+            val transport = usbTransportManager.classifyTransport(device)
+            val evidence = when (transport) {
+                UsbTransportGuess.ADB -> scanViaAdb(usbManager, device)
+                UsbTransportGuess.FASTBOOT -> scanViaFastboot(usbManager, device)
+                else -> null
+            }
+            runOnUiThread {
+                if (evidence == null) {
+                    Toast.makeText(this, "לא ניתן היה לסרוק את המכשיר במצב הנוכחי", Toast.LENGTH_SHORT).show()
+                    refreshState()
+                } else {
+                    submitOrQueue(evidence)
+                    refreshState()
+                }
+            }
+        }
     }
 
     private fun scanViaAdb(usbManager: UsbManager, device: android.hardware.usb.UsbDevice): DeviceEvidence? {
@@ -223,10 +249,7 @@ class MainActivity : Activity() {
     }
 
     private fun submitOrQueue(evidence: DeviceEvidence) {
-        val evidenceJson = JSONObject() // stored form for local history; kept minimal on purpose for the MVP
-            .put("capturedAt", evidence.capturedAt)
-            .put("manufacturer", evidence.properties.manufacturer)
-            .put("model", evidence.properties.model)
+        val evidenceJson = apiClient.evidenceToJson(evidence)
         val entry = scanRepository.saveOffline(evidence, evidenceJson)
 
         when (val result = apiClient.submitScan(evidence)) {
@@ -269,5 +292,8 @@ class MainActivity : Activity() {
         else -> "⚠ לא ידוע"
     }
 
-    private fun isoNow(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(Date())
+    private fun isoNow(): String =
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.format(Date())
 }
