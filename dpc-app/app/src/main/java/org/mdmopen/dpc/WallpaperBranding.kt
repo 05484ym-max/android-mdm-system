@@ -44,7 +44,12 @@ object WallpaperBranding {
     // gets one clean re-composite from the saved original instead of never
     // updating (same id forever looks "already done") or stamping the new
     // emblem onto its own previous output (see apply() below).
-    private const val RECIPE_VERSION = 3
+    // v4: emblem_transparent.png redone - removed a stray gray arc artifact
+    // left over from a previous crop, smoothed the jagged/aliased edges
+    // (premultiplied-alpha blur, so no garbage color could leak through),
+    // and shipped at a higher native resolution so on-device compositing
+    // downsamples instead of upsampling from the old small source.
+    private const val RECIPE_VERSION = 4
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
