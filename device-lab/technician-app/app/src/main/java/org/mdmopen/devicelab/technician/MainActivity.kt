@@ -133,11 +133,11 @@ class MainActivity : Activity() {
     private fun refreshState() {
         val devices = usbTransportManager.currentDevices()
         val single = devices.singleOrNull()
-        if (single != null && !usbTransportManager.hasPermission(single)) {
-            usbTransportManager.requestPermission(single) { /* next poll tick re-reads state */ }
-        }
         val state = usbTransportManager.currentState()
-        if (single != null && usbTransportManager.hasPermission(single) &&
+        if (single != null && !usbTransportManager.hasPermission(single)) {
+            stateLabel.text = "🟠 נדרשת הרשאת USB"
+            guidanceLabel.text = "לחץ סרוק מכשיר ואשר את הרשאת ה-USB."
+        } else if (single != null && usbTransportManager.hasPermission(single) &&
             usbTransportManager.classifyTransport(single) == UsbTransportGuess.ADB
         ) {
             stateLabel.text = "🟡 ADB זוהה"
@@ -187,14 +187,13 @@ class MainActivity : Activity() {
                 UsbTransportGuess.FASTBOOT -> scanViaFastboot(usbManager, device)
                 else -> null
             }
-            runOnUiThread {
-                if (evidence == null) {
+            if (evidence == null) {
+                runOnUiThread {
                     Toast.makeText(this, "לא ניתן היה לסרוק את המכשיר במצב הנוכחי", Toast.LENGTH_SHORT).show()
                     refreshState()
-                } else {
-                    submitOrQueue(evidence)
-                    refreshState()
                 }
+            } else {
+                submitOrQueue(evidence)
             }
         }
     }
@@ -248,25 +247,26 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Called on ioExecutor only: local file I/O + network I/O never block the UI thread. */
     private fun submitOrQueue(evidence: DeviceEvidence) {
         val evidenceJson = apiClient.evidenceToJson(evidence)
         val entry = scanRepository.saveOffline(evidence, evidenceJson)
+        val result = apiClient.submitScan(evidence)
 
-        when (val result = apiClient.submitScan(evidence)) {
-            is DeviceLabApiClient.Result.Success -> {
-                scanRepository.markSynced(entry.localId, result.scanId, result.bodyJson.optJSONObject("decision"))
-                renderResult(result.bodyJson)
+        runOnUiThread {
+            when (result) {
+                is DeviceLabApiClient.Result.Success -> {
+                    scanRepository.markSynced(entry.localId, result.scanId, result.bodyJson.optJSONObject("decision"))
+                    renderResult(result.bodyJson)
+                }
+                is DeviceLabApiClient.Result.HttpError -> {
+                    Toast.makeText(this, "השרת דחה את הסריקה (${result.status})", Toast.LENGTH_LONG).show()
+                }
+                is DeviceLabApiClient.Result.NetworkError -> {
+                    Toast.makeText(this, "אין חיבור - הסריקה נשמרה מקומית וממתינה לסנכרון", Toast.LENGTH_LONG).show()
+                }
             }
-            is DeviceLabApiClient.Result.HttpError -> {
-                Toast.makeText(this, "השרת דחה את הסריקה (${result.status})", Toast.LENGTH_LONG).show()
-            }
-            is DeviceLabApiClient.Result.NetworkError -> {
-                // Offline path: the scan and its raw evidence are saved locally, but no
-                // decision is ever attached without a real backend round trip - see
-                // ScanRepository's class doc. The technician sees "raw data only" here,
-                // never a guessed or stale flash decision.
-                Toast.makeText(this, "אין חיבור - הסריקה נשמרה מקומית וממתינה לסנכרון", Toast.LENGTH_LONG).show()
-            }
+            refreshState()
         }
     }
 
