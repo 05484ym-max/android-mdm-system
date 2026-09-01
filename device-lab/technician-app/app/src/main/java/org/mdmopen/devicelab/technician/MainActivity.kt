@@ -62,8 +62,16 @@ class MainActivity : Activity() {
         // way. Wired to localhost only so the client compiles as a complete, callable unit.
         apiClient = DeviceLabApiClient("http://10.0.2.2:3100", TechnicianAuth(this))
 
-        window.statusBarColor = Color.parseColor("#07182F")
-        window.navigationBarColor = Color.parseColor("#07182F")
+        window.statusBarColor = Color.parseColor("#F2F1E6")
+        window.navigationBarColor = Color.parseColor("#F2F1E6")
+        // Status/nav bar are now light (matching the MDM admin panel's own background),
+        // so their icons need to render dark instead of the default light content.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            window.insetsController?.setSystemBarsAppearance(
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            )
+        }
         setContentView(buildUi())
         startPolling()
     }
@@ -82,21 +90,21 @@ class MainActivity : Activity() {
             setPadding(dp(20), dp(26), dp(20), dp(28))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(Color.parseColor("#07182F"), Color.parseColor("#09294B"))
+                intArrayOf(Color.parseColor("#F2F1E6"), Color.parseColor("#E7ECDD"))
             )
         }
 
         val title = TextView(this).apply {
             text = "מעבדת מכשירים"
             textSize = 30f
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor("#1C1C1C"))
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.END
         }
         val subtitle = TextView(this).apply {
             text = "ניהול, בדיקה ואבחון מכשירי Android"
             textSize = 15f
-            setTextColor(Color.parseColor("#91A9C7"))
+            setTextColor(Color.parseColor("#8C8C86"))
             gravity = Gravity.END
             setPadding(0, dp(4), 0, dp(22))
         }
@@ -107,18 +115,18 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = roundedGradient("#102B4D", "#0B2140", 24f, "#2F78FF")
+            background = roundedGradient("#FFFFFF", "#FFFFFF", 24f, "#EAE8DC")
         }
 
         stateLabel = TextView(this).apply {
             textSize = 23f
-            setTextColor(Color.parseColor("#FF5A62"))
+            setTextColor(Color.parseColor("#B3432C"))
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.END
         }
         guidanceLabel = TextView(this).apply {
             textSize = 15f
-            setTextColor(Color.parseColor("#D5E5F8"))
+            setTextColor(Color.parseColor("#1C1C1C"))
             gravity = Gravity.END
             setPadding(0, dp(10), 0, dp(18))
         }
@@ -136,16 +144,16 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             setTypeface(typeface, Typeface.BOLD)
             isAllCaps = false
-            background = roundedGradient("#143E72", "#102C55", 18f, "#4F8CFF")
+            background = roundedGradient("#4B6B45", "#4B6B45", 18f, "#4B6B45")
             setOnClickListener { onScanClicked() }
         }
         val connectButton = Button(this).apply {
             text = "חבר מכשיר"
             textSize = 17f
-            setTextColor(Color.parseColor("#041426"))
+            setTextColor(Color.parseColor("#4B6B45"))
             setTypeface(typeface, Typeface.BOLD)
             isAllCaps = false
-            background = roundedGradient("#20DFFF", "#1DB7FF", 18f, "#68F1FF")
+            background = roundedGradient("#FFFFFF", "#FFFFFF", 18f, "#4B6B45")
             setOnClickListener {
                 Toast.makeText(this@MainActivity, "חבר כבל OTG/USB ואשר הרשאת USB", Toast.LENGTH_SHORT).show()
             }
@@ -179,10 +187,10 @@ class MainActivity : Activity() {
         val tip = TextView(this).apply {
             text = "טיפ חי  •  ודא שהאפשרות לניפוי USB מורשית במכשיר הנשלט"
             textSize = 14f
-            setTextColor(Color.parseColor("#4EEAFF"))
+            setTextColor(Color.parseColor("#4B6B45"))
             gravity = Gravity.END
             setPadding(dp(16), dp(16), dp(16), dp(16))
-            background = roundedGradient("#0C2A4B", "#0A203C", 18f, "#1E6A9A")
+            background = roundedGradient("#E7ECDD", "#E7ECDD", 18f, "#6B8A65")
         }
         page.addView(tip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(8)
@@ -190,7 +198,7 @@ class MainActivity : Activity() {
 
         return ScrollView(this).apply {
             isFillViewport = true
-            setBackgroundColor(Color.parseColor("#07182F"))
+            setBackgroundColor(Color.parseColor("#F2F1E6"))
             addView(page)
         }
     }
@@ -200,18 +208,18 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = roundedGradient("#102B4B", "#0D2340", 20f, "#244D78")
+            background = roundedGradient("#FFFFFF", "#FFFFFF", 20f, "#EAE8DC")
             addView(TextView(this@MainActivity).apply {
                 text = title
                 textSize = 17f
-                setTextColor(Color.WHITE)
+                setTextColor(Color.parseColor("#1C1C1C"))
                 setTypeface(typeface, Typeface.BOLD)
                 gravity = Gravity.END
             })
             addView(TextView(this@MainActivity).apply {
                 text = "$badge  •  $subtitle"
                 textSize = 12f
-                setTextColor(Color.parseColor("#8FA9C7"))
+                setTextColor(Color.parseColor("#8C8C86"))
                 gravity = Gravity.END
                 setPadding(0, dp(6), 0, 0)
             })
@@ -222,18 +230,18 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(18), dp(16), dp(18), dp(16))
-            background = roundedGradient("#102945", "#0D223D", 20f, "#244A73")
+            background = roundedGradient("#FFFFFF", "#FFFFFF", 20f, "#EAE8DC")
             addView(TextView(this@MainActivity).apply {
                 text = "$symbol   $title"
                 textSize = 18f
-                setTextColor(Color.WHITE)
+                setTextColor(Color.parseColor("#1C1C1C"))
                 setTypeface(typeface, Typeface.BOLD)
                 gravity = Gravity.END
             })
             addView(TextView(this@MainActivity).apply {
                 text = subtitle
                 textSize = 13f
-                setTextColor(Color.parseColor("#8EA7C4"))
+                setTextColor(Color.parseColor("#8C8C86"))
                 gravity = Gravity.END
                 setPadding(0, dp(4), 0, 0)
             })
@@ -325,7 +333,7 @@ class MainActivity : Activity() {
         }
 
         stateLabel.text = "סורק מכשיר..."
-        stateLabel.setTextColor(Color.parseColor("#29D8FF"))
+        stateLabel.setTextColor(Color.parseColor("#4B6B45"))
         guidanceLabel.text = "קורא מידע מהמכשיר. אין לנתק את הכבל."
         ioExecutor.execute {
             val usbManager = getSystemService(USB_SERVICE) as UsbManager
@@ -426,11 +434,11 @@ class MainActivity : Activity() {
         val line = TextView(this).apply {
             text = "${statusBadge(status)}   •   רמת ודאות: $confidence"
             textSize = 17f
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor("#4B6B45"))
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.END
             setPadding(dp(16), dp(16), dp(16), dp(16))
-            background = roundedGradient("#10365A", "#0C2746", 18f, "#2C7DB1")
+            background = roundedGradient("#E7ECDD", "#E7ECDD", 18f, "#4B6B45")
         }
         resultArea.addView(line)
     }
