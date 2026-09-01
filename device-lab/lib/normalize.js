@@ -33,9 +33,13 @@ function normalizeScan(raw = {}) {
     hostType: clean(raw.hostType)
   };
   const familyMaterial = familyFingerprintMaterial(normalized);
-  const exactMaterial = [familyMaterial,lower(normalized.buildFingerprint),lower(normalized.bootloader),
-    lower(normalized.product)].filter(Boolean).join('|');
+  const exactMaterial = normalized.buildFingerprint
+    ? [familyMaterial,lower(normalized.buildFingerprint),lower(normalized.bootloader),
+        lower(normalized.product)].filter(Boolean).join('|')
+    : null;
   normalized.familyFingerprint = familyMaterial ? crypto.createHash('sha256').update(familyMaterial).digest('hex') : null;
+  // "Exact" means exact ROM/build identity. Never manufacture an exact
+  // fingerprint from hardware-only evidence when buildFingerprint is absent.
   normalized.exactFingerprint = exactMaterial ? crypto.createHash('sha256').update(exactMaterial).digest('hex') : null;
   return normalized;
 }
