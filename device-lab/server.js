@@ -11,10 +11,16 @@ const app=express();
 app.use(express.json({limit:'2mb'}));
 app.use(express.static(path.join(__dirname,'admin-panel')));
 const key=process.env.LAB_ADMIN_KEY;
+const bridgeKey=process.env.LAB_MDM_BRIDGE_KEY||null;
 if(!key){console.error('FATAL: LAB_ADMIN_KEY is required');process.exit(1)}
 function auth(req,res,next){
  const supplied=req.get('x-lab-key')||(req.get('authorization')||'').replace(/^Bearer\s+/,'');
  if(supplied!==key)return res.status(401).json({error:'unauthorized'}); next();
+}
+function bridgeAuth(req,res,next){
+ if(!bridgeKey)return res.status(503).json({error:'bridge not configured'});
+ if(req.get('x-mdm-bridge-key')!==bridgeKey)return res.status(401).json({error:'unauthorized'});
+ next();
 }
 const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 async function classify(normalized){
@@ -81,6 +87,21 @@ app.post('/api/lab/flash-profiles',auth,wrap(async(req,res)=>{
 }));
 app.get('/api/lab/mdm/devices',auth,wrap(async(req,res)=>res.json(await listMdmDevices())));
 app.get('/api/lab/audit',auth,wrap(async(req,res)=>res.json(await db.listAudit())));
+app.get('/api/bridge/mdm/:deviceId/compatibility',bridgeAuth,wrap(async(req,res)=>{
+ const row=await db.getMdmCompatibility(String(req.params.deviceId));
+ if(!row)return res.status(404).json({error:'no linked compatibility data'});
+ res.json({
+  deviceId:String(req.params.deviceId),
+  scanId:row.scan_id,
+  scannedAt:row.created_at,
+  normalized:row.normalized,
+  decision:row.decision,
+  compatibilityProfile:row.compatibility_profile_id?{
+   id:row.compatibility_profile_id,name:row.compatibility_profile_name,
+   status:row.compatibility_profile_status,profile:row.compatibility_profile
+  }:null
+ });
+}));
 app.use((req,res,next)=>{ if(req.method==='GET'&&!req.path.startsWith('/api/')) return res.sendFile(path.join(__dirname,'admin-panel/index.html')); next(); });
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'internal error'})});
 const port=Number(process.env.PORT||3100);
