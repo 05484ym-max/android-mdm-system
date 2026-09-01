@@ -130,16 +130,16 @@ app.get('/api/bridge/mdm/:deviceId/compatibility',bridgeAuth,wrap(async(req,res)
  // Recomputed live so the bridge never hands the MDM system a stale cached decision
  // (e.g. after a flash profile is revoked/edited since this scan was last classified).
  const decision=await classify(row.normalized);
+ const liveCompatibilityProfile=decision.compatibilityProfileId
+  ? await db.getCompatibilityProfile(decision.compatibilityProfileId)
+  : null;
  res.json({
   deviceId:String(req.params.deviceId),
   scanId:row.scan_id,
   scannedAt:row.created_at,
   normalized:row.normalized,
   decision,
-  compatibilityProfile:row.compatibility_profile_id?{
-   id:row.compatibility_profile_id,name:row.compatibility_profile_name,
-   status:row.compatibility_profile_status,profile:row.compatibility_profile
-  }:null
+  compatibilityProfile:liveCompatibilityProfile
  });
 }));
 app.use((req,res,next)=>{ if(req.method==='GET'&&!req.path.startsWith('/api/')) return res.sendFile(path.join(__dirname,'admin-panel/index.html')); next(); });
