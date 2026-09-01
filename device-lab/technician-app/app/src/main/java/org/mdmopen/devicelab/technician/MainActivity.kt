@@ -55,25 +55,78 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        usbTransportManager = UsbTransportManager(this)
-        scanRepository = ScanRepository(this)
-        // Base URL and technician login flow are out of scope for this MVP pass (see report);
-        // a real deployment must not ship a hardcoded backend origin or a bearer token this
-        // way. Wired to localhost only so the client compiles as a complete, callable unit.
-        apiClient = DeviceLabApiClient("http://10.0.2.2:3100", TechnicianAuth(this))
 
-        window.statusBarColor = Color.parseColor("#F2F1E6")
-        window.navigationBarColor = Color.parseColor("#F2F1E6")
-        // Status/nav bar are now light (matching the MDM admin panel's own background),
-        // so their icons need to render dark instead of the default light content.
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            window.insetsController?.setSystemBarsAppearance(
-                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-            )
+        // Keep startup resilient on OEM Android builds. A technician tool must never become
+        // unusable because one optional UI/system-bar call or USB service init throws.
+        try {
+            usbTransportManager = UsbTransportManager(this)
+            scanRepository = ScanRepository(this)
+            // Base URL and technician login flow are out of scope for this MVP pass (see report);
+            // a real deployment must not ship a hardcoded backend origin or a bearer token this
+            // way. Wired to localhost only so the client compiles as a complete, callable unit.
+            apiClient = DeviceLabApiClient("http://10.0.2.2:3100", TechnicianAuth(this))
+        } catch (t: Throwable) {
+            showStartupFallback("אתחול המערכת", t)
+            return
         }
-        setContentView(buildUi())
-        startPolling()
+
+        try {
+            window.statusBarColor = Color.parseColor("#F2F1E6")
+            window.navigationBarColor = Color.parseColor("#F2F1E6")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                window.insetsController?.setSystemBarsAppearance(
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                )
+            }
+        } catch (_: Throwable) {
+            // Cosmetic only; never fail app startup because an OEM rejects a system-bar call.
+        }
+
+        try {
+            setContentView(buildUi())
+        } catch (t: Throwable) {
+            showStartupFallback("בניית המסך", t)
+            return
+        }
+
+        try {
+            startPolling()
+        } catch (_: Throwable) {
+            stateLabel.text = "⚠ בדיקת USB לא הופעלה"
+            guidanceLabel.text = "האפליקציה פתוחה. נסה לחבר מחדש את הכבל."
+        }
+    }
+
+    private fun showStartupFallback(stage: String, error: Throwable) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(24), dp(40), dp(24), dp(24))
+            setBackgroundColor(Color.parseColor("#F2F1E6"))
+        }
+        root.addView(TextView(this).apply {
+            text = "מעבדת מכשירים"
+            textSize = 28f
+            setTextColor(Color.parseColor("#1C1C1C"))
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.END
+        })
+        root.addView(TextView(this).apply {
+            text = "האפליקציה עלתה במצב בטוח"
+            textSize = 18f
+            setTextColor(Color.parseColor("#4B6B45"))
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.END
+            setPadding(0, dp(24), 0, dp(8))
+        })
+        root.addView(TextView(this).apply {
+            text = "תקלה בשלב: " + stage + "\n" + error.javaClass.simpleName + ": " + error.message.orEmpty()
+            textSize = 14f
+            setTextColor(Color.parseColor("#6B6B66"))
+            gravity = Gravity.END
+        })
+        setContentView(root)
     }
 
     override fun onDestroy() {
