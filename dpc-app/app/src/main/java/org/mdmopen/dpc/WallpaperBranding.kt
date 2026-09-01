@@ -49,7 +49,10 @@ object WallpaperBranding {
     // (premultiplied-alpha blur, so no garbage color could leak through),
     // and shipped at a higher native resolution so on-device compositing
     // downsamples instead of upsampling from the old small source.
-    private const val RECIPE_VERSION = 4
+    // v5: replaced emblem_transparent.png with a higher-quality 3D metallic
+    // gold render supplied directly (not re-extracted from the launcher
+    // icon), matching the same content/layout at native ~1167px resolution.
+    private const val RECIPE_VERSION = 5
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
