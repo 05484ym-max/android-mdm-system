@@ -1,11 +1,13 @@
 const norm = value => value == null ? null : String(value).trim().toLowerCase() || null;
 
 function scoreFamily(scan, family) {
-  let score=0, possible=0, evidenceCount=0;
+  let score=0, possible=0, evidenceCount=0, coreEvidenceCount=0, coreMatchCount=0;
   const hardMismatchKeys = ['device','board','hardware','platform'];
   for (const key of hardMismatchKeys) {
-    if (scan[key] && family[key] && norm(scan[key]) !== norm(family[key])) {
-      return {score:0,confidence:'LOW',evidenceCount:0,hardMismatch:key};
+    if (scan[key] && family[key]) {
+      coreEvidenceCount += 1;
+      if (norm(scan[key]) === norm(family[key])) coreMatchCount += 1;
+      else return {score:0,confidence:'LOW',evidenceCount:0,coreEvidenceCount,coreMatchCount,hardMismatch:key};
     }
   }
 
@@ -26,10 +28,13 @@ function scoreFamily(scan, family) {
   }
 
   const ratio=possible?score/possible:0;
-  const enoughEvidence = fingerprintMatch || evidenceCount >= 3;
+  // A hash is only as strong as the fields that created it. Requiring
+  // independent core hardware observations prevents a sparse one-field scan
+  // from becoming HIGH merely because its derived hash happens to match.
+  const enoughEvidence = coreEvidenceCount >= 3 && coreMatchCount >= 3;
   const confidence = enoughEvidence && ratio >= 0.9 ? 'HIGH' :
     enoughEvidence && ratio >= 0.65 ? 'MEDIUM' : 'LOW';
-  return {score:Math.round(ratio*100),confidence,evidenceCount,hardMismatch:null};
+  return {score:Math.round(ratio*100),confidence,evidenceCount,coreEvidenceCount,coreMatchCount,hardMismatch:null};
 }
 function pickBestFamily(scan,families){
   return families.map(f=>({family:f,...scoreFamily(scan,f)}))
