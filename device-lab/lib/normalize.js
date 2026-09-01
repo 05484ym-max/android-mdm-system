@@ -2,6 +2,12 @@ const crypto = require('crypto');
 
 const clean = value => value == null ? null : String(value).trim() || null;
 const lower = value => clean(value)?.toLowerCase() || null;
+const intOrNull = value => {
+  const cleaned = clean(value);
+  if (cleaned == null) return null;
+  const n = Number(cleaned);
+  return Number.isInteger(n) ? n : null;
+};
 
 function normalizeScan(raw = {}) {
   const p = raw.properties || {};
@@ -12,7 +18,7 @@ function normalizeScan(raw = {}) {
     product: clean(p.product), device: clean(p.device), board: clean(p.board),
     hardware: clean(p.hardware), platform: clean(p.platform), cpuAbi: clean(p.cpuAbi),
     androidVersion: clean(p.androidVersion),
-    apiLevel: Number.isFinite(Number(p.apiLevel)) ? Number(p.apiLevel) : null,
+    apiLevel: intOrNull(p.apiLevel),
     buildFingerprint: clean(p.buildFingerprint), buildId: clean(p.buildId),
     buildIncremental: clean(p.buildIncremental), securityPatch: clean(p.securityPatch),
     bootloader: clean(p.bootloader), verifiedBootState: clean(p.verifiedBootState),
