@@ -378,12 +378,17 @@ object AdBlockDns {
         }
 
         if (!withinRollbackRateLimit(p, now)) {
+            // Rate limiting must never leave the device in broken Strict mode. The
+            // limit only suppresses repeated recovery/re-apply attempts; rollback
+            // itself is still mandatory.
+            val disableResult = disable(context)
             p.edit()
                 .putString(KEY_FAIL_SAFE_STATE, DnsFailSafeState.ROLLED_BACK.name)
                 .putLong(KEY_COOLDOWN_UNTIL, now + EXTENDED_COOLDOWN_MS)
+                .putString(KEY_FAILURE_REASON, reason)
                 .apply()
             return "Fail-safe: הגבלת קצב הופעלה ($MAX_ROLLBACKS_PER_WINDOW rollbacks/24h) - " +
-                "נשאר ב-Opportunistic, recovery אוטומטי מושהה"
+                "rollback ל-Opportunistic נשמר ו-recovery אוטומטי מושהה. $disableResult"
         }
 
         val disableResult = disable(context)
@@ -396,7 +401,14 @@ object AdBlockDns {
         if (host.isNullOrBlank()) return "Recovery: אין providerHost מוגדר"
 
         val ipOk = checkIpConnectivity()
-        val dotOk = ipOk && checkDotProviderHealth(context, host)
+        var dotOk = ipOk && checkDotProviderHealth(context, host)
+        // During recovery we are already in Opportunistic mode, so a live DNS
+        // lookup is safe and non-circular. Refresh stale provider IP cache once
+        // before declaring the provider unreachable.
+        if (ipOk && !dotOk && currentMode(context) != DnsMode.PROVIDER_HOSTNAME) {
+            resolveAndCacheProviderIp(context, host)
+            dotOk = checkDotProviderHealth(context, host)
+        }
         val dnsOk = ipOk && checkDnsResolution(ourControlledDomain(context))
 
         p.edit()
@@ -427,9 +439,21 @@ object AdBlockDns {
         }
 
         val enableResult = enable(context, host)
+        if (currentMode(context) != DnsMode.PROVIDER_HOSTNAME) {
+            p.edit()
+                .putInt(KEY_RECOVERY_STREAK, 0)
+                .putString(KEY_FAIL_SAFE_STATE, DnsFailSafeState.ROLLED_BACK.name)
+                .putLong(KEY_COOLDOWN_UNTIL, now + ROLLBACK_COOLDOWN_MS)
+                .putString(KEY_FAILURE_REASON, "recovery_enable_failed")
+                .apply()
+            return "Recovery: הספק עבר בדיקות אך החזרה ל-Strict נכשלה; נשאר ב-Opportunistic. $enableResult"
+        }
         p.edit()
             .putLong(KEY_LAST_RECOVERY_AT, now)
             .putInt(KEY_RECOVERY_STREAK, 0)
+            .putString(KEY_FAIL_SAFE_STATE, DnsFailSafeState.NORMAL.name)
+            .remove(KEY_COOLDOWN_UNTIL)
+            .remove(KEY_FAILURE_REASON)
             .apply()
         return "Recovery: הצלחה מלאה, חזרה ל-Strict. $enableResult"
     }
@@ -558,7 +582,15 @@ object AdBlockDns {
             val raw = Socket()
             raw.connect(InetSocketAddress(InetAddress.getByName(connectHost), port), SOCKET_TIMEOUT_MS)
             raw.soTimeout = SOCKET_TIMEOUT_MS
-            (SSLSocketFactory.getDefault().createSocket(raw, sniHost, port, true) as SSLSocket).use { ssl ->
+            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
+            (factory.createSocket(raw, sniHost, port, true) as SSLSocket).use { ssl ->
+                // createSocket(..., sniHost, ...) preserves the real provider
+                // hostname for SNI even when raw is connected to a cached IP.
+                // Explicit endpoint identification also verifies that the
+                // trusted certificate is actually valid for that hostname.
+                ssl.sslParameters = ssl.sslParameters.apply {
+                    endpointIdentificationAlgorithm = "HTTPS"
+                }
                 ssl.startHandshake()
                 true
             }
