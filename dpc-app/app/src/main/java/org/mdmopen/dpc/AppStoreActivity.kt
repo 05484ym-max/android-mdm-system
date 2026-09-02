@@ -1,6 +1,7 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.pm.ApplicationInfo
@@ -250,6 +251,21 @@ class AppStoreActivity : Activity() {
             }
         }
 
+        val remove = TextView(this).apply {
+            text = "הסר"
+            textSize = 10.5f
+            typeface = mediumFont
+            setTextColor(Color.parseColor("#B3432C"))
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            visibility = if (installed) View.VISIBLE else View.GONE
+            isClickable = installed
+            isFocusable = installed
+            if (installed) {
+                setOnClickListener { confirmQuickUninstall(app) }
+            }
+        }
+
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -259,6 +275,7 @@ class AppStoreActivity : Activity() {
             addView(icon)
             addView(name)
             addView(status)
+            addView(remove)
             setOnClickListener {
                 if (installed) openInstalledApp(app.packageName)
                 else openPlayStoreForInstall(app.packageName)
@@ -295,6 +312,23 @@ class AppStoreActivity : Activity() {
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun confirmQuickUninstall(app: CatalogApp) {
+        AlertDialog.Builder(this)
+            .setTitle("הסרת אפליקציה")
+            .setMessage("להסיר את " + app.name + " מהמכשיר?")
+            .setNegativeButton("ביטול", null)
+            .setPositiveButton("הסר") { _, _ ->
+                try {
+                    AppInstaller(this).uninstall(app.packageName)
+                    Toast.makeText(this, "הסרת " + app.name + " הופעלה", Toast.LENGTH_LONG).show()
+                    mainHandler.postDelayed({ setContentView(buildUi()) }, 1200)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "ההסרה נכשלה: " + (e.message ?: "שגיאה לא ידועה"), Toast.LENGTH_LONG).show()
+                }
+            }
+            .show()
     }
 
     private fun openInstalledApp(packageName: String) {
