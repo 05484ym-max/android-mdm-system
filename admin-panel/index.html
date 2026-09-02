@@ -447,6 +447,7 @@ function commandLabel(cmd) {
     WIPE: 'מחיקת מכשיר', INSTALL_APP: 'התקנת אפליקציה', UNINSTALL_APP: 'הסרת אפליקציה',
     OPEN_PLAY_STORE_INSTALL: 'התקנה דרך Play Store',
     OPEN_PLAY_STORE_SYSTEM_COMPONENT: 'עדכון רכיב מערכת (Google Play Services)',
+    OPEN_DEBUGGING_TEMP: 'פתח ניפוי באגים זמנית',
   }[cmd] || cmd;
 }
 
@@ -853,6 +854,7 @@ function renderDeviceDetail(deviceId) {
         <button class="cmd-btn" data-cmd="LOCK">נעילה</button>
         <button class="cmd-btn" data-cmd="SYNC_POLICY">סנכרון מדיניות</button>
         <button class="cmd-btn" data-cmd="REBOOT">הפעלה מחדש</button>
+        <button class="cmd-btn" data-cmd="OPEN_DEBUGGING_TEMP">פתח ניפוי באגים זמנית</button>
         <button class="cmd-btn cmd-danger" data-cmd="WIPE">מחיקת מכשיר</button>
       </div>
       <div class="add-app-row">
@@ -953,7 +955,20 @@ function bindDetailHandlers(d) {
         openWipeConfirm(deviceId);
         return;
       }
-      if (await queueCommand(deviceId, command, {})) loadDevices();
+      if (command === 'OPEN_DEBUGGING_TEMP') {
+        if (!confirm(
+          'לפתוח זמנית את אפשרויות המפתחים וניפוי הבאגים במכשיר?\n' +
+          'Device Owner ושאר החסימות יישארו פעילים. החסימה תחזור בסנכרון המדיניות הבא.'
+        )) {
+          return;
+        }
+      }
+      if (await queueCommand(deviceId, command, {})) {
+        if (command === 'OPEN_DEBUGGING_TEMP') {
+          alert('הפקודה נשלחה. בצע סנכרון אחד במכשיר כדי לקבל אותה, ואז אל תסנכרן שוב עד סיום חיבור ה-ADB.');
+        }
+        loadDevices();
+      }
     });
   });
 
