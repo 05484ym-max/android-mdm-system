@@ -1,6 +1,10 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -263,17 +267,68 @@ class AppStoreActivity : Activity() {
     }
 
     private fun isInstalled(packageName: String): Boolean {
+        // Hidden packages can disappear from ordinary PackageManager lookups
+        // on some OEM builds even though they are still physically installed.
+        // MATCH_UNINSTALLED_PACKAGES lets us inspect their ApplicationInfo and
+        // FLAG_INSTALLED distinguishes a real installed package from retained
+        // metadata for an uninstalled package.
+        val installedByPackageManager = try {
+            val info = packageManager.getApplicationInfo(
+                packageName,
+                PackageManager.MATCH_UNINSTALLED_PACKAGES
+            )
+            (info.flags and ApplicationInfo.FLAG_INSTALLED) != 0
+        } catch (_: Exception) {
+            false
+        }
+        if (installedByPackageManager) return true
+
+        // DevicePolicyManager is authoritative for apps hidden by this DPC.
+        // If Android says this package is hidden by our Device Owner policy,
+        // it necessarily exists on the device even if PackageManager omitted
+        // it from the normal visible-package view.
         return try {
-            packageManager.getPackageInfo(packageName, 0)
-            true
+            val dpm = getSystemService(DevicePolicyManager::class.java)
+            if (!dpm.isDeviceOwnerApp(packageName = packageName)) {
+                // isDeviceOwnerApp() checks ownership of the target package,
+                // not whether this DPC owns the device, so don't use it here.
+                val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+                dpm.isDeviceOwnerApp(this.packageName) &&
+                    dpm.isApplicationHidden(admin, packageName)
+            } else {
+                true
+            }
         } catch (_: Exception) {
             false
         }
     }
 
     private fun openInstalledApp(packageName: String) {
+        // approvedApps() already guarantees this package is server-approved.
+        // Recover from a stale hidden state before resolving its launcher.
+        try {
+            val dpm = getSystemService(DevicePolicyManager::class.java)
+            if (dpm.isDeviceOwnerApp(this.packageName)) {
+                val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+                if (dpm.isApplicationHidden(admin, packageName)) {
+                    dpm.setApplicationHidden(admin, packageName, false)
+                }
+            }
+        } catch (_: Exception) {
+            // PolicySync/PolicyEnforcer remains the primary enforcement path;
+            // a UI recovery failure here must not crash the store.
+        }
+
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-        if (launchIntent != null) startActivity(launchIntent) else openPlayStoreForInstall(packageName)
+        if (launchIntent != null) {
+            startActivity(launchIntent)
+        } else {
+            Toast.makeText(
+                this,
+                "האפליקציה מותקנת אך עדיין אינה זמינה לפתיחה. נסה סנכרון נוסף.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     /** Play Store is hidden by default like any unapproved app - this briefly
