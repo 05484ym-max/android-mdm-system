@@ -1192,7 +1192,39 @@ app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,
 // the client is contractually required to treat any non-2xx as blocked
 // (never ALLOW). See browserPolicy.js's module doc for the full reasoning.
 
+// Phase 2.3 resource-abuse hardening: every /browser/check call does at
+// least one PostgreSQL round-trip plus an unconditional browser_decision_log
+// INSERT (see db.logBrowserDecision), and an unknown domain adds a full
+// BEGIN/COMMIT transaction on top (db.recordBrowserRequest) - a single
+// compromised or malfunctioning device could otherwise spam this endpoint
+// enough to exhaust DB write capacity/disk. Same in-memory fixed-window
+// pattern as loginRateLimited above (no Redis - single backend process);
+// exceeding it returns 429 with no decision object, which the client
+// already must treat exactly like any other non-2xx response (see
+// server-api-contract.md's fail-closed guarantee) - this can never become
+// a silent ALLOW, only ever a "stays blocked."
+const browserCheckAttempts = new Map();
+const BROWSER_CHECK_RATE_LIMIT_WINDOW_MS =
+  Number(process.env.BROWSER_CHECK_RATE_LIMIT_WINDOW_MS) || 10000;
+const BROWSER_CHECK_RATE_LIMIT_MAX =
+  Number(process.env.BROWSER_CHECK_RATE_LIMIT_MAX) || 40;
+
+/** Bounds how many /browser/check calls one device can make per window. */
+function browserCheckRateLimited(deviceId) {
+  const now = Date.now();
+  const entry = browserCheckAttempts.get(deviceId);
+  if (!entry || now - entry.first > BROWSER_CHECK_RATE_LIMIT_WINDOW_MS) {
+    browserCheckAttempts.set(deviceId, { first: now, count: 1 });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > BROWSER_CHECK_RATE_LIMIT_MAX;
+}
+
 app.post('/api/devices/:deviceId/browser/check', requireDevice, wrap(async (req, res) => {
+  if (browserCheckRateLimited(req.params.deviceId)) {
+    return res.status(429).json({ error: 'too many browser checks, try again shortly' });
+  }
   const parsed = browserPolicy.parseNavigationUrl(req.body && req.body.url);
   if (!parsed) {
     return res.status(400).json({ error: 'url must be a valid absolute URL' });

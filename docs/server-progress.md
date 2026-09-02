@@ -5,6 +5,123 @@ Owner: Claude
 
 ## DONE
 
+**Phase 2.3 (load / abuse / failure hardening on `/browser/check`), this update:**
+- Read GPT's docs fresh from `filtered-browser-client` (still Phase 0A,
+  unverified on a physical device — no drift affecting this phase) and my
+  own `server-progress.md`/`server-api-contract.md` before starting.
+- **Hardening added** (small, targeted, `/backend/**` only):
+  - `browserPolicy.isValidDomainLabel` now rejects any host over 253
+    characters (the real DNS name-length ceiling) — previously unbounded,
+    so a multi-kilobyte "host" string could reach the LIKE-based subdomain
+    query in `getBrowserDomainForHost` as long as it was made of only
+    letters/digits/hyphens/dots. Applies to both `/browser/check` and admin
+    domain-rule validation (one shared function, one fix).
+  - `browserPolicy.parseNavigationUrl` now rejects any `url` over 8192
+    characters as unparseable (same 400 path as any other malformed URL) -
+    before it ever reaches `new URL()`, and before it could be written into
+    `browser_requests.first_url` / `browser_decision_log.url`.
+  - New per-device rate limit on `POST /api/devices/:deviceId/browser/check`
+    — 40 calls / rolling 10s window per `deviceId` (both configurable via
+    env vars), in-memory, same fixed-window pattern as the existing
+    admin-login rate limiter. Exceeding it returns `429` with no decision
+    object — never a fabricated `ALLOW`. See
+    `docs/server-api-contract.md`'s new "Resource-abuse hardening" section
+    for the exact behavior.
+- **One real product bug found and fixed** (not a test-authoring mistake -
+  a real, previously-shipped bug in `backend/db.js`): the shared
+  PostgreSQL connection pool had no `.on('error', ...)` listener. Verified
+  for real by stopping the local Postgres service under a live server
+  instance — Node's default behavior for an `EventEmitter` `'error'` event
+  with no listener is to **crash the entire process**, confirmed exactly
+  that: the whole backend went down, not just the in-flight query, taking
+  every endpoint (device sync, admin panel, everything) with it until
+  manually restarted. This is a far worse outcome than the intended
+  fail-closed 500 — it's total downtime from something as ordinary as a
+  brief network blip or a database restart. Fixed with the single
+  `pool.on('error', ...)` listener the `pg` library's own docs call for
+  (logs and swallows the idle-client error; each call site's own try/catch
+  still turns an in-flight query failure into a normal 500, unchanged).
+  Re-verified after the fix: stopping Postgres under a live server now
+  produces clean `5xx` responses and the process stays up and serves
+  correctly again the moment Postgres returns — no restart needed.
+- **New `backend/test-browser-load.js`** (28 tests, all against the same
+  real local Postgres `browser_test` database and a real running
+  `index.js`, real concurrent `Promise.all` bursts, a real
+  `service postgresql stop`/`start`, and a second real backend process this
+  suite spawns and kills itself for the restart test):
+  - **Load/concurrency (3 tests)**: 25 concurrent checks from one device
+    for one unknown domain collapse to exactly one `browser_requests` row
+    and one requester row (~140-210 req/s observed); 30 distinct devices
+    hitting one unknown domain at once collapse to one request with all 30
+    tracked as distinct requesters (~300-460 req/s observed); 36 mixed
+    concurrent ALLOW/BLOCK/12-distinct-unknown-domain checks across 12
+    devices never mutate the existing ALLOW/BLOCK `browser_domains` rows
+    (byte-identical `decision_version`/`updated_at` before and after) and
+    produce exactly one pending request per distinct unknown domain
+    (~370-380 req/s observed). All real numbers from this environment, not
+    estimates — see the suite's own console output for the exact run.
+  - **Failure behavior (13 tests)**: missing `url`; wrong JSON types
+    (number/object/array/bool/null); overlong `url` (8192+ chars) over the
+    real HTTP endpoint; an oversized request body (over express's 100kb
+    JSON limit); three invalid-Unicode/IDN/confusable-character hosts;
+    forbidden scheme (`ftp:`); IPv4 and IPv6 literal hosts; a non-default
+    port on an unknown host (confirms the deliberate, documented
+    host-only evaluation - never a per-port policy); missing/wrong device
+    auth; unknown device id; a forced real mid-transaction DB write failure
+    on an ALLOW-eligible domain (same sentinel-trigger fault-injection
+    technique as Phase 2.1's rollback tests, this time on
+    `browser_decision_log`'s insert - the genuinely last statement on the
+    hot path) proving the route still fails closed even when the failure
+    happens *after* the decision was already computed; and PostgreSQL
+    actually stopped and restarted mid-suite, proving a real `5xx` (never
+    `ALLOW`) while it's down and real recovery once it's back. No failure
+    path in any of these ever produced an `ALLOW`.
+  - **Rate limit (4 tests)**: a burst of 45 from one device gets exactly
+    40 through and the rest `429` (none with a decision object, none
+    `ALLOW`); a different fresh device is unaffected by another device's
+    throttling (confirms per-device, not global); a moderate 10-request
+    burst is never throttled; and the window genuinely resets after ~10s -
+    a throttled device can check again without restarting anything.
+  - **Query plans (7 tests)**: seeded 2000 `browser_domains` rows, 50
+    device overrides, 300 pending requests (with ~440 requester rows), 5000
+    `browser_decision_log` rows, and 1000 `browser_policy_audit` rows, then
+    ran real `EXPLAIN ANALYZE` on every query on the hot/admin paths (full
+    plans are in the suite's console output). Real findings: the per-device
+    override lookup, the pending-request dedup lookup, the admin
+    pending-request list join, and both audit lookups (filtered and
+    unfiltered) all already use their existing indexes (`Index Scan`/
+    `Bitmap Index Scan`), sub-millisecond even at these volumes. The one
+    exception: `getBrowserDomainForHost`'s exact/subdomain lookup does a
+    `Seq Scan` over all 2000 `browser_domains` rows (0.2ms execution time)
+    — expected, since its `OR` includes a per-row dynamic `LIKE` pattern
+    (`$1 LIKE '%.' || domain`) that a plain b-tree index can't serve for
+    the subdomain branch. **No index was added**: at 2000 rows this is
+    already sub-millisecond, `browser_domains` is admin-curated (not
+    expected to reach a size where a sequential scan matters), and adding
+    one on a guess without a real slow query to justify it would be
+    exactly the "optimize by guesswork" this phase's instructions warned
+    against. Documented here instead, to revisit if this table ever grows
+    into the tens of thousands of rows.
+  - **Restart/persistence (1 test)**: spawned a second, independent real
+    backend process, wrote an admin ALLOW rule (bumping `policyVersion`), a
+    real pending REVIEW request via the actual HTTP check endpoint, and a
+    DEVICE-scope resolution on a second request; killed the process with
+    `SIGTERM`; spawned a fresh process on the same database; confirmed via
+    direct Postgres reads that `policyVersion` was exactly unchanged (never
+    rolled back), the still-open request was still `PENDING`, the resolved
+    request was still `RESOLVED` with its `DEVICE` scope intact, and the
+    audit row count was unchanged; then made a real HTTP check against the
+    *freshly restarted* process's own endpoint and confirmed it still
+    returned the pre-restart `ALLOW` decision with the correct
+    (unchanged) `policyVersion`.
+- **Regression**: re-ran all three existing suites clean after every code
+  change in this phase — `test-browser-policy.js` 55/55 (49 existing + 6
+  new pure-logic tests for the length caps), `test-db-integration.js`
+  46/46, `test-admin-ui-e2e.js` 38/38. Zero of the Phase 2.1/2.2 files
+  (`db.js` schema/queries besides the one-line pool fix, `browserPolicy.js`
+  decision logic, `index.js` routes besides the two additions above,
+  `admin-panel/**`) needed any other change.
+
 **Phase 2.2 (real admin-panel UI end-to-end verification), this update:**
 - Read GPT's docs fresh from `filtered-browser-client` (still Phase 0A —
   code + visual foundation complete, 21/21 pure Kotlin tests pass, Android
@@ -214,6 +331,65 @@ Owner: Claude
 
 ## TESTED
 
+**Phase 2.3 — load / abuse / failure hardening, this update.**
+
+Exact environment: the same real local PostgreSQL 16 `browser_test`
+database as Phase 2.1/2.2, a real running `backend/index.js` for the bulk
+of the suite, plus a second real backend process this suite itself spawns
+and kills for the restart test, and a real `service postgresql stop`/
+`start` for the dependency-unavailable test. Setup/run commands documented
+at the top of `backend/test-browser-load.js`.
+
+- **New load/abuse/failure suite: 28/28 passed** (3 load/concurrency, 13
+  failure-behavior, 4 rate-limit, 7 query-plan, 1 restart/persistence — see
+  DONE above for what each one actually proves and the real numbers
+  observed).
+- **Real product bug found and fixed: 1** — `backend/db.js`'s PostgreSQL
+  pool had no `.on('error', ...)` listener, which crashed the entire
+  backend process (not just the in-flight request) the moment Postgres
+  dropped an idle connection for any reason. Verified for real by stopping
+  Postgres under a live server before the fix (process died) and after
+  (process logged the error, stayed up, served correct `5xx` responses,
+  and recovered cleanly once Postgres came back). This is the one bug this
+  phase's bug-hunting round surfaced — see DONE for detail. No other real
+  product bug found; `browserPolicy.js`'s decision logic, `index.js`'s
+  routes (besides the two additions above), and `admin-panel/**` needed no
+  changes.
+- **Concurrency/load numbers observed in this environment** (not
+  estimates): ~140-210 req/s for a 25-request single-device burst,
+  ~300-460 req/s for a 30-device single-domain burst, ~370-380 req/s for a
+  36-request mixed-traffic burst. These are sandbox numbers for
+  correctness verification, not a production capacity claim.
+- **Rate limit introduced**: 40 `/browser/check` calls per rolling 10s
+  window per device (`BROWSER_CHECK_RATE_LIMIT_MAX` /
+  `BROWSER_CHECK_RATE_LIMIT_WINDOW_MS` env vars), in-memory, single backend
+  process — see `docs/server-api-contract.md`'s new "Resource-abuse
+  hardening" section for the full behavior and its one real limitation
+  (doesn't coordinate across multiple backend instances).
+- **Query plans / index changes**: seven hot/admin-path queries verified
+  via real `EXPLAIN ANALYZE` at 2000+ seeded rows. Six already use their
+  existing indexes. **No index was added** — the one query doing a
+  sequential scan (`getBrowserDomainForHost`, because of its per-row
+  dynamic `LIKE` predicate) is still sub-millisecond at this volume on an
+  admin-curated, not expected to grow into the tens-of-thousands table;
+  adding an index without a real slow query to justify it would have been
+  guesswork. Full plans are in the suite's console output; the reasoning
+  is recorded in DONE above for whoever revisits this later.
+- Confirmed unchanged, run immediately before and after this phase's code
+  changes (regression requirement): **55/55 unit tests** (49 existing + 6
+  new pure-logic tests for the new length caps), **46/46 PostgreSQL
+  integration tests**, **38/38 admin-panel E2E tests**.
+- **What remains unverified**: real production traffic volumes/patterns
+  (this suite's bursts are synthetic and sized for correctness proof, not
+  a load-test benchmark); multi-instance/horizontal-scaling behavior of the
+  new rate limiter (documented as a known limitation, not tested, since
+  there is only one backend instance in this environment and Redis is
+  explicitly out of scope for this phase); a genuine production Postgres
+  failover/replica scenario (this phase tested a full service stop/start
+  of a single local instance, which is the closest real approximation
+  available here, not a managed Postgres provider's actual failover
+  behavior).
+
 **Phase 2.2 — real admin-panel UI E2E, this update.**
 
 Exact environment: real headless Chromium (pre-installed in this sandbox
@@ -349,13 +525,30 @@ report was written:
 
 ## CLIENT IMPACT
 
-None on the wire contract — `ALLOW`/`BLOCK`/`REVIEW` and every JSON field
-GPT's client depends on are unchanged. Phase 2.2 added test coverage only —
-`db.js`, `index.js`, `browserPolicy.js`, and every file under
-`admin-panel/**` are byte-for-byte unchanged from Phase 2.1; only
-`backend/test-admin-ui-e2e.js` (and `backend/package.json`'s
-devDependencies, for `playwright`) were added. GPT does not need to change
-anything in `/client/**` for this update.
+`ALLOW`/`BLOCK`/`REVIEW` and every existing JSON field are unchanged —
+Phase 2.3 does not alter the decision logic at all. Two new, narrow ways
+`/browser/check` can respond that GPT's client needs to be ready for
+(both already covered by the client's existing fail-closed contract, since
+both are non-2xx with no decision object, exactly like any other error):
+- **HTTP 429** if a device calls `/browser/check` more than 40 times in a
+  rolling 10-second window — `{ "error": "too many browser checks, try
+  again shortly" }`. Legitimate browsing (even fast page navigation with a
+  handful of checks per load) should never come close to this; it only
+  engages under a flood. The client should treat it exactly like a 5xx —
+  stay blocked, and its normal retry/backoff (if any) will naturally clear
+  it once the window rolls over.
+- **HTTP 400** for a `url` over 8192 characters — folded into the existing
+  "url must be a valid absolute URL" 400 response the client already
+  handles, not a new error shape.
+- A hostname over 253 characters (a real DNS-length violation) now
+  produces `BLOCK` with the *existing* `reason: "invalid_or_ip_literal_host"`
+  — no new reason string, same handling as an IP-literal host already
+  required.
+See `docs/server-api-contract.md`'s new "Resource-abuse hardening" section
+for the full detail. GPT does not need to change anything in `/client/**`
+for this update — client-side, this only matters if it starts sending
+navigation checks fast enough to hit a rate a real user could never
+produce by clicking around.
 
 ## KNOWN LIMITATIONS
 
@@ -405,6 +598,16 @@ anything in `/client/**` for this update.
   real mobile browsers or non-Chromium desktop browsers; and the actual
   Render production deployment (this suite still runs only against a
   disposable local `browser_test` database, never real customer data).
+- **Phase 2.3**: the new rate limiter is in-memory/single-process (see
+  CLIENT IMPACT and the contract doc's Known Phase 1 limitations) — real
+  multi-instance horizontal scaling is not tested or supported by it yet,
+  since there is only one backend instance in this environment. The
+  load/concurrency numbers recorded this phase are real but are sandbox
+  correctness-verification numbers, not a production capacity benchmark —
+  no attempt was made to simulate the actual Render production environment's
+  hardware/network characteristics. A genuine managed-Postgres failover
+  (as opposed to a local `service postgresql stop`/`start`, the closest
+  real approximation available here) also remains unverified.
 
 ## NEXT
 

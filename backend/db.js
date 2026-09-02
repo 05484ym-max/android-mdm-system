@@ -7,6 +7,20 @@ const pool = new Pool({
   max: 5,
 });
 
+// Without this, an idle pooled client that the database drops (a restart,
+// a network blip, an admin killing the connection) fires an 'error' event
+// with no listener - Node's default behavior for that is to crash the
+// entire process (see the 'pg' library's own docs: "you should always add
+// an error listener"). That takes down every endpoint, not just whichever
+// query was unlucky enough to be running - verified for real in Phase 2.3
+// by stopping Postgres under a live server and watching it exit. A brief
+// query-level failure (each call site already handles/propagates its own
+// error into a 500 - see wrap() in index.js) is the fail-closed outcome
+// this is supposed to produce; the process itself must stay up.
+pool.on('error', err => {
+  console.error('Unexpected error on an idle PostgreSQL client:', err.message);
+});
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS devices (
   device_id       TEXT PRIMARY KEY,

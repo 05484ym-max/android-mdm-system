@@ -1,7 +1,7 @@
 # Filtered Browser — Server API Contract
 
 Owner: Claude (Backend / Admin / Worker)
-Status: Phase 1 + 1.1 (hardening) + 2 (admin workflow) IMPLEMENTED — see Known Phase 1 Limitations (still current for anything not covered by Phase 2)
+Status: Phase 1 + 1.1 (hardening) + 2 (admin workflow) + 2.3 (load/abuse/failure hardening) IMPLEMENTED — see Known Phase 1 Limitations (still current for anything not covered by Phase 2/2.3)
 Branch: `filtered-browser-server`
 
 This document describes what the server actually guarantees to the Android
@@ -145,6 +145,41 @@ technique.
 `ALLOW` is returned **only** when an admin has explicitly recorded that
 decision (globally or for that device). There is no automatic/AI-driven
 `ALLOW` path in Phase 1 — see Known Phase 1 Limitations.
+
+## Resource-abuse hardening (Phase 2.3)
+
+Three additions, none of which change `ALLOW`/`BLOCK`/`REVIEW` semantics or
+any existing response field — they only tighten what counts as a malformed
+or abusive request, verified for real under load (see
+`backend/test-browser-load.js`):
+
+- **Overlong `url`**: a `url` longer than 8192 characters is treated exactly
+  like an unparseable URL — HTTP 400, `{ "error": "url must be a valid
+  absolute URL" }`, no decision object. Well beyond any real navigation
+  target a filtered browser needs to check.
+- **Overlong host**: a hostname longer than 253 characters (the real DNS
+  name-length ceiling) is rejected the same way an IP-literal host already
+  was — `BLOCK` with `reason: "invalid_or_ip_literal_host"`, not a 400 (the
+  request itself still parsed fine; the *host* just can't be a real DNS
+  name). Applies identically to `POST /api/browser/domains`'s admin-rule
+  validation.
+- **Per-device rate limit on `/browser/check`**: at most 40 calls per
+  rolling 10-second window per `deviceId` (both configurable via
+  `BROWSER_CHECK_RATE_LIMIT_MAX` / `BROWSER_CHECK_RATE_LIMIT_WINDOW_MS`, in
+  case a real fleet's legitimate browsing pattern ever needs a different
+  ceiling). Exceeding it returns:
+  ```
+  HTTP 429
+  { "error": "too many browser checks, try again shortly" }
+  ```
+  No decision object — the client already treats any non-2xx exactly like a
+  timeout (stays blocked), so this can never become a silent `ALLOW`. Purely
+  in-memory, per backend process, keyed by `deviceId` (no Redis, no shared
+  state across processes — acceptable for the current single-instance
+  deployment, called out again under Known Phase 1 limitations below). A
+  device that
+  exceeds its window can check again once the window rolls over — this is a
+  throttle, not a ban.
 
 ## Request queue (unknown domains)
 
@@ -410,6 +445,14 @@ ahead of real traffic:
 - **No caching layer.** Every check is a direct Postgres query. At current
   scale this is intentional — adding Redis before there is real traffic to
   justify it would be premature.
+- **Phase 2.3: the per-device rate limiter is in-process, in-memory state**
+  (a plain `Map`, same pattern as the existing admin-login rate limiter) —
+  it resets on every backend restart/deploy, and does not coordinate across
+  multiple backend instances if this is ever scaled horizontally. Acceptable
+  for the current single-instance deployment; a real multi-instance
+  deployment would need a shared store (Redis, out of scope per this
+  phase's instructions) for the limit to hold fleet-wide rather than
+  per-instance.
 
 None of the above blocks the Android client's Phase 0A (WebView security
 PoC using local mocks). They matter starting whenever the client is ready

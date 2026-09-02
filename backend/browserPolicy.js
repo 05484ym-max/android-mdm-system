@@ -46,8 +46,19 @@ function normalizeHost(host) {
   return String(host || '').trim().toLowerCase().replace(/\.+$/, '');
 }
 
+// RFC 1035 §3.1's 255-octet name limit (253 usable ASCII characters once the
+// root label and its dot are excluded) - the real-world ceiling every DNS
+// resolver already enforces. Checked as a plain length guard BEFORE the
+// regex below: VALID_HOST_RE has no upper bound on its own; a resource-abuse
+// probe sending a multi-kilobyte "host" (still lexically valid per the
+// regex's character classes) would otherwise reach the LIKE-based subdomain
+// query in getBrowserDomainForHost. This is fail-closed the same way
+// isIpLiteralHost is - an oversized host can never be a real DNS name, so
+// it BLOCKs rather than falling through to REVIEW.
+const MAX_HOST_LENGTH = 253;
+
 function isValidDomainLabel(host) {
-  return VALID_HOST_RE.test(host);
+  return typeof host === 'string' && host.length <= MAX_HOST_LENGTH && VALID_HOST_RE.test(host);
 }
 
 function isIpLiteralHost(host) {
@@ -60,9 +71,17 @@ function isIpLiteralHost(host) {
   return false;
 }
 
+// Well beyond any real browser's practical URL length (Chrome/Android
+// WebView caps navigation around 2MB, but no legitimate filtered-browser
+// navigation target needs anywhere near that) - a bound here rejects an
+// oversized `url` as unparseable BEFORE it reaches `new URL()`, DB storage
+// (browser_requests.first_url / browser_decision_log.url), or an admin
+// panel render, rather than after (Phase 2.3 resource-abuse hardening).
+const MAX_CHECK_URL_LENGTH = 8192;
+
 /**
  * Parses a navigation target. Returns { scheme, host } whenever the string
- * parses as a URL at all, or null if it doesn't parse as one (caller
+ * parses as a URL at all and isn't oversized, or null otherwise (caller
  * treats null as a 400 - a client-side bug, not a policy decision).
  *
  * `host` may be '' - several dangerous schemes (file:, data:, javascript:,
@@ -76,6 +95,9 @@ function isIpLiteralHost(host) {
  * present, never a 400 and never left to fall through to a host check.
  */
 function parseNavigationUrl(rawUrl) {
+  if (typeof rawUrl === 'string' && rawUrl.length > MAX_CHECK_URL_LENGTH) {
+    return null;
+  }
   let parsed;
   try {
     parsed = new URL(String(rawUrl));
@@ -336,6 +358,8 @@ function applyRequestResolution(devices, action) {
 module.exports = {
   DECISIONS,
   DECIDED_TTL_MS,
+  MAX_HOST_LENGTH,
+  MAX_CHECK_URL_LENGTH,
   normalizeHost,
   isValidDomainLabel,
   isIpLiteralHost,

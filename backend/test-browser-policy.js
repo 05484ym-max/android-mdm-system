@@ -338,4 +338,45 @@ check('shared request: GLOBAL resolution does not overwrite a device already ans
   assert.strictEqual(r.fullyResolved, true);
 });
 
+// ---------- Phase 2.3: resource-abuse hardening (pure logic) ----------
+
+check('isValidDomainLabel accepts a host right at the 253-char DNS ceiling', () => {
+  // 'aaa...a.co': first label sized so the whole string lands exactly on
+  // the limit, second label a valid short one - avoids hardcoding the
+  // limit's arithmetic twice.
+  const host = `${'a'.repeat(bp.MAX_HOST_LENGTH - 3)}.co`;
+  assert.strictEqual(host.length, bp.MAX_HOST_LENGTH);
+  assert.strictEqual(bp.isValidDomainLabel(host), true);
+});
+
+check('isValidDomainLabel rejects a host one character past the 253-char DNS ceiling', () => {
+  const host = `${'a'.repeat(bp.MAX_HOST_LENGTH - 2)}.co`;
+  assert.strictEqual(host.length, bp.MAX_HOST_LENGTH + 1);
+  assert.strictEqual(bp.isValidDomainLabel(host), false);
+});
+
+check('isValidDomainLabel rejects non-string input rather than throwing', () => {
+  assert.strictEqual(bp.isValidDomainLabel(12345), false);
+  assert.strictEqual(bp.isValidDomainLabel(null), false);
+  assert.strictEqual(bp.isValidDomainLabel(undefined), false);
+});
+
+check('parseNavigationUrl treats an overlong URL as unparseable (never silently truncates)', () => {
+  const overlong = `https://example.com/${'a'.repeat(bp.MAX_CHECK_URL_LENGTH)}`;
+  assert.ok(overlong.length > bp.MAX_CHECK_URL_LENGTH);
+  assert.strictEqual(bp.parseNavigationUrl(overlong), null);
+});
+
+check('parseNavigationUrl still parses a URL right at the length ceiling', () => {
+  const atLimit = `https://example.com/${'a'.repeat(bp.MAX_CHECK_URL_LENGTH - 'https://example.com/'.length)}`;
+  assert.strictEqual(atLimit.length, bp.MAX_CHECK_URL_LENGTH);
+  assert.notStrictEqual(bp.parseNavigationUrl(atLimit), null);
+});
+
+check('parseNavigationUrl rejects wrong-JSON-type input (number/object/array/null) without throwing', () => {
+  for (const bad of [12345, {}, [], null, undefined, true]) {
+    assert.strictEqual(bp.parseNavigationUrl(bad), null, `${JSON.stringify(bad)} must not parse`);
+  }
+});
+
 console.log(`\n${passed} passed, 0 failed`);
