@@ -22,6 +22,7 @@
 // `db` module passed in), kept intentionally thin.
 
 const crypto = require('crypto');
+const tldts = require('tldts');
 
 const DECISIONS = Object.freeze({ ALLOW: 'ALLOW', BLOCK: 'BLOCK', REVIEW: 'REVIEW' });
 
@@ -88,6 +89,130 @@ function isForbiddenScheme(scheme) {
   return !ALLOWED_SCHEMES.has(scheme);
 }
 
+// ---------- Phase 1.1: admin rule validation (Public Suffix hardening) ----------
+//
+// Everything below runs at RULE-WRITE time only (POST /api/browser/domains,
+// and resolving a request as GLOBAL) - never on the /browser/check hot path.
+// A malicious/malformed rule is far cheaper to reject once at write time
+// than to re-derive safety on every navigation check.
+//
+// The core risk this closes: without Public Suffix awareness, an admin
+// could write ALLOW github.io + allowSubdomains=true, intending to approve
+// one GitHub Pages site, and instead approve every *.github.io site ever
+// hosted by any GitHub user - because github.io is a shared-hosting
+// boundary (a "private" entry in the Public Suffix List), not a single
+// business's domain the way example.com is. Same principle for
+// blogspot.com, appspot.com, and ICANN-section multi-label suffixes like
+// co.uk. tldts (with allowPrivateDomains: true, so the PSL's private
+// section - GitHub Pages, Blogspot, Google App Engine, etc. - is honored,
+// not just ICANN TLDs) is the source of truth for this, not a hand-rolled
+// list: the PSL changes over time and re-deriving it here would drift.
+
+// Characters that must never appear in a bare admin-submitted domain field -
+// checked BEFORE any URL-wrapping/canonicalization, with a specific reason
+// each, so a scheme/path/query/port/userinfo/wildcard is rejected outright
+// (with a message that actually says why) instead of being silently
+// mangled by wrapping it in a synthetic https:// URL.
+const REJECTED_RAW_DOMAIN_PATTERNS = [
+  [/\s/, 'contains_whitespace'],
+  [/:\/\//, 'contains_scheme'],
+  [/[/?#]/, 'contains_path_or_query'],
+  [/@/, 'contains_userinfo'],
+  [/\*/, 'contains_wildcard'],
+  [/:/, 'contains_port_or_invalid_char'],
+];
+
+/**
+ * Canonicalizes an already-raw-validated bare hostname string to the same
+ * ASCII/Punycode representation used everywhere else (see
+ * parseNavigationUrl, which gets this for free from the URL parser on real
+ * navigation hosts). Wrapping in a throwaway https:// URL reuses Node's own
+ * WHATWG host-parsing/IDNA implementation rather than a second, hand-rolled
+ * IDN normalizer that could disagree with it - one normalization pipeline
+ * for both incoming navigation hosts and admin-submitted rules is what
+ * guarantees the same real-world site never ends up as two different
+ * database rows (Unicode vs. Punycode, mixed case, trailing dot, ...).
+ * Returns null if the string still isn't a plausible hostname.
+ */
+function canonicalizeAdminDomainInput(raw) {
+  try {
+    return normalizeHost(new URL(`https://${raw}/`).hostname);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Full validation for a domain being written into browser_domains, either
+ * directly (POST /api/browser/domains) or via resolving a request as
+ * GLOBAL. Returns { ok: true, host } or { ok: false, reason }.
+ *
+ * Fail-closed: any unexpected exception from tldts (or anything else in
+ * here) is caught and treated as a rejection, never as a pass-through -
+ * a rule this code cannot confidently classify must never be written,
+ * because a write that slips through unclassified could become a
+ * silent ALLOW later.
+ */
+function validateDomainRuleInput(rawDomain, allowSubdomains) {
+  try {
+    if (typeof rawDomain !== 'string' || !rawDomain.trim()) {
+      return { ok: false, reason: 'empty' };
+    }
+    const trimmed = rawDomain.trim();
+    for (const [pattern, reason] of REJECTED_RAW_DOMAIN_PATTERNS) {
+      if (pattern.test(trimmed)) return { ok: false, reason };
+    }
+
+    const host = canonicalizeAdminDomainInput(trimmed);
+    if (!host) return { ok: false, reason: 'malformed' };
+    if (isIpLiteralHost(host)) return { ok: false, reason: 'ip_literal' };
+    if (!isValidDomainLabel(host)) return { ok: false, reason: 'malformed' };
+
+    const parsed = tldts.parse(host, { allowPrivateDomains: true });
+    if (parsed.isIp) return { ok: false, reason: 'ip_literal' };
+    // domain === null means the input IS a public/private suffix boundary
+    // with nothing registrable beneath it (github.io, co.uk, blogspot.com,
+    // appspot.com, or an unrecognized bare TLD) - there is no safe way to
+    // scope a rule to "everyone on this shared host", so it's rejected
+    // unconditionally, regardless of allowSubdomains.
+    if (!parsed.domain) return { ok: false, reason: 'public_suffix_only' };
+
+    if (allowSubdomains && parsed.domain !== host) {
+      // Stricter check for the wildcard-granting case: allowSubdomains is
+      // only safe at the true registrable-domain boundary (example.com),
+      // never on an already-narrower subdomain (mail.example.com) - a
+      // wildcard grant below the registrable domain doesn't correspond to
+      // "this business's whole domain" the way it does at the boundary,
+      // and only adds ambiguity.
+      return { ok: false, reason: 'allow_subdomains_requires_registrable_domain' };
+    }
+
+    return { ok: true, host };
+  } catch {
+    return { ok: false, reason: 'validation_error' };
+  }
+}
+
+/**
+ * Boundary-aware coverage check: does `ruleDomain` (as configured, with
+ * `allowSubdomains`) cover `host`? Exact match always covers; a subdomain
+ * only covers when allowSubdomains is set, and only via a real label
+ * boundary (a leading '.' before ruleDomain) - never a bare substring/
+ * suffix match, which is what would wrongly let "badexample.com" or
+ * "example.com.evil.com" match a rule for "example.com".
+ *
+ * This mirrors getBrowserDomainForHost's SQL predicate exactly (see
+ * db.js) and is used as a defense-in-depth re-check in evaluateDomain:
+ * a row fetched from the database is never trusted for an ALLOW/BLOCK
+ * decision without this pure function independently confirming it
+ * actually covers the host being evaluated.
+ */
+function domainCovers(host, ruleDomain, allowSubdomains) {
+  if (host === ruleDomain) return true;
+  if (!allowSubdomains) return false;
+  return host.endsWith(`.${ruleDomain}`);
+}
+
 /**
  * Shapes the response object the Android client is contractually
  * guaranteed (see /docs/server-api-contract.md). `expiresAt` is an ISO
@@ -138,7 +263,15 @@ async function evaluateDomain({ db, host, url, deviceId }) {
   }
 
   const globalRule = await db.getBrowserDomainForHost(host);
-  if (globalRule && globalRule.decision !== DECISIONS.REVIEW) {
+  // Defense-in-depth: never trust the database row alone for an ALLOW/BLOCK
+  // decision. domainCovers() independently re-derives whether this rule
+  // actually covers `host` under the same boundary-aware rules the SQL
+  // query is supposed to enforce - if a future SQL change ever regressed
+  // that boundary-safety, this catches it here rather than silently
+  // granting a wrong decision. A rule that fails this re-check is treated
+  // exactly like "no rule at all" (falls through to REVIEW below).
+  if (globalRule && globalRule.decision !== DECISIONS.REVIEW &&
+      domainCovers(host, globalRule.domain, globalRule.allowSubdomains)) {
     return buildDecisionResponse({
       decision: globalRule.decision,
       domain: globalRule.domain,
@@ -172,4 +305,6 @@ module.exports = {
   isForbiddenScheme,
   buildDecisionResponse,
   evaluateDomain,
+  validateDomainRuleInput,
+  domainCovers,
 };

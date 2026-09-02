@@ -1249,18 +1249,24 @@ app.get('/api/browser/domains', requireAdmin, wrap(async (req, res) => {
 }));
 
 app.post('/api/browser/domains', requireAdmin, wrap(async (req, res) => {
-  const host = browserPolicy.normalizeHost(req.body && req.body.domain);
-  if (!browserPolicy.isValidDomainLabel(host)) {
-    return res.status(400).json({ error: 'domain must be a valid hostname' });
-  }
   const decision = req.body.decision;
   if (!Object.values(browserPolicy.DECISIONS).includes(decision)) {
     return res.status(400).json({ error: 'decision must be one of ALLOW, BLOCK, REVIEW' });
   }
+  const allowSubdomains = req.body.allowSubdomains === true;
+  // Public Suffix / shared-hosting hardening (Phase 1.1) - see
+  // browserPolicy.validateDomainRuleInput's own doc for why a bare
+  // "github.io"/"co.uk"/"blogspot.com" style rule, or allowSubdomains on
+  // anything narrower than the true registrable domain, is rejected here
+  // rather than silently accepted.
+  const validation = browserPolicy.validateDomainRuleInput(req.body && req.body.domain, allowSubdomains);
+  if (!validation.ok) {
+    return res.status(400).json({ error: `invalid domain: ${validation.reason}` });
+  }
   const saved = await db.upsertBrowserDomain({
-    domain: host,
+    domain: validation.host,
     decision,
-    allowSubdomains: req.body.allowSubdomains === true,
+    allowSubdomains,
     category: typeof req.body.category === 'string' ? req.body.category : null,
     riskScore: typeof req.body.riskScore === 'number' ? req.body.riskScore : null,
     confidence: typeof req.body.confidence === 'number' ? req.body.confidence : null,
@@ -1285,6 +1291,25 @@ app.post('/api/browser/requests/:id/resolve', requireAdmin, wrap(async (req, res
   }
   if (scope === 'DEVICE' && !req.body.deviceId) {
     return res.status(400).json({ error: 'deviceId is required when scope is DEVICE' });
+  }
+  if (scope === 'GLOBAL') {
+    // Same Public Suffix hardening as POST /api/browser/domains, applied
+    // BEFORE resolving - a request's domain always originated from a real
+    // navigation host (see evaluateDomain), but that only guarantees valid
+    // syntax/non-IP, not that it's safe to grant as a global rule (e.g. a
+    // customer could have navigated to the bare "github.io" itself).
+    // allowSubdomains is never set via this path (resolveBrowserRequest's
+    // GLOBAL branch always writes false), so validated as false here too.
+    const domain = await db.getPendingBrowserRequestDomain(req.params.id);
+    if (!domain) {
+      return res.status(404).json({ error: 'request not found or already resolved' });
+    }
+    const validation = browserPolicy.validateDomainRuleInput(domain, false);
+    if (!validation.ok) {
+      return res.status(400).json({
+        error: `cannot resolve globally, domain failed validation: ${validation.reason}`,
+      });
+    }
   }
   const result = await db.resolveBrowserRequest(req.params.id, {
     scope,

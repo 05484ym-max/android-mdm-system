@@ -1,7 +1,7 @@
 # Filtered Browser — Server API Contract
 
 Owner: Claude (Backend / Admin / Worker)
-Status: Phase 1 IMPLEMENTED (foundations only — see Known Phase 1 Limitations)
+Status: Phase 1 + Phase 1.1 (hardening) IMPLEMENTED (foundations only — see Known Phase 1 Limitations)
 Branch: `filtered-browser-server`
 
 This document describes what the server actually guarantees to the Android
@@ -177,6 +177,13 @@ Directly sets (or updates) the global decision for a domain — bypasses the
 request queue entirely (e.g. for pre-seeding a known-good/known-bad list).
 Bumps that domain's `decisionVersion` and the global `policyVersion`.
 
+**As of Phase 1.1**, `domain` is validated before being written — see
+"Domain rule validation" below. An invalid domain returns:
+```json
+{ "error": "invalid domain: <reason>" }
+```
+with HTTP 400 and never reaches the database.
+
 ```
 GET  /api/browser/requests
 ```
@@ -193,6 +200,67 @@ for one device (writes a `browser_device_overrides` row) — done in a single
 transaction, so a crash mid-way never leaves a request marked resolved
 without the decision actually having been applied. Returns 404 if the
 request was already resolved or doesn't exist.
+
+**As of Phase 1.1**, `scope: "GLOBAL"` also runs the request's stored
+domain through the same validation as `POST /api/browser/domains` *before*
+resolving — a request whose domain fails validation (e.g. it's a bare
+shared-hosting boundary like `github.io`) returns HTTP 400 and is left
+**PENDING**, not silently resolved:
+```json
+{ "error": "cannot resolve globally, domain failed validation: <reason>" }
+```
+`scope: "DEVICE"` is not affected — per-device overrides never carry
+`allowSubdomains` (see the data model), so the Public Suffix risk this
+closes doesn't apply there.
+
+## Domain rule validation (Phase 1.1)
+
+Every domain written into `browser_domains` — via `POST /api/browser/domains`
+directly, or via resolving a request with `scope: "GLOBAL"` — passes through
+`browserPolicy.validateDomainRuleInput(domain, allowSubdomains)` first.
+**This does not change the `ALLOW`/`BLOCK`/`REVIEW` vocabulary or any
+response field** — it only decides whether an admin-submitted rule is
+accepted at write time. Rejection reasons (the `<reason>` in the 400 body
+above):
+
+| Reason | Meaning |
+|---|---|
+| `empty` | No domain given |
+| `contains_whitespace` | Domain string contains whitespace |
+| `contains_scheme` | Domain includes `://` (a full URL was submitted, not a bare host) |
+| `contains_path_or_query` | Domain includes `/`, `?`, or `#` |
+| `contains_userinfo` | Domain includes `@` |
+| `contains_wildcard` | Domain includes a manual `*` (wildcards are expressed via `allowSubdomains`, never a literal `*` label) |
+| `contains_port_or_invalid_char` | Domain includes `:` (a port, or a stray colon) |
+| `malformed` | Doesn't parse as a valid hostname at all |
+| `ip_literal` | Domain is a bare IPv4/IPv6 literal |
+| `public_suffix_only` | Domain **is** a public/private Public-Suffix-List boundary with nothing registrable beneath it (`github.io`, `co.uk`, `blogspot.com`, `appspot.com`, …) — rejected unconditionally, regardless of `allowSubdomains` |
+| `allow_subdomains_requires_registrable_domain` | `allowSubdomains: true` was requested on a domain narrower than its own true registrable domain (e.g. `mail.example.com` instead of `example.com`) |
+| `validation_error` | An unexpected internal failure during validation (e.g. the Public Suffix List library threw) — **fail-closed: treated as a rejection, never as a pass-through** |
+
+Two guarantees this closes, concretely:
+1. **No accidental shared-hosting wildcard.** `ALLOW github.io +
+   allowSubdomains=true` can never be written — it would otherwise approve
+   every GitHub Pages user's site, not the one the admin actually meant.
+   The Public Suffix List (via the `tldts` library, `allowPrivateDomains:
+   true` so GitHub Pages/Blogspot/App Engine-style *private* PSL entries are
+   honored, not just ICANN TLDs) is the source of truth for where that
+   boundary is — never a hand-rolled list, since the PSL changes over time.
+2. **One canonical representation per real site.** Admin input is
+   normalized through the same ASCII/Punycode host-parsing Node's `URL`
+   already applies to real navigation hosts (see `parseNavigationUrl`)
+   before it's validated or stored — a Unicode domain and its Punycode
+   equivalent, mixed case, and a trailing dot all collapse to the exact
+   same `browser_domains.domain` value, so the same real-world site can
+   never end up as two different rows.
+
+Subdomain **matching** (at `/browser/check` time, read-only, no PSL lookup
+involved) is boundary-aware for the same reason: `sub.example.com` matches
+a rule for `example.com` with `allowSubdomains: true` only via a genuine
+label boundary (host ends with `.example.com`), never a bare substring —
+`badexample.com` and `example.com.evil.com` never match a rule for
+`example.com`. See `browserPolicy.domainCovers`, used as an independent
+defense-in-depth re-check on every database read, not only relied on in SQL.
 
 ## Data model (Postgres)
 

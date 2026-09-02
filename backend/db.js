@@ -1023,6 +1023,18 @@ async function listPendingBrowserRequests() {
   }));
 }
 
+/** Peeks at a pending request's domain without resolving it - lets the
+ * caller (index.js) run Public Suffix / rule validation BEFORE committing
+ * to resolve it as GLOBAL, so an invalid target rejects cleanly with the
+ * request left PENDING instead of silently writing an unsafe global rule. */
+async function getPendingBrowserRequestDomain(id) {
+  const { rows } = await pool.query(
+    `SELECT domain FROM browser_requests WHERE id = $1 AND status = 'PENDING'`,
+    [id],
+  );
+  return rows[0] ? rows[0].domain : null;
+}
+
 /**
  * Resolves a PENDING request either globally (writes/updates browser_domains)
  * or for one device (writes browser_device_overrides), and bumps the global
@@ -1145,4 +1157,5 @@ module.exports = {
   resolveBrowserRequest,
   getBrowserPolicyVersion,
   logBrowserDecision,
+  getPendingBrowserRequestDomain,
 };

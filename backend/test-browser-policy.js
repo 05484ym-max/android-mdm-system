@@ -109,4 +109,187 @@ check('buildDecisionResponse omits confidence/riskScore when not given', () => {
   assert.ok(!('riskScore' in res));
 });
 
+// ---------- Phase 1.1: boundary-aware subdomain matching (domainCovers) ----------
+
+check('domainCovers: PASS - exact match', () => {
+  assert.strictEqual(bp.domainCovers('example.com', 'example.com', false), true);
+});
+
+check('domainCovers: PASS - subdomain covered when allowSubdomains=true', () => {
+  assert.strictEqual(bp.domainCovers('sub.example.com', 'example.com', true), true);
+});
+
+check('domainCovers: BLOCK - subdomain NOT covered when allowSubdomains=false', () => {
+  assert.strictEqual(bp.domainCovers('sub.example.com', 'example.com', false), false);
+});
+
+check('domainCovers: NO MATCH - sibling-looking domain is not a substring match', () => {
+  assert.strictEqual(bp.domainCovers('badexample.com', 'example.com', true), false);
+});
+
+check('domainCovers: NO MATCH - a domain that merely ends with the rule string', () => {
+  // example.com.evil.com genuinely IS a different, attacker-controlled
+  // registrable domain (evil.com) - it must never match a rule for
+  // example.com just because the string "example.com" appears as a prefix.
+  assert.strictEqual(bp.domainCovers('example.com.evil.com', 'example.com', true), false);
+});
+
+check('domainCovers: deep subdomain still covered under allowSubdomains=true', () => {
+  assert.strictEqual(bp.domainCovers('a.b.example.com', 'example.com', true), true);
+});
+
+// ---------- Phase 1.1: admin rule write validation (validateDomainRuleInput) ----------
+
+check('validateDomainRuleInput: PASS - plain registrable domain', () => {
+  const r = bp.validateDomainRuleInput('example.com', false);
+  assert.deepStrictEqual(r, { ok: true, host: 'example.com' });
+});
+
+check('validateDomainRuleInput: PASS - allowSubdomains at the true registrable boundary', () => {
+  const r = bp.validateDomainRuleInput('example.com', true);
+  assert.strictEqual(r.ok, true);
+});
+
+check('validateDomainRuleInput: PASS - a specific narrow subdomain without allowSubdomains', () => {
+  const r = bp.validateDomainRuleInput('sub.example.com', false);
+  assert.strictEqual(r.ok, true);
+});
+
+check('validateDomainRuleInput: REJECT - allowSubdomains on a narrower-than-registrable domain', () => {
+  const r = bp.validateDomainRuleInput('mail.example.com', true);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'allow_subdomains_requires_registrable_domain');
+});
+
+check('validateDomainRuleInput: REJECT - full URL with scheme', () => {
+  const r = bp.validateDomainRuleInput('https://example.com', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'contains_scheme');
+});
+
+check('validateDomainRuleInput: REJECT - domain with a path', () => {
+  const r = bp.validateDomainRuleInput('example.com/path', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'contains_path_or_query');
+});
+
+check('validateDomainRuleInput: REJECT - domain with an explicit port', () => {
+  const r = bp.validateDomainRuleInput('example.com:443', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'contains_port_or_invalid_char');
+});
+
+check('validateDomainRuleInput: REJECT - manual wildcard label', () => {
+  const r = bp.validateDomainRuleInput('*.example.com', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'contains_wildcard');
+});
+
+check('validateDomainRuleInput: REJECT - userinfo prefix', () => {
+  const r = bp.validateDomainRuleInput('user@example.com', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'contains_userinfo');
+});
+
+check('validateDomainRuleInput: REJECT - whitespace', () => {
+  const r = bp.validateDomainRuleInput('exa mple.com', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'contains_whitespace');
+});
+
+check('validateDomainRuleInput: REJECT - IP literal', () => {
+  const r = bp.validateDomainRuleInput('192.168.1.1', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'ip_literal');
+});
+
+check('validateDomainRuleInput: REJECT - empty/missing', () => {
+  assert.strictEqual(bp.validateDomainRuleInput('', false).ok, false);
+  assert.strictEqual(bp.validateDomainRuleInput(undefined, false).ok, false);
+  assert.strictEqual(bp.validateDomainRuleInput(null, false).ok, false);
+});
+
+// ---------- Phase 1.1: Public Suffix / shared-hosting boundary rejection ----------
+
+check('validateDomainRuleInput: REJECT - bare ICANN public suffix (co.uk)', () => {
+  const r = bp.validateDomainRuleInput('co.uk', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'public_suffix_only');
+});
+
+check('validateDomainRuleInput: REJECT - bare private-suffix shared host (github.io)', () => {
+  const r = bp.validateDomainRuleInput('github.io', false);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'public_suffix_only');
+  // Also rejected even if the admin tried to pair it with allowSubdomains -
+  // that combination is exactly the dangerous case this hardening exists
+  // to close (ALLOW github.io + allowSubdomains=true would approve every
+  // GitHub Pages user site).
+  assert.strictEqual(bp.validateDomainRuleInput('github.io', true).ok, false);
+});
+
+check('validateDomainRuleInput: REJECT - bare private-suffix shared host (blogspot.com)', () => {
+  assert.strictEqual(bp.validateDomainRuleInput('blogspot.com', false).ok, false);
+});
+
+check('validateDomainRuleInput: REJECT - bare private-suffix shared host (appspot.com)', () => {
+  assert.strictEqual(bp.validateDomainRuleInput('appspot.com', false).ok, false);
+});
+
+check('validateDomainRuleInput: PASS - one specific user page under a shared host is fine', () => {
+  // someuser.github.io IS a real, specific, individually-approvable site -
+  // only the bare shared-hosting boundary itself is rejected, not every
+  // page hosted on it.
+  const r = bp.validateDomainRuleInput('someuser.github.io', false);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.host, 'someuser.github.io');
+});
+
+// ---------- Phase 1.1: IDN / Punycode canonical equivalence ----------
+
+check('validateDomainRuleInput: Unicode and Punycode forms of the same domain canonicalize identically', () => {
+  const unicode = bp.validateDomainRuleInput('münchen.de', false);
+  const punycode = bp.validateDomainRuleInput('xn--mnchen-3ya.de', false);
+  assert.strictEqual(unicode.ok, true);
+  assert.strictEqual(punycode.ok, true);
+  assert.strictEqual(unicode.host, punycode.host);
+});
+
+check('validateDomainRuleInput: uppercase and trailing dot canonicalize the same as plain lowercase', () => {
+  const plain = bp.validateDomainRuleInput('example.com', false);
+  const upper = bp.validateDomainRuleInput('EXAMPLE.COM', false);
+  const dotted = bp.validateDomainRuleInput('example.com.', false);
+  assert.strictEqual(upper.host, plain.host);
+  assert.strictEqual(dotted.host, plain.host);
+});
+
+// ---------- Phase 1.1: fail-closed under garbage/unexpected input ----------
+// "If normalization/PSL validation throws or fails, ALLOW must never be
+// accepted" - proven here by feeding validateDomainRuleInput inputs a real
+// admin form could never send cleanly, and asserting it always returns a
+// plain rejection object rather than throwing (which would 500 the request,
+// or worse, some untested code path around it treating a thrown error as
+// permissive).
+
+check('validateDomainRuleInput: never throws and never accepts non-string input', () => {
+  for (const garbage of [123, {}, [], true, NaN, () => {}]) {
+    let result;
+    assert.doesNotThrow(() => { result = bp.validateDomainRuleInput(garbage, false); });
+    assert.strictEqual(result.ok, false);
+  }
+});
+
+check('validateDomainRuleInput: never throws on pathological strings', () => {
+  const pathological = [' ', 'a'.repeat(10000), '....', '...com', String.fromCharCode(0, 1, 2), '中文.com'];
+  for (const input of pathological) {
+    let result;
+    assert.doesNotThrow(() => { result = bp.validateDomainRuleInput(input, false); });
+    assert.strictEqual(typeof result.ok, 'boolean');
+    // Whatever the verdict, a garbage/edge-case string must never be
+    // silently treated as a safe rule target without at least going
+    // through real validation - a thrown-and-uncaught exception would be
+    // the only way that could happen, which is exactly what this test rules out.
+  }
+});
+
 console.log(`\n${passed} passed, 0 failed`);
