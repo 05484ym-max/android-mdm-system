@@ -5,6 +5,74 @@ Owner: Claude
 
 ## DONE
 
+**Phase 2.2 (real admin-panel UI end-to-end verification), this update:**
+- Read GPT's docs fresh from `filtered-browser-client` (still Phase 0A —
+  code + visual foundation complete, 21/21 pure Kotlin tests pass, Android
+  build + physical-device bypass matrix still pending; no drift, no
+  server-impacting change) and my own `server-progress.md`/
+  `server-api-contract.md` before starting.
+- Verified real Chromium is usable here (`/opt/pw-browsers`, per this
+  environment's pre-installed Playwright setup) and installed the
+  `playwright` npm package (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` avoided a
+  redundant browser download) as a new **devDependency** — test tooling
+  only, not shipped in the production `dependencies` list.
+- New `backend/test-admin-ui-e2e.js`: drives the real admin panel
+  (`admin-panel/index.html` + `browser.css`/`browser.js`, served by the
+  real `index.js`) with a real headless Chromium, against the same real
+  Postgres test database as Phase 2.1. Auto-accepts every native
+  `confirm()`/`alert()` dialog (capturing its text for assertions, exactly
+  like a real admin clicking through) and tracks both real uncaught
+  page-script exceptions and console-error noise separately, since the
+  suite's own negative-path tests deliberately trigger 401/404/400
+  responses that Chromium logs as console errors regardless of whether the
+  page handled them correctly — that's expected, not a bug signal.
+- Covered, all against the real running UI: login/logout, tab + sub-tab
+  navigation (including that the 5 pre-existing unrelated tabs still work
+  — no regression from this project's admin-panel edits), add/edit/search/
+  filter/delete a domain rule, the `allowSubdomains` confirmation, audit-
+  history expansion, the full Requests workflow seeded through **real**
+  `POST /api/devices/:deviceId/browser/check` calls (not seeded directly
+  in the DB) — request appearance with correct counts, the GLOBAL badge,
+  expandable per-device list, DEVICE ALLOW leaving a sibling device
+  pending, DEVICE BLOCK closing a fully-answered request, GLOBAL ALLOW/
+  BLOCK answering every still-waiting device without ever overwriting one
+  already individually resolved — and three failure-path cases (a stale/
+  already-resolved action failing visibly rather than double-mutating, a
+  domain rejected by validation, and a lost session correctly re-showing
+  the login screen instead of silently failing).
+- **One real bug-hunting round, zero real product bugs found.** The first
+  full run produced 8 failing tests; every one traced back to the *test
+  script itself*, not to `admin-panel/**` or `backend/**`:
+  1. `e2e-wild.itest.com` was used to test `allowSubdomains=true`, but its
+     real registrable domain (per the actual Public Suffix List) is
+     `itest.com`, not itself — Phase 1.1's validation correctly rejected
+     it. This was proof the validation works, not a bug; fixed by using
+     `e2e-wild.com` (a genuine two-label registrable domain) instead.
+  2. That single wrong assertion then threw before its own cleanup ran,
+     leaving the `allowSubdomains` checkbox checked, the domain search
+     box filled, and the decision filter set to `BLOCK` for every
+     subsequent test — a classic test-isolation gap, not a product issue.
+     Fixed by wrapping every UI-state-mutating test step in `try/finally`
+     so cleanup always runs, pass or fail.
+  3. A 401-expiry test assumed the login screen only appears after a form
+     submit; in reality, merely switching to the Domains sub-tab already
+     triggers a data fetch that 401s and shows it — the test's own
+     `page.click()` on the submit button then timed out because the login
+     overlay was already covering the page. Fixed by asserting at the
+     real point the login screen appears.
+  4. A blanket "no console errors" check was too broad: this suite's own
+     negative-path tests (D/G) intentionally trigger 401/404/400
+     responses, which Chromium logs as `console.error` regardless of
+     whether the page handled them correctly. Split into `pageerror`
+     (real uncaught exceptions — asserted on) vs. `console.error`
+     (informational only, printed but never fails the suite).
+  All four fixes are in `backend/test-admin-ui-e2e.js` only — no file
+  under `admin-panel/**` or `backend/db.js`/`index.js`/`browserPolicy.js`
+  was touched, because nothing there was actually wrong.
+- No `/client/**` file touched. No change to `docs/server-api-contract.md`
+  this phase — no externally observable server behavior changed (only
+  test tooling was added).
+
 **Phase 2.1 (real PostgreSQL integration verification), this update:**
 - Read GPT's docs fresh from `filtered-browser-client` (still Phase 0A, not
   VERIFIED — 21/21 pure Kotlin policy tests pass, Android build + physical-
@@ -146,8 +214,42 @@ Owner: Claude
 
 ## TESTED
 
-All real, run-every-time (`node backend/test-browser-policy.js`), no
-framework needed:
+**Phase 2.2 — real admin-panel UI E2E, this update.**
+
+Exact environment: real headless Chromium (pre-installed in this sandbox
+under `/opt/pw-browsers`, launched via the `playwright` package, resolved
+executable path logged at the top of the run rather than hardcoded to one
+version), driving the real `admin-panel/index.html` served by a real
+running `backend/index.js`, backed by the same real local PostgreSQL 16
+`browser_test` database used in Phase 2.1. Setup/run commands documented
+at the top of `backend/test-admin-ui-e2e.js`.
+
+- **E2E tests: 38/38 passed** (after fixing 4 test-harness bugs found on
+  the first run — see DONE for the full breakdown; all four were in the
+  test script itself, not in `admin-panel/**` or `backend/**`).
+- **Real product bugs found in the admin panel: 0.**
+- Zero uncaught JavaScript exceptions during the entire run (tracked via
+  Playwright's `pageerror` event, asserted at the end). The suite's own
+  negative-path tests generate expected `console.error` noise (Chromium
+  logging its own failed 401/404/400 fetches) — tracked separately as
+  informational, never asserted on.
+- Confirmed unchanged, run immediately before and after this phase's work
+  (Section H "regression" requirement): **49/49 unit tests**, **46/46
+  PostgreSQL integration tests** — identical counts to Phase 2.1, since no
+  source file besides the new E2E test itself was touched.
+- **What remains unverified**: a genuine 500/backend-failure UI path (no
+  safe way found to force one through the real UI without corrupting
+  shared server state for later tests in the same run — documented
+  in-line in the test's own output rather than skipped silently; the
+  underlying "never fabricate success on a server failure" guarantee is
+  already proven at the HTTP layer in `test-db-integration.js`, and
+  `browser.js`'s fetch error handling was additionally confirmed by direct
+  code reading). Also unverified: real mobile/touch browsers, any browser
+  other than Chromium, and the actual Render production deployment (this
+  suite only ever runs against a disposable local test database).
+
+**Phase 2.1 (PostgreSQL integration), unit tests (pure), and earlier
+phases — all real, run-every-time, no framework needed:**
 - Syntax: `node --check` on `db.js`, `index.js`, `browserPolicy.js` — pass.
 - 44/44 unit tests pass, covering:
   - Boundary-aware matching (`domainCovers`): exact, subdomain with/without
@@ -248,10 +350,12 @@ report was written:
 ## CLIENT IMPACT
 
 None on the wire contract — `ALLOW`/`BLOCK`/`REVIEW` and every JSON field
-GPT's client depends on are unchanged. Phase 2.1 added test coverage only —
-`db.js`, `index.js`, and `browserPolicy.js` were not modified at all this
-phase, only `backend/test-db-integration.js` was added. GPT does not need
-to change anything in `/client/**` for this update.
+GPT's client depends on are unchanged. Phase 2.2 added test coverage only —
+`db.js`, `index.js`, `browserPolicy.js`, and every file under
+`admin-panel/**` are byte-for-byte unchanged from Phase 2.1; only
+`backend/test-admin-ui-e2e.js` (and `backend/package.json`'s
+devDependencies, for `playwright`) were added. GPT does not need to change
+anything in `/client/**` for this update.
 
 ## KNOWN LIMITATIONS
 
@@ -292,6 +396,15 @@ to change anything in `/client/**` for this update.
 - **Phase 2.1**: the admin-panel UI itself is still not exercised by any
   test — there's no browser/DOM environment available here. Everything
   verified this phase is backend (API + database) behavior.
+- **Phase 2.2**: the admin-panel UI gap above is now closed (real headless
+  Chromium, real clicks/forms, 38/38 passed) but three things remain
+  unverified: a genuine HTTP 500 reaching the UI (no safe way to force one
+  without corrupting shared server state — the underlying fail-safe
+  guarantee is already proven at the HTTP layer in the Phase 2.1 suite, and
+  `browser.js`'s fetch-error handling was confirmed by code review only);
+  real mobile browsers or non-Chromium desktop browsers; and the actual
+  Render production deployment (this suite still runs only against a
+  disposable local `browser_test` database, never real customer data).
 
 ## NEXT
 
