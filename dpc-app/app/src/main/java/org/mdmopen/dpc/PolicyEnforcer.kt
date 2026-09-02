@@ -70,6 +70,31 @@ class PolicyEnforcer(private val context: Context) {
         val noLauncherCandidates = mutableListOf<NoLauncherCandidate>()
         var systemSkipped = 0
 
+        // Migration cleanup: older DPC builds blocked apps with
+        // setPackagesSuspended(). Newer builds use setApplicationHidden(), but
+        // Android keeps the old suspended bit until it is explicitly cleared.
+        // That leaves recovered apps visible but greyed out. Clear legacy
+        // suspension for every currently-approved and essential package before
+        // applying today's hidden-state policy.
+        val legacyRecovered = mutableSetOf<String>()
+        val recoveryPackages = (allowed + essential)
+            .filter { it != context.packageName }
+            .distinct()
+        if (recoveryPackages.isNotEmpty()) {
+            try {
+                val failedRecovery = dpm.setPackagesSuspended(
+                    admin,
+                    recoveryPackages.toTypedArray(),
+                    false
+                ).toSet()
+                legacyRecovered += recoveryPackages.filter { it !in failedRecovery }
+            } catch (_: Exception) {
+                // Hidden-state enforcement below still runs. A package that
+                // cannot be addressed here will simply remain reported by the
+                // normal enforcement result instead of crashing the sync.
+            }
+        }
+
         // Recover approved packages directly from DevicePolicyManager before
         // relying on PackageManager enumeration. On some Samsung builds a
         // package hidden by Device Owner can disappear from
@@ -144,7 +169,7 @@ class PolicyEnforcer(private val context: Context) {
 
         return EnforcementResult(
             suspended = toSuspend - failed.toSet(),
-            unsuspended = (toUnsuspend + directlyUnhidden).distinct() - failed.toSet(),
+            unsuspended = (toUnsuspend + directlyUnhidden + legacyRecovered).distinct() - failed.toSet(),
             failed = failed,
             systemAppsSkipped = systemSkipped,
             kioskEnabled = policy.kioskEnabled,
