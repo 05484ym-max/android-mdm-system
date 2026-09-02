@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.net.http.SslError
 import android.webkit.ClientCertRequest
 import android.webkit.HttpAuthHandler
+import android.webkit.SafeBrowsingResponse
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -46,6 +47,20 @@ class SecureWebViewClient(
         } else {
             BlockedResponse.empty()
         }
+    }
+
+    override fun onSafeBrowsingHit(
+        view: WebView?,
+        request: WebResourceRequest?,
+        threatType: Int,
+        callback: SafeBrowsingResponse?
+    ) {
+        // Never allow WebView's default/interstitial behavior to become a
+        // policy bypass. A Safe Browsing hit is an unconditional fail-closed
+        // result for this managed browser.
+        callback?.backToSafety(true)
+        view?.stopLoading()
+        onBlocked(request?.url?.toString().orEmpty(), "safe_browsing_threat")
     }
 
     override fun onReceivedSslError(
