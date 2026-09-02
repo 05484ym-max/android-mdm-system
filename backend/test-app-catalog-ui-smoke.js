@@ -148,11 +148,13 @@ function resolveChromiumExecutable() {
       assert.ok(chipTexts.includes('תקשורת'));
     });
 
-    await test('each catalog tile shows a category select and a recommended toggle', async () => {
+    await test('each catalog tile shows a category select, a recommended toggle, and a sort-order input', async () => {
       const selects = await page.locator('[data-category-select]').count();
       const toggles = await page.locator('[data-recommended-toggle]').count();
+      const sortInputs = await page.locator('[data-sort-order]').count();
       assert.strictEqual(selects, 2);
       assert.strictEqual(toggles, 2);
+      assert.strictEqual(sortInputs, 2);
     });
 
     await test('search matches by category label ("תקשורת" narrows to the Play app only)', async () => {
@@ -195,6 +197,45 @@ function resolveChromiumExecutable() {
       await waitForText(() => toggleLocator.textContent(), '★ מומלצת');
       const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.smoke.playapp');
       assert.strictEqual(row.isRecommended, true);
+    });
+
+    await test('changing the sort-order input persists sortOrder via a real request', async () => {
+      const input = page.locator('[data-sort-order="com.smoke.legacy"]');
+      await input.fill('42');
+      await input.dispatchEvent('change');
+      await waitForText(async () => String(await input.inputValue()), '42');
+      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.smoke.legacy');
+      assert.strictEqual(row.sortOrder, 42);
+    });
+
+    await test('sort-order actually reorders the rendered catalog grid', async () => {
+      // Alphabetically "Smoke Legacy App" sorts before "Smoke Play App" -
+      // giving the Play app a lower sortOrder must visibly reverse that,
+      // proving the control drives real, observable ordering, not just a
+      // stored number nobody reads.
+      await page.locator('[data-sort-order="com.smoke.playapp"]').fill('1');
+      await page.locator('[data-sort-order="com.smoke.playapp"]').dispatchEvent('change');
+      await page.waitForSelector('#catalogList .catalog-tile', { timeout: 10000 });
+      const namesLocator = page.locator('#catalogList .catalog-name');
+      await waitForText(async () => (await namesLocator.allTextContents())[0], 'Smoke Play App');
+      const names = await namesLocator.allTextContents();
+      assert.deepStrictEqual(names, ['Smoke Play App', 'Smoke Legacy App']);
+    });
+
+    await test('an out-of-range sort-order value is rejected client-side and never reaches the server as a bad write', async () => {
+      const before = (await db.listAppsCatalog()).find(a => a.packageName === 'com.smoke.legacy').sortOrder;
+      // .catch(() => {}): if the CDP round-trip for dismissing this dialog
+      // is still in flight when the suite's final browser.close() runs, the
+      // accept() promise rejects with a "session closed" protocol error -
+      // an unhandled rejection that would otherwise crash the whole process
+      // well after this test's own assertions already passed.
+      page.once('dialog', d => { d.accept().catch(() => {}); });
+      const input = page.locator('[data-sort-order="com.smoke.legacy"]');
+      await input.fill('999999');
+      await input.dispatchEvent('change');
+      await page.waitForSelector('#catalogList .catalog-tile', { timeout: 10000 });
+      const after = (await db.listAppsCatalog()).find(a => a.packageName === 'com.smoke.legacy').sortOrder;
+      assert.strictEqual(after, before, 'an out-of-range value must never be written');
     });
 
     await test('org preview "מומלצות" count updates to reflect the toggle above', async () => {

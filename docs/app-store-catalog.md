@@ -119,9 +119,13 @@ this end-to-end — the mapping and storage logic are already fully tested.
 
 The existing "חנות אפליקציות" catalog card (unchanged tabs: "אפליקציות
 לכולם" / "הוספה ללקוח") gained, without any redesign:
-- An organization preview (`עדכונים` / `מומלצות` / `כל האפליקציות` counts,
-  plus a per-category count strip) — a plain read-only summary, not a fake
-  mobile emulator.
+- An organization preview (`נתוני גרסה זמינים` / `מומלצות` / `כל האפליקציות`
+  counts, plus a per-category count strip) — a plain read-only summary, not
+  a fake mobile emulator. Deliberately **not** labeled "עדכונים": a catalog
+  app having `playVersion` data does not mean any device needs to update it
+  - only the Android client can determine that, by comparing its own
+  locally installed version against this metadata. The admin panel never
+  claims an update count it cannot actually compute.
 - The search field (`חפש אפליקציה`) now also matches category (label or
   key), not just name/package.
 - Category filter chips (`הכל | תחבורה | תקשורת | ...`), matching the
@@ -129,22 +133,30 @@ The existing "חנות אפליקציות" catalog card (unchanged tabs: "אפל
 - Per-app (in "אפליקציות לכולם" mode only — the per-customer assignment
   view is unchanged): a category `<select>`, a small badge showing whether
   that category is `ידני`/`מ-Play`/`ברירת מחדל`, a "☆ סמן כמומלצת" /
-  "★ מומלצת" toggle, and a version-info line (`playVersion` +
-  `playUpdatedAt`, or "אין נתוני גרסה מ-Play").
+  "★ מומלצת" toggle, a numeric "סדר תצוגה" input (integer, 0–100000, no
+  drag-and-drop - saves on blur/Enter, same as a native `<input
+  type="number">`'s `change` event), and a version-info line (`playVersion`
+  + `playUpdatedAt`, or "אין נתוני גרסה מ-Play").
 
 All three writes (category, recommended, sort order) go through the new
 `POST /api/apps/:packageName/catalog-meta` endpoint — server-validated,
-never trusting the dropdown's value directly (see "Validation" below).
-Existing "add to catalog", "רענן אייקון" (icon refresh), "הוסף לכולם"
-(assign-all), Google Play search/add, and per-customer assignment are all
-unchanged.
+never trusting the dropdown/input value directly (see "Validation" below).
+The sort-order input also range-checks client-side before sending anything
+(matching the server's own `[0, 100000]` integer bound) so an obviously
+invalid value never even reaches the network - shows a visible `alert()`
+and reloads to the real server-held value either way. Existing "add to
+catalog", "רענן אייקון" (icon refresh), "הוסף לכולם" (assign-all), Google
+Play search/add, and per-customer assignment are all unchanged.
 
-Verified for real (`backend/test-app-catalog-ui-smoke.js`, 10/10 passed,
+Verified for real (`backend/test-app-catalog-ui-smoke.js`, 13/13 passed,
 real headless Chromium + real backend + real Postgres): org preview counts,
 category chips, search-by-category, category-filter-chip narrowing, a
-category dropdown change persisting as `MANUAL` with the correct badge, and
-a recommended-toggle click persisting `isRecommended` — all through the
-actual rendered UI, not just the API layer.
+category dropdown change persisting as `MANUAL` with the correct badge, a
+recommended-toggle click persisting `isRecommended`, a sort-order change
+persisting through a real request, that same change actually reordering
+the rendered grid (not just being stored inertly), and an out-of-range
+sort-order value being rejected client-side without ever reaching the
+server — all through the actual rendered UI, not just the API layer.
 
 ## API
 
@@ -290,11 +302,13 @@ a schema migration.
   update + validation, catalog data shape for admin search/filter, full
   sync payload shape, per-device allowlist isolation/no-leak, and
   regression of assign-all / per-device assignment / Play metadata refresh).
-- `backend/test-app-catalog-ui-smoke.js` — 10 real-browser (headless
+- `backend/test-app-catalog-ui-smoke.js` — 13 real-browser (headless
   Chromium) tests of the actual rendered admin UI: org preview counts,
-  category chips, search-by-category, category-filter narrowing, and both
-  write controls (category dropdown, recommended toggle) actually
-  persisting through the real UI.
+  category chips, search-by-category, category-filter narrowing, and all
+  three write controls (category dropdown, recommended toggle, sort-order
+  input) actually persisting through the real UI - including that a
+  sort-order change visibly reorders the rendered grid and that an
+  out-of-range value is rejected client-side.
 - `backend/test-db.js` (pre-existing) — re-run clean, unaffected.
 
 ## What remains unverified
