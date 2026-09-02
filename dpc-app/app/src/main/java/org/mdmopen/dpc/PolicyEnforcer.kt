@@ -298,6 +298,18 @@ class PolicyEnforcer(private val context: Context) {
         )
     }
 
+    /**
+     * Temporarily opens Developer options / ADB by clearing only the debugging
+     * restriction. No other policy is changed and Device Owner remains active.
+     *
+     * This is intentionally temporary: apply() always re-adds
+     * DISALLOW_DEBUGGING_FEATURES on the next normal policy sync.
+     */
+    fun openDebuggingUntilNextSync() {
+        check(isDeviceOwner()) { "Not device owner" }
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
+    }
+
     /** Also used as a local escape hatch from the admin screen. */
     fun disableKiosk() {
         dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
