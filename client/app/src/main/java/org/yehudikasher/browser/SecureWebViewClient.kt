@@ -13,7 +13,8 @@ import android.webkit.WebViewClient
 
 class SecureWebViewClient(
     private val policy: UrlPolicy,
-    private val onBlocked: (String, String) -> Unit
+    private val onBlocked: (String, String) -> Unit,
+    private val onTechnicalError: (String, String) -> Unit
 ) : WebViewClient() {
 
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -53,7 +54,7 @@ class SecureWebViewClient(
         error: SslError?
     ) {
         handler?.cancel()
-        onBlocked(error?.url.orEmpty(), "ssl_error")
+        onTechnicalError(error?.url.orEmpty(), "ssl_error")
     }
 
     override fun onReceivedHttpAuthRequest(
@@ -63,12 +64,12 @@ class SecureWebViewClient(
         realm: String?
     ) {
         handler?.cancel()
-        onBlocked(host.orEmpty(), "http_auth_blocked")
+        onTechnicalError(host.orEmpty(), "http_auth_blocked")
     }
 
     override fun onReceivedClientCertRequest(view: WebView?, request: ClientCertRequest?) {
         request?.cancel()
-        onBlocked(request?.host.orEmpty(), "client_cert_request_blocked")
+        onTechnicalError(request?.host.orEmpty(), "client_cert_request_blocked")
     }
 
     override fun onReceivedError(
@@ -78,23 +79,10 @@ class SecureWebViewClient(
     ) {
         if (request?.isForMainFrame == true) {
             view?.stopLoading()
-            onBlocked(request.url?.toString().orEmpty(), "main_frame_network_error")
+            onTechnicalError(request.url?.toString().orEmpty(), "main_frame_network_error")
             return
         }
         super.onReceivedError(view, request, error)
-    }
-
-    override fun onReceivedHttpError(
-        view: WebView?,
-        request: WebResourceRequest?,
-        errorResponse: WebResourceResponse?
-    ) {
-        if (request?.isForMainFrame == true) {
-            view?.stopLoading()
-            onBlocked(request.url?.toString().orEmpty(), "main_frame_http_error")
-            return
-        }
-        super.onReceivedHttpError(view, request, errorResponse)
     }
 
     private fun enforceNavigation(view: WebView?, rawUrl: String?): Boolean {
