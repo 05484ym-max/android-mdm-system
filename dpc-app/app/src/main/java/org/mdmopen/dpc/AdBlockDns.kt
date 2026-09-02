@@ -375,16 +375,31 @@ object AdBlockDns {
         // a genuinely broken DoT provider cannot strand the device for the
         // 15-minute periodic cadence. Any successful retry cancels rollback.
         var rapidRecovered = false
-        repeat(RAPID_CONFIRM_ATTEMPTS - 1) {
+        for (attempt in 1 until RAPID_CONFIRM_ATTEMPTS) {
             try {
                 Thread.sleep(RAPID_CONFIRM_DELAY_MS)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 return "בדיקת DNS: הופסקה"
             }
+
+            // Re-check basic connectivity on every rapid attempt. Network
+            // hand-offs can change underneath us between the first probe and
+            // this retry; if IP connectivity vanished, that is a network-loss
+            // event, not evidence against the DNS provider.
+            val retryIpOk = checkIpConnectivity()
+            if (!retryIpOk) {
+                p.edit()
+                    .putLong(KEY_LAST_CHECK_AT, System.currentTimeMillis())
+                    .putBoolean(KEY_LAST_DNS_OK, false)
+                    .putBoolean(KEY_LAST_DOT_OK, false)
+                    .apply()
+                return "בדיקת DNS: הקישוריות הבסיסית נעלמה בזמן האימות, לא נספר ככשל DNS"
+            }
+
             if (checkDnsResolution(ourControlledDomain(context))) {
                 rapidRecovered = true
-                return@repeat
+                break
             }
         }
 
@@ -397,6 +412,13 @@ object AdBlockDns {
                 .remove(KEY_FAILURE_REASON)
                 .apply()
             return "בדיקת DNS: התאושש לאחר אימות מהיר"
+        }
+
+        // One last IP probe immediately before treating the failure as DNS.
+        // This closes the race where connectivity disappears just after the
+        // final rapid retry but before rollback.
+        if (!checkIpConnectivity()) {
+            return "בדיקת DNS: אין עוד קישוריות בסיסית, rollback בוטל"
         }
 
         val failures = p.getInt(KEY_CONSECUTIVE_FAILURES, 0) + 1
