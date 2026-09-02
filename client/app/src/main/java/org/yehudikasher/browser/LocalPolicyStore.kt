@@ -3,9 +3,12 @@ package org.yehudikasher.browser
 object LocalPolicyStore {
     fun createPolicy(): UrlPolicy {
         val debugAllowlist = if (BuildConfig.DEBUG) {
-            setOf("example.com")
+            listOf(
+                LocalPolicyRule("example.com"),
+                LocalPolicyRule("example.org", allowSubdomains = true)
+            )
         } else {
-            emptySet()
+            emptyList()
         }
 
         return UrlPolicy(debugAllowlist)
