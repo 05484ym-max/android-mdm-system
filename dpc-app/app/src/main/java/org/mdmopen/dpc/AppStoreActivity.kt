@@ -289,15 +289,9 @@ class AppStoreActivity : Activity() {
         // it from the normal visible-package view.
         return try {
             val dpm = getSystemService(DevicePolicyManager::class.java)
-            if (!dpm.isDeviceOwnerApp(packageName = packageName)) {
-                // isDeviceOwnerApp() checks ownership of the target package,
-                // not whether this DPC owns the device, so don't use it here.
-                val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
-                dpm.isDeviceOwnerApp(this.packageName) &&
-                    dpm.isApplicationHidden(admin, packageName)
-            } else {
-                true
-            }
+            val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+            dpm.isDeviceOwnerApp(this.packageName) &&
+                dpm.isApplicationHidden(admin, packageName)
         } catch (_: Exception) {
             false
         }
