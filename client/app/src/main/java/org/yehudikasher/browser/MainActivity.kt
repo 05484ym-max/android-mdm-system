@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 
 class MainActivity : AppCompatActivity() {
 
@@ -133,9 +134,12 @@ class MainActivity : AppCompatActivity() {
             showBlocked("", "service_worker_hardening_failed")
         }
 
-        WebViewCompat.startSafeBrowsing(this) { success ->
-            if (!success) {
-                showBlocked("", "safe_browsing_init_failed")
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.START_SAFE_BROWSING)) {
+            @Suppress("DEPRECATION")
+            WebViewCompat.startSafeBrowsing(applicationContext) { success ->
+                if (!success) {
+                    showBlocked("", "safe_browsing_init_failed")
+                }
             }
         }
     }
