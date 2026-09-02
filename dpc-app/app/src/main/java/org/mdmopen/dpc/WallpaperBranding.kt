@@ -69,7 +69,10 @@ object WallpaperBranding {
     // wallpaper through getWallpaperFile() first (Samsung-friendly), keeps
     // home and lock originals separate, and never invents/replaces a
     // customer's wallpaper just to force the watermark.
-    private const val RECIPE_VERSION = 10
+    // v11 forces one clean re-apply after the diagnostic builds and verifies
+    // that compositing actually changes visible pixels before WallpaperManager
+    // is called. Design parameters are intentionally unchanged.
+    private const val RECIPE_VERSION = 11
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
@@ -165,10 +168,14 @@ object WallpaperBranding {
             val brandedHome = compositeEmblem(homeOriginal, emblem)
             val brandedLock = compositeEmblem(lockOriginal, emblem)
 
-            wm.setBitmap(brandedHome, null, true, WallpaperManager.FLAG_SYSTEM)
+            if (brandedHome.changedPixels == 0 || brandedLock.changedPixels == 0) {
+                return "Android ${Build.VERSION.RELEASE} · COMPOSITE_EMPTY H=${brandedHome.changedPixels}/${brandedHome.checkedPixels} L=${brandedLock.changedPixels}/${brandedLock.checkedPixels} · alphaMax=${sampleMaxAlpha(emblem)}"
+            }
+
+            wm.setBitmap(brandedHome.bitmap, null, true, WallpaperManager.FLAG_SYSTEM)
             val afterHomeId = wm.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
 
-            wm.setBitmap(brandedLock, null, true, WallpaperManager.FLAG_LOCK)
+            wm.setBitmap(brandedLock.bitmap, null, true, WallpaperManager.FLAG_LOCK)
             val afterLockId = wm.getWallpaperId(WallpaperManager.FLAG_LOCK)
 
             val homeChanged = afterHomeId != -1 && afterHomeId != beforeHomeId
@@ -184,7 +191,7 @@ object WallpaperBranding {
                 .putInt(KEY_RECIPE_VERSION, RECIPE_VERSION)
                 .commit()
 
-            return "Android ${Build.VERSION.RELEASE} · OK H:$beforeHomeId→$afterHomeId L:$beforeLockId→$afterLockId · src=$homeSource/$lockSource"
+            return "Android ${Build.VERSION.RELEASE} · OK H:$beforeHomeId→$afterHomeId L:$beforeLockId→$afterLockId · src=$homeSource/$lockSource · diff=${brandedHome.changedPixels}/${brandedLock.changedPixels} · alphaMax=${sampleMaxAlpha(emblem)}"
         } catch (e: Exception) {
             Log.w(TAG, "Could not brand the wallpaper", e)
             return "Android ${Build.VERSION.RELEASE} · ${e.javaClass.simpleName}: ${e.message}"
@@ -282,12 +289,19 @@ object WallpaperBranding {
         return bitmap
     }
 
+    private data class CompositeResult(
+        val bitmap: Bitmap,
+        val changedPixels: Int,
+        val checkedPixels: Int,
+    )
+
     /** Emblem sized to well under a third of the screen width, centered
      * horizontally, anchored in the upper third rather than filling it. */
-    private fun compositeEmblem(background: Bitmap, emblem: Bitmap): Bitmap {
-        val result = background.copy(Bitmap.Config.ARGB_8888, true) ?: return background
+    private fun compositeEmblem(background: Bitmap, emblem: Bitmap): CompositeResult {
+        val result = background.copy(Bitmap.Config.ARGB_8888, true) ?: background
         val canvas = Canvas(result)
 
+        // DO NOT change these values without explicit customer approval.
         val targetWidth = result.width * 0.30f
         val scale = targetWidth / emblem.width
         val targetHeight = emblem.height * scale
@@ -297,12 +311,51 @@ object WallpaperBranding {
 
         val destRect = RectF(left, top, left + targetWidth, top + targetHeight)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        // Watermark-level opacity, not a solid graphic sitting on top of the
-        // customer's own photo - it should read as a subtle mark, not get in
-        // the way of what's actually on their wallpaper.
+        // Watermark-level opacity requested by the customer.
         paint.alpha = 110
         canvas.drawBitmap(emblem, null, destRect, paint)
 
-        return result
+        // Verify the composition itself, not merely WallpaperManager IDs.
+        // This catches a fully-transparent/corrupt emblem or a draw that
+        // produced no visible pixel change before we blame Samsung.
+        val x = destRect.left.toInt().coerceIn(0, result.width - 1)
+        val y = destRect.top.toInt().coerceIn(0, result.height - 1)
+        val right = destRect.right.toInt().coerceIn(x + 1, result.width)
+        val bottom = destRect.bottom.toInt().coerceIn(y + 1, result.height)
+        val width = right - x
+        val height = bottom - y
+        val count = width * height
+
+        var changed = 0
+        if (count > 0) {
+            val before = IntArray(count)
+            val after = IntArray(count)
+            background.getPixels(before, 0, width, x, y, width, height)
+            result.getPixels(after, 0, width, x, y, width, height)
+            for (i in 0 until count) {
+                if (before[i] != after[i]) changed++
+            }
+        }
+
+        return CompositeResult(result, changed, count)
+    }
+
+    private fun sampleMaxAlpha(bitmap: Bitmap): Int {
+        if (bitmap.width <= 0 || bitmap.height <= 0) return 0
+        val stepX = (bitmap.width / 64).coerceAtLeast(1)
+        val stepY = (bitmap.height / 64).coerceAtLeast(1)
+        var maxAlpha = 0
+        var y = 0
+        while (y < bitmap.height) {
+            var x = 0
+            while (x < bitmap.width) {
+                val alpha = android.graphics.Color.alpha(bitmap.getPixel(x, y))
+                if (alpha > maxAlpha) maxAlpha = alpha
+                if (maxAlpha == 255) return 255
+                x += stepX
+            }
+            y += stepY
+        }
+        return maxAlpha
     }
 }
