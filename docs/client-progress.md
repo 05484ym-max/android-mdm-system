@@ -49,6 +49,7 @@ Status: PHASE 0A CODE + VISUAL FOUNDATION COMPLETE — Android build + physical-
 ## STATIC REVIEW UPDATE
 
 - Fixed a real Android compile-time callback mismatch in `MainActivity.kt`: `SecureWebViewClient` supplies `(url, reason)` for technical failures while `showTechnicalError` consumes only the reason. The client now adapts this explicitly with `{ _, reason -> showTechnicalError(reason) }`.
+- Fixed a static-review gap in `SecureWebViewClient.kt`: main-frame HTTP 4xx/5xx responses now explicitly trigger the technical-error fail-closed path via `onReceivedHttpError`, instead of relying on network-error callbacks that do not cover HTTP status errors.
 - This was found by source review before the first full Android build.
 - Phase 0A remains NOT VERIFIED until a real Gradle build and physical-device bypass matrix pass.
 
