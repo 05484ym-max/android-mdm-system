@@ -389,20 +389,32 @@ class MainActivity : Activity() {
         stateLabel.setTextColor(Color.parseColor("#4B6B45"))
         guidanceLabel.text = "קורא מידע מהמכשיר. אין לנתק את הכבל."
         ioExecutor.execute {
-            val usbManager = getSystemService(USB_SERVICE) as UsbManager
-            val transport = usbTransportManager.classifyTransport(device)
-            val evidence = when (transport) {
-                UsbTransportGuess.ADB -> scanViaAdb(usbManager, device)
-                UsbTransportGuess.FASTBOOT -> scanViaFastboot(usbManager, device)
-                else -> null
-            }
-            if (evidence == null) {
+            // Real USB/ADB/Fastboot I/O throws constantly in the field - a cable pulled
+            // mid-scan, a timeout, a malformed frame (AdbFrameHeader.decode()'s require()
+            // calls). This runs on a background executor thread, so an exception that
+            // escapes it is an UNCAUGHT exception on that thread - which crashes the whole
+            // app by default, not just this one scan. Never let a bad scan take down the app.
+            try {
+                val usbManager = getSystemService(USB_SERVICE) as UsbManager
+                val transport = usbTransportManager.classifyTransport(device)
+                val evidence = when (transport) {
+                    UsbTransportGuess.ADB -> scanViaAdb(usbManager, device)
+                    UsbTransportGuess.FASTBOOT -> scanViaFastboot(usbManager, device)
+                    else -> null
+                }
+                if (evidence == null) {
+                    runOnUiThread {
+                        Toast.makeText(this, "לא ניתן היה לסרוק את המכשיר במצב הנוכחי", Toast.LENGTH_SHORT).show()
+                        refreshState()
+                    }
+                } else {
+                    submitOrQueue(evidence)
+                }
+            } catch (t: Throwable) {
                 runOnUiThread {
-                    Toast.makeText(this, "לא ניתן היה לסרוק את המכשיר במצב הנוכחי", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "הסריקה נכשלה: ${t.javaClass.simpleName}. נתק וחבר מחדש ונסה שוב.", Toast.LENGTH_LONG).show()
                     refreshState()
                 }
-            } else {
-                submitOrQueue(evidence)
             }
         }
     }
