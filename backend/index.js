@@ -608,6 +608,66 @@ app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
 const REFRESH_PLAY_METADATA_BATCH_SIZE = 5;
 const PLAY_METADATA_ERROR_MAX_LENGTH = 300;
 
+// Fleet-wide automatic Play metadata cache. The freshness window is per
+// package, not per device: 1,000 devices using Waze still cause at most one
+// Google Play lookup for Waze per window. Claims are persisted/locked in
+// Postgres (db.claimAppsForPlayMetadataRefresh), so multiple server instances
+// also avoid refreshing the same package at the same time.
+const PLAY_METADATA_FRESH_MS = 30 * 60 * 1000;
+const AUTO_PLAY_REFRESH_BATCH_SIZE = 3;
+const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
+const AUTO_PLAY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+let autoPlayRefreshRunning = false;
+let lastAutoPlayRefreshKickAt = 0;
+
+async function refreshOnePlayPackage(packageName) {
+  try {
+    const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
+    await db.addAppToCatalog(
+      appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+    );
+    await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
+    return true;
+  } catch (e) {
+    const message = String(e.message || 'unknown error').slice(0, PLAY_METADATA_ERROR_MAX_LENGTH);
+    console.warn(`[auto-play-metadata] ${packageName} failed:`, e.message);
+    await db.recordPlayMetadataCheckFailure(packageName, message);
+    return false;
+  }
+}
+
+async function runAutoPlayMetadataRefresh() {
+  if (autoPlayRefreshRunning) return;
+  autoPlayRefreshRunning = true;
+  try {
+    const cutoff = Date.now() - PLAY_METADATA_FRESH_MS;
+    const packages = await db.claimAppsForPlayMetadataRefresh(
+      cutoff,
+      AUTO_PLAY_REFRESH_BATCH_SIZE,
+    );
+    for (const packageName of packages) {
+      // Deliberately sequential: a catalog refresh must never become a burst
+      // against Google Play just because thousands of devices synced together.
+      await refreshOnePlayPackage(packageName);
+    }
+  } finally {
+    autoPlayRefreshRunning = false;
+  }
+}
+
+function kickAutoPlayMetadataRefresh() {
+  const now = Date.now();
+  if (autoPlayRefreshRunning || now - lastAutoPlayRefreshKickAt < AUTO_PLAY_REFRESH_MIN_KICK_MS) {
+    return;
+  }
+  lastAutoPlayRefreshKickAt = now;
+  setImmediate(() => {
+    runAutoPlayMetadataRefresh().catch(e => {
+      console.warn('[auto-play-metadata] refresh pass failed:', e.message);
+    });
+  });
+}
+
 /**
  * Backfills play_version/play_updated_at for existing catalog apps that
  * never got it (added before this feature existed, or where an earlier
@@ -1125,9 +1185,21 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
 
   const policy = normalizePolicy(req.device.policy);
   const allowed = new Set(policy.allowedApps);
+
+  // Opportunistic only and globally throttled. Device sync never waits for
+  // Google Play; it serves the shared cached metadata immediately and one
+  // background worker refreshes stale catalog rows for the whole fleet.
+  kickAutoPlayMetadataRefresh();
+
   const catalog = (await db.listAppsCatalog())
     .filter(app => allowed.has(app.packageName))
-    .map(({ packageName, name, iconUrl }) => ({ packageName, name, iconUrl }));
+    .map(({ packageName, name, iconUrl, playVersion, playUpdatedAt }) => ({
+      packageName,
+      name,
+      iconUrl,
+      playVersion,
+      playUpdatedAt,
+    }));
 
   const commands = await db.takePendingCommands(req.params.deviceId);
 
@@ -1190,6 +1262,13 @@ db.init()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Backend listening on port ${PORT}`);
+
+      // Warm/maintain the shared Play metadata cache independently of device
+      // count. A sleeping host simply resumes on its next wake; sync traffic
+      // also calls kickAutoPlayMetadataRefresh(), so no separate worker is
+      // required for correctness.
+      kickAutoPlayMetadataRefresh();
+      setInterval(kickAutoPlayMetadataRefresh, AUTO_PLAY_REFRESH_INTERVAL_MS).unref();
       if (!AUTH_ENABLED) {
         console.warn('WARNING: admin panel is UNPROTECTED.');
         console.warn('Run "node setup-admin.js <user> <password>" before exposing this server.');
