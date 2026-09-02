@@ -20,6 +20,9 @@ Status: PHASE_0A_IMPLEMENTED_PENDING_BUILD_AND_DEVICE_VERIFICATION
   - `onPageStarted`
   - `shouldInterceptRequest`
 - Added fail-closed Service Worker interception/network blocking.
+- Added per-feature Service Worker capability checks; if hardening cannot be guaranteed, JavaScript is disabled rather than allowing an unsafe fallback.
+- Added fail-closed handling for main-frame network/HTTP errors, HTTP auth, and client-certificate prompts.
+- Safe Browsing initialization is now gated by WebView feature support.
 - Added unit tests for URL policy normalization and dangerous schemes.
 - Added AppCompat application theme to prevent startup-theme crashes.
 
@@ -55,7 +58,6 @@ The client contract remains:
 WebView does not provide one callback that guarantees pre-request inspection of every redirect hop. The PoC therefore uses multiple enforcement points and still requires physical tests for redirects, JS navigation, meta refresh, forms, iframe behavior, Service Workers and blob URLs before production acceptance.
 
 ## NEXT
-1. Add fail-closed main-frame network-error handling and harden unsupported Service Worker behavior.
-2. Perform a Gradle compile/test using an Android build environment.
-3. Run the physical-device bypass matrix.
-4. Only after Phase 0A passes, implement encrypted local policy cache (SQLCipher) and real Browser Policy API integration.
+1. Perform a Gradle compile/test using an Android build environment.
+2. Run the physical-device bypass matrix.
+3. Only after Phase 0A passes, implement encrypted local policy cache (SQLCipher) and real Browser Policy API integration.
