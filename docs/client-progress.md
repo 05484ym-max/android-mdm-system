@@ -2,7 +2,7 @@
 
 Branch: `filtered-browser-client`
 Owner: GPT (Android Client)
-Status: PHASE 0A CODE COMPLETE — Android build + physical-device bypass verification still required
+Status: PHASE 0A CODE + VISUAL FOUNDATION COMPLETE — Android build + physical-device bypass verification still required
 
 ## DONE
 - Standalone Android filtered-browser client exists under `/client/**`.
@@ -143,3 +143,27 @@ This creates an explicit high-risk PoC question: an allowed subresource/iframe U
 ## COORDINATION
 - Claude should not start Redis, Analyzer Worker, AI, Safe Browsing service integration, RDAP/domain-age automation, FCM emergency revoke, or policy signing yet.
 - No `docs/design-spec.md` or `/design/**` artifact with `[DESIGN_READY]` was present on `filtered-browser-server` at this check, so no final Android visual-design implementation is pending from GPT yet.
+
+
+## DESIGN IMPLEMENTATION UPDATE
+Claude's `[DESIGN_READY]` spec was read from `filtered-browser-server:/docs/design-spec.md`.
+
+Implemented in Android without changing backend/admin code:
+- יהודי כשר color palette and typography.
+- RTL browser chrome with LTR URL field.
+- Persistent styled address bar.
+- Home state.
+- Loading state with hidden page content until completion.
+- Allowed state with `מאושר` chip.
+- Blocked state with danger-tint presentation.
+- Technical-error state visually separated from policy BLOCK.
+- Primary/ghost button styles and state-card structure.
+
+Correctness fix made during implementation:
+- Main-frame HTTP 4xx/5xx responses are no longer treated as policy BLOCK decisions.
+- Network/TLS/auth/client-cert failures remain fail-closed but use the technical-error path instead of falsely presenting a policy decision.
+
+Not marked `[DESIGN_IMPLEMENTED]` yet:
+- REVIEW state is not wired because Phase 0A has no real server request submission; the UI must not falsely claim a request was sent.
+- Offline state is not wired because signed local policy cache does not exist yet; the UI must not claim approved offline sites until that trusted cache exists.
+- Physical rendering/device review is still pending.
