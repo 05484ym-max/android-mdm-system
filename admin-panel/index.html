@@ -202,6 +202,43 @@
     font-family: inherit; font-size: 0.85rem;
   }
   .sub-tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .category-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .category-chip {
+    background: var(--accent-tint); border: 1px solid var(--card-border); color: var(--accent);
+    border-radius: 20px; padding: 6px 12px; font-size: 0.78rem; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+  }
+  .category-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .catalog-meta-row {
+    width: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 6px;
+    padding-top: 8px; border-top: 1px solid var(--card-border);
+  }
+  .catalog-select {
+    width: 100%; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--card-border);
+    background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.78rem;
+  }
+  .recommended-toggle {
+    width: 100%; background: transparent; border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 10px; padding: 6px 8px; cursor: pointer; font-family: inherit;
+    font-size: 0.75rem; font-weight: 700;
+  }
+  .recommended-toggle.active { background: var(--accent); color: #fff; }
+  .catalog-version-info { color: var(--text-dim); font-size: 0.68rem; line-height: 1.5; }
+  .catalog-source-badge {
+    display: inline-block; color: var(--text-dim); font-size: 0.65rem;
+    background: var(--bg); border: 1px solid var(--card-border); border-radius: 8px;
+    padding: 1px 6px; margin-inline-start: 4px;
+  }
+  .appstore-preview {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 10px; margin-bottom: 14px;
+  }
+  .appstore-preview .stat-card { padding: 12px; }
+  .appstore-preview .stat-card .value { font-size: 1.4rem; }
+  .appstore-preview-categories {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px;
+  }
+  .appstore-preview-categories .app-chip { cursor: default; }
   .customer-picker {
     width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--card-border);
     background: var(--bg); color: var(--text); font-family: inherit; margin-bottom: 14px;
@@ -307,7 +344,9 @@
 
 <div class="tab-content" data-tab-content="catalog">
   <div class="enroll-card">
-    <h2>חנות אפליקציות</h2>
+    <h2>קטלוג אפליקציות</h2>
+    <div class="appstore-preview" id="appstorePreview"></div>
+    <div class="appstore-preview-categories" id="appstorePreviewCategories"></div>
     <div class="sub-tabs">
       <button class="sub-tab-btn active" data-catalog-mode="all">אפליקציות לכולם</button>
       <button class="sub-tab-btn" data-catalog-mode="customer">הוספה ללקוח</button>
@@ -319,7 +358,8 @@
               style="display:none; margin-bottom:10px;">
         עדכן Google Play Services
       </button>
-    <input class="search-input" id="catalogSearch" placeholder="חיפוש בקטלוג לפי שם..." />
+    <input class="search-input" id="catalogSearch" placeholder="חפש אפליקציה (שם, חבילה או קטגוריה)" />
+    <div class="category-chips" id="catalogCategoryChips"></div>
     <div id="catalogList"><div class="empty-state">טוען...</div></div>
     <div class="add-app-row" id="appImportActions" style="margin-top:10px;">
       <button class="add-app-btn" id="openPlaySearchBtn">חפש ב-Google Play</button>
@@ -1012,19 +1052,79 @@ document.getElementById('genCodeBtn').addEventListener('click', async () => {
   box.textContent = data.token;
 });
 
+let allCategories = [];
+let selectedCategory = 'all';
+
+async function loadCategories() {
+  if (allCategories.length) return;
+  const res = await fetch('/api/apps/categories');
+  if (!res.ok) return;
+  allCategories = await res.json();
+  renderCategoryChips();
+}
+
+function categoryLabelFor(key) {
+  const found = allCategories.find(c => c.key === key);
+  return found ? found.label : 'אחר';
+}
+
+function renderCategoryChips() {
+  const el = document.getElementById('catalogCategoryChips');
+  const chips = [{ key: 'all', label: 'הכל' }, ...allCategories];
+  el.innerHTML = chips.map(c => `
+    <button type="button" class="category-chip${selectedCategory === c.key ? ' active' : ''}" data-category-chip="${escapeHtml(c.key)}">${escapeHtml(c.label)}</button>
+  `).join('');
+  el.querySelectorAll('[data-category-chip]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedCategory = btn.getAttribute('data-category-chip');
+      renderCategoryChips();
+      renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
+    });
+  });
+}
+
+function renderAppstorePreview() {
+  const previewEl = document.getElementById('appstorePreview');
+  const categoriesEl = document.getElementById('appstorePreviewCategories');
+  if (!allApps.length) {
+    previewEl.innerHTML = '';
+    categoriesEl.innerHTML = '';
+    return;
+  }
+  const withPlayData = allApps.filter(a => a.playVersion).length;
+  const recommended = allApps.filter(a => a.isRecommended).length;
+  const byCategory = new Map();
+  for (const a of allApps) {
+    byCategory.set(a.category, (byCategory.get(a.category) || 0) + 1);
+  }
+  previewEl.innerHTML = `
+    <div class="stat-card"><div class="label">עדכונים (נתוני Play)</div><div class="value">${withPlayData}</div></div>
+    <div class="stat-card"><div class="label">מומלצות</div><div class="value">${recommended}</div></div>
+    <div class="stat-card"><div class="label">כל האפליקציות</div><div class="value">${allApps.length}</div></div>
+  `;
+  categoriesEl.innerHTML = [...byCategory.entries()].map(([key, count]) =>
+    `<span class="app-chip">${escapeHtml(categoryLabelFor(key))}: ${count}</span>`
+  ).join('');
+}
+
 async function loadAppsCatalog() {
   const res = await fetch('/api/apps');
   if (!res.ok) return;
   allApps = await res.json();
+  await loadCategories();
+  renderAppstorePreview();
   renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
 }
 
 function filterCatalog(query) {
   const q = (query || '').trim().toLowerCase();
-  if (!q) return allApps;
-  return allApps.filter(a =>
-    a.name.toLowerCase().includes(q) || a.packageName.toLowerCase().includes(q)
-  );
+  return allApps.filter(a => {
+    if (selectedCategory !== 'all' && a.category !== selectedCategory) return false;
+    if (!q) return true;
+    return a.name.toLowerCase().includes(q) ||
+      a.packageName.toLowerCase().includes(q) ||
+      categoryLabelFor(a.category).toLowerCase().includes(q);
+  });
 }
 
 let catalogMode = 'all';
@@ -1035,6 +1135,27 @@ function catalogIconHtml(a) {
     ? `<img class="catalog-icon" src="${escapeHtml(a.iconUrl)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'catalog-icon-placeholder',textContent:'${escapeHtml((a.name || '?')[0])}'}))" />`
     : `<div class="catalog-icon-placeholder">${escapeHtml((a.name || '?')[0])}</div>`;
   return `<div class="catalog-icon-frame">${inner}</div>`;
+}
+
+function catalogVersionInfoHtml(a) {
+  if (!a.playVersion) return '<div class="catalog-version-info">אין נתוני גרסה מ-Play</div>';
+  const updated = a.playUpdatedAt ? new Date(a.playUpdatedAt).toLocaleDateString('he-IL') : null;
+  return `<div class="catalog-version-info">גרסה: ${escapeHtml(a.playVersion)}${updated ? ` · עודכן ${updated}` : ''}</div>`;
+}
+
+function catalogMetaRowHtml(a) {
+  const options = allCategories.map(c =>
+    `<option value="${escapeHtml(c.key)}"${a.category === c.key ? ' selected' : ''}>${escapeHtml(c.label)}</option>`
+  ).join('');
+  const sourceLabel = a.categorySource === 'MANUAL' ? 'ידני' : a.categorySource === 'PLAY' ? 'מ-Play' : 'ברירת מחדל';
+  return `
+    <div class="catalog-meta-row">
+      <select class="catalog-select" data-category-select="${escapeHtml(a.packageName)}">${options}</select>
+      <span class="catalog-source-badge">${sourceLabel}</span>
+      <button type="button" class="recommended-toggle${a.isRecommended ? ' active' : ''}" data-recommended-toggle="${escapeHtml(a.packageName)}">${a.isRecommended ? '★ מומלצת' : '☆ סמן כמומלצת'}</button>
+      ${catalogVersionInfoHtml(a)}
+    </div>
+  `;
 }
 
 function populateCatalogCustomerSelect() {
@@ -1089,6 +1210,7 @@ function renderCatalog(apps) {
           <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
           <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
         </div>
+        ${catalogMetaRowHtml(a)}
       </div>
     `).join('')}</div>`;
 
@@ -1113,6 +1235,41 @@ function renderCatalog(apps) {
         btn.textContent = 'מוסיף...';
         await fetch(`/api/apps/${encodeURIComponent(packageName)}/assign-all`, { method: 'POST' });
         loadDevices();
+      });
+    });
+
+    document.querySelectorAll('[data-category-select]').forEach(select => {
+      select.addEventListener('change', async () => {
+        const packageName = select.getAttribute('data-category-select');
+        select.disabled = true;
+        try {
+          const res = await fetch(`/api/apps/${encodeURIComponent(packageName)}/catalog-meta`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category: select.value }),
+          });
+          if (!res.ok) { alert('עדכון הקטגוריה נכשל'); }
+        } finally {
+          await loadAppsCatalog();
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-recommended-toggle]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const packageName = btn.getAttribute('data-recommended-toggle');
+        const nextValue = !btn.classList.contains('active');
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/apps/${encodeURIComponent(packageName)}/catalog-meta`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ isRecommended: nextValue }),
+          });
+          if (!res.ok) { alert('עדכון הסימון כמומלצת נכשל'); }
+        } finally {
+          await loadAppsCatalog();
+        }
       });
     });
     return;

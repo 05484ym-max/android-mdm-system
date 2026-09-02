@@ -15,6 +15,7 @@ const healthPanel = require('./healthPanel');
 const diagnostics = require('./diagnostics');
 const alerts = require('./alerts');
 const playStoreSearch = require('./playStoreSearch');
+const appCategories = require('./appCategories');
 
 const app = express();
 app.use(express.json());
@@ -575,6 +576,55 @@ app.post('/api/apps', requireAdmin, wrap(async (req, res) => {
   res.json(await db.listAppsCatalog());
 }));
 
+app.get('/api/apps/categories', requireAdmin, wrap(async (req, res) => {
+  res.json(appCategories.CATEGORIES);
+}));
+
+const MAX_SORT_ORDER = 100000;
+
+// Admin-only catalog organization write path (category/recommended/sort) -
+// deliberately separate from POST /api/apps (which only ever touches
+// name/icon/version, see addAppToCatalog): a category/recommended/sort
+// change is never allowed to accidentally trigger a Play re-fetch or touch
+// unrelated fields, and vice versa. All three fields are optional and
+// independent so the admin panel can fire one small request per control
+// (a dropdown change, a toggle click) without resending the others.
+// Category values are validated against the fixed server-side list -
+// never trust an arbitrary string from the browser (see appCategories.js).
+app.post('/api/apps/:packageName/catalog-meta', requireAdmin, wrap(async (req, res) => {
+  const { packageName } = req.params;
+  if (!PACKAGE_NAME_REGEX.test(packageName)) {
+    return res.status(400).json({ error: 'invalid packageName format' });
+  }
+  const patch = {};
+  if (req.body.category !== undefined) {
+    if (!appCategories.isValidCategoryKey(req.body.category)) {
+      return res.status(400).json({ error: 'invalid category' });
+    }
+    patch.category = req.body.category;
+  }
+  if (req.body.isRecommended !== undefined) {
+    if (typeof req.body.isRecommended !== 'boolean') {
+      return res.status(400).json({ error: 'isRecommended must be a boolean' });
+    }
+    patch.isRecommended = req.body.isRecommended;
+  }
+  if (req.body.sortOrder !== undefined) {
+    if (!Number.isInteger(req.body.sortOrder) || req.body.sortOrder < 0 || req.body.sortOrder > MAX_SORT_ORDER) {
+      return res.status(400).json({ error: `sortOrder must be an integer between 0 and ${MAX_SORT_ORDER}` });
+    }
+    patch.sortOrder = req.body.sortOrder;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'at least one of category, isRecommended, sortOrder is required' });
+  }
+  const updated = await db.updateAppCatalogMeta(packageName, patch);
+  if (!updated) {
+    return res.status(404).json({ error: 'app not found in catalog' });
+  }
+  res.json(updated);
+}));
+
 app.get('/api/apps/play-search', requireAdmin, wrap(async (req, res) => {
   const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
   if (query.length < 2 || query.length > 80) {
@@ -597,6 +647,7 @@ app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
     const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
     await db.addAppToCatalog(
       appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+      appInfo.category,
     );
     res.json({ status: 'ok', app: appInfo, catalog: await db.listAppsCatalog() });
   } catch (e) {
@@ -625,6 +676,7 @@ async function refreshOnePlayPackage(packageName) {
     const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
     await db.addAppToCatalog(
       appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+      appInfo.category,
     );
     await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
     return true;
@@ -704,6 +756,7 @@ app.post('/api/apps/refresh-play-metadata', requireAdmin, wrap(async (req, res) 
       const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
       await db.addAppToCatalog(
         appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+        appInfo.category,
       );
       await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
       const status = appInfo.updated != null ? 'updated' : 'checked_no_update_timestamp';
@@ -1191,14 +1244,27 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   // background worker refreshes stale catalog rows for the whole fleet.
   kickAutoPlayMetadataRefresh();
 
+  // Additive app-store fields (category/categoryLabel/isRecommended/
+  // sortOrder) alongside the original ones - never renamed, never removed,
+  // so an older client that only reads the fields it already knows about
+  // keeps working unchanged (see docs/app-store-catalog.md's "Device sync
+  // contract" section). isRecommended/category are only ever computed for
+  // apps that already passed the `allowed` filter above - a device can
+  // never see recommended/category metadata for an app it isn't approved
+  // for, since it never sees that app's row at all (no separate policy
+  // check needed here; filtering already happened before this .map).
   const catalog = (await db.listAppsCatalog())
     .filter(app => allowed.has(app.packageName))
-    .map(({ packageName, name, iconUrl, playVersion, playUpdatedAt }) => ({
+    .map(({ packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder }) => ({
       packageName,
       name,
       iconUrl,
       playVersion,
       playUpdatedAt,
+      category,
+      categoryLabel: appCategories.categoryLabel(category),
+      isRecommended,
+      sortOrder,
     }));
 
   const commands = await db.takePendingCommands(req.params.deviceId);

@@ -37,6 +37,19 @@ ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_updated_at BIGINT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_metadata_checked_at BIGINT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS play_metadata_error TEXT;
 
+-- App-store organization (categories/search/recommended/sort - see
+-- docs/app-store-catalog.md). All additive, all backed by a safe default so
+-- every pre-existing row keeps working with no backfill required:
+--   category defaults to 'other' ("אחר") - the API/sync layer never returns
+--   a null category. category_source tracks who last set it, so an admin's
+--   manual choice (see updateAppCatalogMeta) is never silently overwritten
+--   by a later Play metadata refresh (see addAppToCatalog's ON CONFLICT).
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'other';
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS category_source TEXT NOT NULL DEFAULT 'DEFAULT'
+  CHECK (category_source IN ('MANUAL', 'PLAY', 'DEFAULT'));
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS is_recommended BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS commands (
   id           UUID PRIMARY KEY,
   device_id    TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
@@ -481,11 +494,8 @@ async function getDeviceHealth(deviceId) {
 
 // ---------- apps catalog ----------
 
-async function listAppsCatalog() {
-  const { rows } = await pool.query(
-    `SELECT package_name, name, icon_url, play_version, play_updated_at, added_at FROM apps_catalog ORDER BY added_at DESC`,
-  );
-  return rows.map(row => ({
+function mapCatalogRow(row) {
+  return {
     packageName: row.package_name,
     name: row.name,
     iconUrl: row.icon_url,
@@ -497,7 +507,25 @@ async function listAppsCatalog() {
     // millisecond timestamp is nowhere near unsafe-integer range.
     playUpdatedAt: row.play_updated_at != null ? Number(row.play_updated_at) : null,
     addedAt: row.added_at.toISOString(),
-  }));
+    category: row.category,
+    // Admin-panel-only (never sent to devices - see the /sync route in
+    // index.js, which picks specific fields off this object rather than
+    // spreading it) - lets the catalog UI show "אוטומטי"/"ידני" and know
+    // whether it's safe to silently refresh a category later.
+    categorySource: row.category_source,
+    isRecommended: row.is_recommended,
+    sortOrder: row.sort_order,
+  };
+}
+
+async function listAppsCatalog() {
+  const { rows } = await pool.query(
+    `SELECT package_name, name, icon_url, play_version, play_updated_at, added_at,
+            category, category_source, is_recommended, sort_order
+       FROM apps_catalog
+      ORDER BY sort_order ASC, name ASC`,
+  );
+  return rows.map(mapCatalogRow);
 }
 
 /**
@@ -508,18 +536,77 @@ async function listAppsCatalog() {
  * left at their null defaults) and for writing down what a successful Play
  * fetch returned - COALESCE keeps whatever real metadata a package already
  * had instead of wiping it out when called with nulls.
+ *
+ * `category` is only ever a *suggestion* from this call site (Play's
+ * genreId, mapped by appCategories.categoryFromPlayGenreId - see
+ * playStoreSearch.js) - never trusted over an admin's own manual choice.
+ * The CASE branches below are what make "manual override always wins, and
+ * is never silently overwritten by a later Play metadata refresh" actually
+ * true at the database level rather than just a convention call sites have
+ * to remember: once category_source is 'MANUAL', this function can never
+ * change category or category_source again for that row, regardless of
+ * what `category` it's called with. A first insert with no suggestion
+ * (category null) defaults to 'other'/'DEFAULT', matching "no reliable
+ * category available -> אחר".
  */
-async function addAppToCatalog(packageName, name, iconUrl, playVersion = null, playUpdatedAt = null) {
+async function addAppToCatalog(packageName, name, iconUrl, playVersion = null, playUpdatedAt = null, category = null) {
   await pool.query(
-    `INSERT INTO apps_catalog (package_name, name, icon_url, play_version, play_updated_at)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO apps_catalog (package_name, name, icon_url, play_version, play_updated_at, category, category_source)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, 'other'), CASE WHEN $6 IS NOT NULL THEN 'PLAY' ELSE 'DEFAULT' END)
      ON CONFLICT (package_name) DO UPDATE SET
        name = $2,
        icon_url = $3,
        play_version = COALESCE($4, apps_catalog.play_version),
-       play_updated_at = COALESCE($5, apps_catalog.play_updated_at)`,
-    [packageName, name, iconUrl || null, playVersion, playUpdatedAt],
+       play_updated_at = COALESCE($5, apps_catalog.play_updated_at),
+       category = CASE
+         WHEN apps_catalog.category_source = 'MANUAL' THEN apps_catalog.category
+         ELSE COALESCE($6, apps_catalog.category)
+       END,
+       category_source = CASE
+         WHEN apps_catalog.category_source = 'MANUAL' THEN apps_catalog.category_source
+         WHEN $6 IS NOT NULL THEN 'PLAY'
+         ELSE apps_catalog.category_source
+       END`,
+    [packageName, name, iconUrl || null, playVersion, playUpdatedAt, category],
   );
+}
+
+/**
+ * Admin-driven catalog metadata update (category/recommended/sort_order),
+ * all three optional and independent - the admin panel can flip
+ * "מומלצת" without touching category, or vice versa. Setting `category`
+ * here always stamps category_source = 'MANUAL', which is what makes this
+ * the one write path that permanently opts a row out of ever being
+ * auto-updated by a later Play metadata refresh (see addAppToCatalog).
+ * Category key validity is checked by the caller (index.js, against
+ * appCategories.isValidCategoryKey) - this function trusts its args, same
+ * as every other db.js function that takes already-validated input.
+ * Returns the updated row, or null if no such package exists.
+ */
+async function updateAppCatalogMeta(packageName, { category, isRecommended, sortOrder } = {}) {
+  const sets = [];
+  const params = [packageName];
+  if (category !== undefined) {
+    params.push(category);
+    sets.push(`category = $${params.length}`, `category_source = 'MANUAL'`);
+  }
+  if (isRecommended !== undefined) {
+    params.push(isRecommended);
+    sets.push(`is_recommended = $${params.length}`);
+  }
+  if (sortOrder !== undefined) {
+    params.push(sortOrder);
+    sets.push(`sort_order = $${params.length}`);
+  }
+  if (!sets.length) {
+    const { rows } = await pool.query(`SELECT * FROM apps_catalog WHERE package_name = $1`, [packageName]);
+    return rows[0] ? mapCatalogRow(rows[0]) : null;
+  }
+  const { rows } = await pool.query(
+    `UPDATE apps_catalog SET ${sets.join(', ')} WHERE package_name = $1 RETURNING *`,
+    params,
+  );
+  return rows[0] ? mapCatalogRow(rows[0]) : null;
 }
 
 /**
@@ -813,6 +900,7 @@ module.exports = {
   listEnrollments,
   listAppsCatalog,
   addAppToCatalog,
+  updateAppCatalogMeta,
   listAppsPendingPlayMetadataRefresh,
   claimAppsForPlayMetadataRefresh,
   recordPlayMetadataCheckSuccess,
