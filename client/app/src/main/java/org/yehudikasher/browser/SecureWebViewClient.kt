@@ -72,6 +72,22 @@ class SecureWebViewClient(
         onTechnicalError(request?.host.orEmpty(), "client_cert_request_blocked")
     }
 
+    override fun onReceivedHttpError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        errorResponse: WebResourceResponse?
+    ) {
+        if (request?.isForMainFrame == true) {
+            view?.stopLoading()
+            onTechnicalError(
+                request.url?.toString().orEmpty(),
+                "main_frame_http_${errorResponse?.statusCode ?: 0}"
+            )
+            return
+        }
+        super.onReceivedHttpError(view, request, errorResponse)
+    }
+
     override fun onReceivedError(
         view: WebView?,
         request: WebResourceRequest?,
