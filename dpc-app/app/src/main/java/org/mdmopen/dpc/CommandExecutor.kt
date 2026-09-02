@@ -51,6 +51,10 @@ class CommandExecutor(private val context: Context) {
             PlayStoreGate.openForInstall(context, packageName, displayName)
             "נפתח Play Store עבור $displayName"
         }
+        "OPEN_DEBUGGING_TEMP" -> {
+            PolicyEnforcer(context).openDebuggingUntilNextSync()
+            "ניפוי באגים נפתח זמנית עד הסנכרון הבא"
+        }
         "RELEASE_DEVICE_OWNER" -> {
             PolicyEnforcer(context).releaseDeviceOwner()
             "ניהול המכשיר הוסר בהצלחה"
