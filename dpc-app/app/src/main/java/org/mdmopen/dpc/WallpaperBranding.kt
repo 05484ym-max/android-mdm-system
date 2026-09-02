@@ -72,7 +72,11 @@ object WallpaperBranding {
     // v11 forces one clean re-apply after the diagnostic builds and verifies
     // that compositing actually changes visible pixels before WallpaperManager
     // is called. Design parameters are intentionally unchanged.
-    private const val RECIPE_VERSION = 11
+    // v12: Samsung Android 12 can expose the system wallpaper but refuse the
+    // separate lock wallpaper. In that specific case, use the already-read
+    // real home original as the lock-screen base instead of leaving the lock
+    // screen unbranded/black. Visual emblem parameters remain unchanged.
+    private const val RECIPE_VERSION = 12
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
@@ -153,12 +157,19 @@ object WallpaperBranding {
                     if (read.first != null) {
                         lockSource = read.second
                         read.first!!.also { saveOriginal(it, lockOriginalFile) }
-                    } else if (beforeLockId == -1) {
-                        lockSource = "shared-home"
-                        homeOriginal
                     } else {
-                        lockSource = read.second
-                        null
+                        // Samsung/Android 12 may deny FLAG_LOCK reads while
+                        // FLAG_SYSTEM is readable. The customer approved using
+                        // the real home original as the lock-screen fallback.
+                        // This is intentionally not saved as a separate
+                        // "original lock" because it is a fallback, not the
+                        // customer's actual former lock wallpaper.
+                        lockSource = if (beforeLockId == -1) {
+                            "shared-home"
+                        } else {
+                            "lock-read-fail→shared-home"
+                        }
+                        homeOriginal
                     }
                 }
             } ?: return "Android ${Build.VERSION.RELEASE} · LOCK_READ_FAIL · L=$beforeLockId · Hsrc=$homeSource"
