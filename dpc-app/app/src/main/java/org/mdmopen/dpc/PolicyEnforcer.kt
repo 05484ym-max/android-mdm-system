@@ -70,6 +70,27 @@ class PolicyEnforcer(private val context: Context) {
         val noLauncherCandidates = mutableListOf<NoLauncherCandidate>()
         var systemSkipped = 0
 
+        // Recover approved packages directly from DevicePolicyManager before
+        // relying on PackageManager enumeration. On some Samsung builds a
+        // package hidden by Device Owner can disappear from
+        // getInstalledApplications(), which previously meant an approved
+        // preinstalled app (for example YouTube) was never seen and therefore
+        // never unhidden.
+        val directlyUnhidden = mutableSetOf<String>()
+        for (pkg in allowed) {
+            if (pkg == context.packageName) continue
+            try {
+                if (dpm.isApplicationHidden(admin, pkg)) {
+                    if (dpm.setApplicationHidden(admin, pkg, false)) {
+                        directlyUnhidden += pkg
+                    }
+                }
+            } catch (_: Exception) {
+                // A package that is not installed (or not addressable on this
+                // OEM build) is simply left for the normal install flow.
+            }
+        }
+
         for (app in context.packageManager.getInstalledApplications(0)) {
             if (app.packageName == context.packageName) continue
             if (app.packageName in essential) {
@@ -123,7 +144,7 @@ class PolicyEnforcer(private val context: Context) {
 
         return EnforcementResult(
             suspended = toSuspend - failed.toSet(),
-            unsuspended = toUnsuspend - failed.toSet(),
+            unsuspended = (toUnsuspend + directlyUnhidden).distinct() - failed.toSet(),
             failed = failed,
             systemAppsSkipped = systemSkipped,
             kioskEnabled = policy.kioskEnabled,
