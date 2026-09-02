@@ -15,6 +15,7 @@ const healthPanel = require('./healthPanel');
 const diagnostics = require('./diagnostics');
 const alerts = require('./alerts');
 const playStoreSearch = require('./playStoreSearch');
+const browserPolicy = require('./browserPolicy');
 
 const app = express();
 app.use(express.json());
@@ -1178,6 +1179,124 @@ app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,
     policy.syncIntervalMinutes = minutes;
     res.json(await savePolicyAndWake(device, policy));
   }));
+
+// ---------- Filtered Browser: Browser Policy API (Phase 1) ----------
+// Full contract: /docs/server-api-contract.md. Any error thrown below is
+// left to the wrap()/global-error-handler below to turn into a plain 500 -
+// deliberately not caught here into a fabricated decision object, because
+// the client is contractually required to treat any non-2xx as blocked
+// (never ALLOW). See browserPolicy.js's module doc for the full reasoning.
+
+app.post('/api/devices/:deviceId/browser/check', requireDevice, wrap(async (req, res) => {
+  const parsed = browserPolicy.parseNavigationUrl(req.body && req.body.url);
+  if (!parsed) {
+    return res.status(400).json({ error: 'url must be a valid absolute URL' });
+  }
+
+  const policyVersion = await db.getBrowserPolicyVersion();
+
+  // Dangerous/forbidden schemes are an explicit, immediate BLOCK - checked
+  // BEFORE any host validation, and regardless of whether a host is even
+  // present. file:/data:/javascript:/blob: parse with an empty hostname
+  // (see parseNavigationUrl's doc); intent:// often does have one. Neither
+  // case is a 400 (the client asking is itself meaningful signal, not a
+  // malformed request) and neither is REVIEW (there is nothing uncertain
+  // about a dangerous scheme).
+  if (browserPolicy.isForbiddenScheme(parsed.scheme)) {
+    const auditDomain = parsed.host || parsed.scheme;
+    const decision = browserPolicy.buildDecisionResponse({
+      decision: browserPolicy.DECISIONS.BLOCK,
+      domain: auditDomain,
+      decisionVersion: 0,
+      policyVersion,
+      allowSubdomains: false,
+      reason: 'forbidden_scheme',
+    });
+    await db.logBrowserDecision(crypto.randomUUID(), {
+      deviceId: req.params.deviceId, domain: auditDomain, url: req.body.url,
+      decision: decision.decision, source: 'forbidden_scheme',
+    });
+    return res.json(decision);
+  }
+  if (!parsed.host || !browserPolicy.isValidDomainLabel(parsed.host) || browserPolicy.isIpLiteralHost(parsed.host)) {
+    const decision = browserPolicy.buildDecisionResponse({
+      decision: browserPolicy.DECISIONS.BLOCK,
+      domain: parsed.host,
+      decisionVersion: 0,
+      policyVersion,
+      allowSubdomains: false,
+      reason: 'invalid_or_ip_literal_host',
+    });
+    await db.logBrowserDecision(crypto.randomUUID(), {
+      deviceId: req.params.deviceId, domain: parsed.host, url: req.body.url,
+      decision: decision.decision, source: 'invalid_host',
+    });
+    return res.json(decision);
+  }
+
+  const decision = await browserPolicy.evaluateDomain({
+    db, host: parsed.host, url: req.body.url, deviceId: req.params.deviceId,
+  });
+  await db.logBrowserDecision(crypto.randomUUID(), {
+    deviceId: req.params.deviceId, domain: parsed.host, url: req.body.url,
+    decision: decision.decision, source: 'policy_engine',
+  });
+  res.json(decision);
+}));
+
+app.get('/api/browser/domains', requireAdmin, wrap(async (req, res) => {
+  res.json(await db.listBrowserDomains());
+}));
+
+app.post('/api/browser/domains', requireAdmin, wrap(async (req, res) => {
+  const host = browserPolicy.normalizeHost(req.body && req.body.domain);
+  if (!browserPolicy.isValidDomainLabel(host)) {
+    return res.status(400).json({ error: 'domain must be a valid hostname' });
+  }
+  const decision = req.body.decision;
+  if (!Object.values(browserPolicy.DECISIONS).includes(decision)) {
+    return res.status(400).json({ error: 'decision must be one of ALLOW, BLOCK, REVIEW' });
+  }
+  const saved = await db.upsertBrowserDomain({
+    domain: host,
+    decision,
+    allowSubdomains: req.body.allowSubdomains === true,
+    category: typeof req.body.category === 'string' ? req.body.category : null,
+    riskScore: typeof req.body.riskScore === 'number' ? req.body.riskScore : null,
+    confidence: typeof req.body.confidence === 'number' ? req.body.confidence : null,
+    reason: typeof req.body.reason === 'string' ? req.body.reason : null,
+    approvalMethod: 'admin_manual',
+  });
+  res.json(saved);
+}));
+
+app.get('/api/browser/requests', requireAdmin, wrap(async (req, res) => {
+  res.json(await db.listPendingBrowserRequests());
+}));
+
+app.post('/api/browser/requests/:id/resolve', requireAdmin, wrap(async (req, res) => {
+  const scope = req.body && req.body.scope;
+  if (scope !== 'GLOBAL' && scope !== 'DEVICE') {
+    return res.status(400).json({ error: 'scope must be GLOBAL or DEVICE' });
+  }
+  const decision = req.body.decision;
+  if (decision !== browserPolicy.DECISIONS.ALLOW && decision !== browserPolicy.DECISIONS.BLOCK) {
+    return res.status(400).json({ error: 'decision must be ALLOW or BLOCK' });
+  }
+  if (scope === 'DEVICE' && !req.body.deviceId) {
+    return res.status(400).json({ error: 'deviceId is required when scope is DEVICE' });
+  }
+  const result = await db.resolveBrowserRequest(req.params.id, {
+    scope,
+    decision,
+    deviceId: req.body.deviceId,
+    reason: typeof req.body.reason === 'string' ? req.body.reason : null,
+  });
+  if (!result) {
+    return res.status(404).json({ error: 'request not found or already resolved' });
+  }
+  res.json({ status: 'resolved', domain: result.domain });
+}));
 
 app.use((err, req, res, next) => {
   console.error(err);

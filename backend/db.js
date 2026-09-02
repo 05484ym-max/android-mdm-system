@@ -155,6 +155,113 @@ CREATE INDEX IF NOT EXISTS alerts_unresolved_idx ON alerts (created_at) WHERE re
 -- leave open between concurrent /sync requests for the same device.
 CREATE UNIQUE INDEX IF NOT EXISTS alerts_open_unique_idx
   ON alerts (device_id, category) WHERE resolved_at IS NULL;
+
+-- ---------- Filtered Browser: Browser Policy foundation (Phase 1) ----------
+-- See /docs/server-api-contract.md for the full contract with the Android
+-- client. decision/resolution values are frozen to ALLOW/BLOCK/REVIEW across
+-- the whole cross-team protocol - never add a fourth value here without
+-- updating that doc and the client's requirements doc first.
+--
+-- browser_domains is the GLOBAL, admin-owned policy: a domain with no row
+-- here has no decision at all (evaluates to REVIEW at request time, see
+-- browserPolicy.js) - there is deliberately no "unset = allowed" path.
+-- allow_subdomains is opt-in per row, never implied by an exact-match
+-- approval (a domain approved for evil.example.com must not also cover
+-- shared-hosting subdomains an admin never reviewed).
+CREATE TABLE IF NOT EXISTS browser_domains (
+  domain            TEXT PRIMARY KEY,
+  decision          TEXT NOT NULL DEFAULT 'REVIEW'
+                      CHECK (decision IN ('ALLOW', 'BLOCK', 'REVIEW')),
+  allow_subdomains  BOOLEAN NOT NULL DEFAULT false,
+  category          TEXT,
+  risk_score        NUMERIC,
+  confidence        NUMERIC,
+  source            TEXT NOT NULL DEFAULT 'admin_manual',
+  approval_method   TEXT,
+  reason            TEXT,
+  last_checked_at   BIGINT,
+  approved_at       BIGINT,
+  decision_version  INTEGER NOT NULL DEFAULT 1,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Per-device overrides ("approve just for this customer"). Exact-domain
+-- match only in Phase 1 - a per-device approval is almost always for one
+-- site a specific customer asked about, not a wildcard grant. Checked
+-- before the global table (see browserPolicy.js), so a device override can
+-- both loosen and tighten relative to the global decision.
+CREATE TABLE IF NOT EXISTS browser_device_overrides (
+  device_id   TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+  domain      TEXT NOT NULL,
+  decision    TEXT NOT NULL CHECK (decision IN ('ALLOW', 'BLOCK')),
+  reason      TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (device_id, domain)
+);
+
+-- One open (PENDING) request per domain at a time - the partial unique
+-- index is what gives "one analyzer/admin job per domain" even if hundreds
+-- of devices hit an unknown domain at once (thundering-herd protection):
+-- concurrent first-seen requests collapse into the same row via
+-- ON CONFLICT DO NOTHING (see recordBrowserRequest), instead of creating a
+-- duplicate row per requester.
+CREATE TABLE IF NOT EXISTS browser_requests (
+  id                  UUID PRIMARY KEY,
+  domain              TEXT NOT NULL,
+  first_url           TEXT,
+  status              TEXT NOT NULL DEFAULT 'PENDING'
+                        CHECK (status IN ('PENDING', 'RESOLVED')),
+  resolution_scope    TEXT CHECK (resolution_scope IN ('GLOBAL', 'DEVICE')),
+  resolution_decision TEXT CHECK (resolution_decision IN ('ALLOW', 'BLOCK')),
+  category            TEXT,
+  risk_score          NUMERIC,
+  confidence          NUMERIC,
+  reason              TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at         TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS browser_requests_pending_domain_idx
+  ON browser_requests (domain) WHERE status = 'PENDING';
+
+-- Distinct requesting devices per request, for the admin panel's "how many
+-- users asked for this" count - a plain counter column would double-count
+-- the same device re-triggering a request (e.g. retrying after "site under
+-- review").
+CREATE TABLE IF NOT EXISTS browser_request_devices (
+  request_id  UUID NOT NULL REFERENCES browser_requests(id) ON DELETE CASCADE,
+  device_id   TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (request_id, device_id)
+);
+
+-- Every /browser/check outcome, for audit and for building real reputation
+-- signal later (Phase 3+) - append-only, never updated.
+CREATE TABLE IF NOT EXISTS browser_decision_log (
+  id          UUID PRIMARY KEY,
+  device_id   TEXT,
+  domain      TEXT NOT NULL,
+  url         TEXT,
+  decision    TEXT NOT NULL CHECK (decision IN ('ALLOW', 'BLOCK', 'REVIEW')),
+  source      TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS browser_decision_log_domain_idx
+  ON browser_decision_log (domain, created_at DESC);
+
+-- Single global monotonic counter the Android client can use to detect a
+-- stale/rolled-back local policy cache (policyVersion in the contract).
+-- Bumped on every admin browser-policy write (see upsertBrowserDomain and
+-- resolveBrowserRequest below).
+CREATE TABLE IF NOT EXISTS browser_policy_meta (
+  key   TEXT PRIMARY KEY,
+  value BIGINT NOT NULL
+);
+INSERT INTO browser_policy_meta (key, value) VALUES ('policy_version', 1)
+  ON CONFLICT (key) DO NOTHING;
 `;
 
 async function init() {
@@ -749,6 +856,251 @@ async function listEnrollments() {
   }));
 }
 
+// ---------- Filtered Browser: Browser Policy foundation (Phase 1) ----------
+
+function mapBrowserDomainRow(row) {
+  return {
+    domain: row.domain,
+    decision: row.decision,
+    allowSubdomains: row.allow_subdomains,
+    category: row.category,
+    riskScore: row.risk_score != null ? Number(row.risk_score) : null,
+    confidence: row.confidence != null ? Number(row.confidence) : null,
+    source: row.source,
+    approvalMethod: row.approval_method,
+    reason: row.reason,
+    lastCheckedAt: row.last_checked_at != null ? Number(row.last_checked_at) : null,
+    approvedAt: row.approved_at != null ? Number(row.approved_at) : null,
+    decisionVersion: row.decision_version,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+/**
+ * Most-specific policy row covering `host`: an exact match always wins;
+ * an ancestor domain only matches when it opted into allow_subdomains
+ * (see the CHECK/comment on the table). Single query, no per-label
+ * round-trips - the table is small and admin-curated in Phase 1.
+ */
+async function getBrowserDomainForHost(host) {
+  const { rows } = await pool.query(
+    `SELECT * FROM browser_domains
+      WHERE domain = $1 OR (allow_subdomains AND $1 LIKE '%.' || domain)
+      ORDER BY length(domain) DESC
+      LIMIT 1`,
+    [host],
+  );
+  return rows[0] ? mapBrowserDomainRow(rows[0]) : null;
+}
+
+async function getBrowserDeviceOverride(deviceId, host) {
+  const { rows } = await pool.query(
+    `SELECT decision, reason FROM browser_device_overrides
+      WHERE device_id = $1 AND domain = $2`,
+    [deviceId, host],
+  );
+  return rows[0] || null;
+}
+
+async function listBrowserDomains() {
+  const { rows } = await pool.query(
+    `SELECT * FROM browser_domains ORDER BY updated_at DESC LIMIT 500`,
+  );
+  return rows.map(mapBrowserDomainRow);
+}
+
+/** Direct admin decision on a domain (bypasses the request queue entirely -
+ * e.g. pre-seeding a known-good/known-bad list). Bumps both the domain's own
+ * decisionVersion and the global policyVersion in the same transaction. */
+async function upsertBrowserDomain({
+  domain, decision, allowSubdomains, category, riskScore, confidence, reason, approvalMethod,
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO browser_domains
+         (domain, decision, allow_subdomains, category, risk_score, confidence,
+          source, approval_method, reason, approved_at, decision_version)
+       VALUES ($1, $2, $3, $4, $5, $6, 'admin_manual', $7, $8, $9, 1)
+       ON CONFLICT (domain) DO UPDATE SET
+         decision = EXCLUDED.decision,
+         allow_subdomains = EXCLUDED.allow_subdomains,
+         category = EXCLUDED.category,
+         risk_score = EXCLUDED.risk_score,
+         confidence = EXCLUDED.confidence,
+         approval_method = EXCLUDED.approval_method,
+         reason = EXCLUDED.reason,
+         approved_at = EXCLUDED.approved_at,
+         decision_version = browser_domains.decision_version + 1,
+         updated_at = now()
+       RETURNING *`,
+      [
+        domain, decision, Boolean(allowSubdomains), category || null,
+        riskScore ?? null, confidence ?? null, approvalMethod || 'admin_manual',
+        reason || null, Date.now(),
+      ],
+    );
+    await client.query(
+      `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version'`,
+    );
+    await client.query('COMMIT');
+    return mapBrowserDomainRow(rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Records that some device hit an unknown domain. Collapses concurrent
+ * first-seen requests for the same domain into one PENDING row (thundering-
+ * herd protection - see the partial unique index on browser_requests) and
+ * tracks this device as one of its distinct requesters. Returns the
+ * request id, or null in the rare race where the request got resolved
+ * between the failed insert and the follow-up read (the next /browser/check
+ * for that domain will simply open a fresh request if it's still unknown).
+ */
+async function recordBrowserRequest(id, { domain, url, deviceId }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const inserted = await client.query(
+      `INSERT INTO browser_requests (id, domain, first_url)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (domain) WHERE status = 'PENDING' DO NOTHING
+       RETURNING id`,
+      [id, domain, url || null],
+    );
+    let requestId = inserted.rows[0] ? inserted.rows[0].id : null;
+    if (!requestId) {
+      const existing = await client.query(
+        `SELECT id FROM browser_requests WHERE domain = $1 AND status = 'PENDING'`,
+        [domain],
+      );
+      requestId = existing.rows[0] ? existing.rows[0].id : null;
+    }
+    if (requestId) {
+      await client.query(
+        `INSERT INTO browser_request_devices (request_id, device_id)
+         VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [requestId, deviceId],
+      );
+    }
+    await client.query('COMMIT');
+    return requestId;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function listPendingBrowserRequests() {
+  const { rows } = await pool.query(
+    `SELECT r.*, COUNT(DISTINCT rd.device_id)::int AS requester_count
+       FROM browser_requests r
+       LEFT JOIN browser_request_devices rd ON rd.request_id = r.id
+      WHERE r.status = 'PENDING'
+      GROUP BY r.id
+      ORDER BY r.created_at ASC
+      LIMIT 200`,
+  );
+  return rows.map(row => ({
+    id: row.id,
+    domain: row.domain,
+    firstUrl: row.first_url,
+    requesterCount: row.requester_count,
+    category: row.category,
+    riskScore: row.risk_score != null ? Number(row.risk_score) : null,
+    confidence: row.confidence != null ? Number(row.confidence) : null,
+    reason: row.reason,
+    createdAt: row.created_at.toISOString(),
+  }));
+}
+
+/**
+ * Resolves a PENDING request either globally (writes/updates browser_domains)
+ * or for one device (writes browser_device_overrides), and bumps the global
+ * policyVersion - all in one transaction, so a crash mid-way never leaves a
+ * request marked RESOLVED without the decision actually having been applied
+ * anywhere. Returns null if the request was already resolved or doesn't exist.
+ */
+async function resolveBrowserRequest(id, { scope, decision, deviceId, reason }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `UPDATE browser_requests
+          SET status = 'RESOLVED', resolution_scope = $2, resolution_decision = $3,
+              resolved_at = now(), updated_at = now()
+        WHERE id = $1 AND status = 'PENDING'
+        RETURNING domain`,
+      [id, scope, decision],
+    );
+    const domain = rows[0] ? rows[0].domain : null;
+    if (!domain) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    if (scope === 'GLOBAL') {
+      await client.query(
+        `INSERT INTO browser_domains (domain, decision, source, approval_method, reason, approved_at, decision_version)
+         VALUES ($1, $2, 'admin_request', 'admin_manual', $3, $4, 1)
+         ON CONFLICT (domain) DO UPDATE SET
+           decision = EXCLUDED.decision,
+           source = 'admin_request',
+           approval_method = 'admin_manual',
+           reason = EXCLUDED.reason,
+           approved_at = EXCLUDED.approved_at,
+           decision_version = browser_domains.decision_version + 1,
+           updated_at = now()`,
+        [domain, decision, reason || null, Date.now()],
+      );
+    } else {
+      await client.query(
+        `INSERT INTO browser_device_overrides (device_id, domain, decision, reason)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (device_id, domain) DO UPDATE SET
+           decision = EXCLUDED.decision, reason = EXCLUDED.reason, created_at = now()`,
+        [deviceId, domain, decision, reason || null],
+      );
+    }
+    await client.query(
+      `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version'`,
+    );
+    await client.query('COMMIT');
+    return { domain };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function getBrowserPolicyVersion() {
+  const { rows } = await pool.query(
+    `SELECT value FROM browser_policy_meta WHERE key = 'policy_version'`,
+  );
+  return rows[0] ? Number(rows[0].value) : 1;
+}
+
+/** Append-only audit trail of every /browser/check outcome. Best-effort from
+ * the caller's point of view (see index.js) - a logging failure must never
+ * fail the decision the device is waiting on. */
+async function logBrowserDecision(id, { deviceId, domain, url, decision, source }) {
+  await pool.query(
+    `INSERT INTO browser_decision_log (id, device_id, domain, url, decision, source)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, deviceId || null, domain, url || null, decision, source],
+  );
+}
+
 module.exports = {
   init,
   getDevice,
@@ -784,4 +1136,13 @@ module.exports = {
   createAlert,
   resolveAlert,
   listActiveAlerts,
+  getBrowserDomainForHost,
+  getBrowserDeviceOverride,
+  listBrowserDomains,
+  upsertBrowserDomain,
+  recordBrowserRequest,
+  listPendingBrowserRequests,
+  resolveBrowserRequest,
+  getBrowserPolicyVersion,
+  logBrowserDecision,
 };
