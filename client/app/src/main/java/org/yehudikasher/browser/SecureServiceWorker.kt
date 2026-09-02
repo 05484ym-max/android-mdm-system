@@ -8,12 +8,22 @@ import androidx.webkit.WebViewFeature
 
 object SecureServiceWorker {
     /**
-     * Returns true when Service Workers are either unavailable or successfully forced fail-closed.
-     * Returns false if the installed WebView reports Service Worker support but hardening fails.
+     * Returns true when Service Workers are unavailable, or every hardening control
+     * required by this client is supported and successfully installed.
      */
     fun installFailClosedPolicy(): Boolean {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE)) {
             return true
+        }
+
+        val requiredFeatures = listOf(
+            WebViewFeature.SERVICE_WORKER_BLOCK_NETWORK_LOADS,
+            WebViewFeature.SERVICE_WORKER_CONTENT_ACCESS,
+            WebViewFeature.SERVICE_WORKER_FILE_ACCESS,
+            WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST
+        )
+        if (requiredFeatures.any { !WebViewFeature.isFeatureSupported(it) }) {
+            return false
         }
 
         return try {
