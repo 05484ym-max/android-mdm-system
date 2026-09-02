@@ -448,22 +448,17 @@ class AppStoreActivity : Activity() {
     private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
         if (!installed) return false
 
-        return try {
-            val info = packageManager.getPackageInfo(app.packageName, 0)
-            val installedVersion = info.versionName?.trim()
-            val playVersion = app.playVersion?.trim()
-
-            when {
-                !playVersion.isNullOrEmpty() &&
-                    !installedVersion.isNullOrEmpty() &&
-                    app.playUpdatedAt != null ->
-                    !playVersion.equals(installedVersion, ignoreCase = true) &&
-                        app.playUpdatedAt > info.lastUpdateTime
-                else -> false
-            }
-        } catch (_: Exception) {
-            false
-        }
+        // Google Play's public metadata is catalog-level, not device-specific.
+        // A different version/timestamp can mean staged rollout, device/ABI
+        // targeting, regional rollout, or simply metadata that is newer than
+        // what this exact device is currently eligible to install.
+        //
+        // Therefore we deliberately do NOT label an installed app as "עדכן"
+        // from versionName/timestamp heuristics alone. False update prompts are
+        // worse than a conservative "מותקן". When we later have an
+        // authoritative device-specific update signal, this is the one place
+        // that should consume it.
+        return false
     }
 
     private fun isInstalled(packageName: String): Boolean {
