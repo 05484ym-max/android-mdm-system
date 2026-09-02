@@ -105,7 +105,7 @@ class AppStoreActivity : Activity() {
             textSize = 14f
             setTextColor(Color.parseColor(TEXT))
             setHintTextColor(Color.parseColor(MUTED))
-            singleLine = true
+            setSingleLine(true)
             gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT
             background = flatRounded("#FFFFFF", dp(14).toFloat())
             setPadding(dp(16), dp(11), dp(16), dp(11))
