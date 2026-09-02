@@ -143,6 +143,26 @@
     width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--card-border);
     background: var(--bg); color: var(--text); font-family: inherit; margin-bottom: 14px;
   }
+  .quick-search-card {
+    position: relative; max-width: 720px; margin: 0 auto 18px;
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 20px; padding: 14px 16px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+  }
+  .quick-search-card .search-input { margin-bottom: 0; }
+  .quick-search-results {
+    display: none; position: absolute; top: calc(100% - 6px); right: 16px; left: 16px;
+    z-index: 18; background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); overflow: hidden;
+  }
+  .quick-search-result {
+    width: 100%; border: 0; border-bottom: 1px solid var(--card-border);
+    background: var(--card-bg); color: var(--text); padding: 11px 12px;
+    text-align: right; cursor: pointer; font-family: inherit;
+  }
+  .quick-search-result:last-child { border-bottom: none; }
+  .quick-search-result .main { font-weight: 700; }
+  .quick-search-result .sub { color: var(--text-dim); font-size: 0.76rem; margin-top: 3px; direction: ltr; text-align: right; }
   .customer-row { display: flex; gap: 8px; margin-bottom: 4px; }
   .customer-input {
     padding: 6px 8px; border-radius: 10px; border: 1px solid var(--card-border);
@@ -255,6 +275,12 @@
   <h1>יהודי כשר — לוח בקרה</h1>
   <button class="refresh-btn" onclick="loadDevices()">⟳</button>
 </header>
+
+<div class="quick-search-card">
+  <input class="search-input" id="quickCustomerSearch"
+         placeholder="חיפוש מהיר — שם לקוח, מספר לקוח או מזהה מכשיר..." autocomplete="off" />
+  <div id="quickCustomerResults" class="quick-search-results"></div>
+</div>
 
 <div class="tab-content active" data-tab-content="customers">
   <div class="stats">
@@ -534,6 +560,7 @@ async function loadDevices() {
   document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('he-IL');
 
   renderDeviceList(filterDevices(document.getElementById('deviceSearch').value));
+  renderQuickCustomerSearch();
   populateCatalogCustomerSelect();
   loadAppsCatalog();
 
@@ -555,6 +582,62 @@ function filterDevices(query) {
     d.deviceId.toLowerCase().includes(q)
   );
 }
+
+function renderQuickCustomerSearch() {
+  const input = document.getElementById('quickCustomerSearch');
+  const results = document.getElementById('quickCustomerResults');
+  if (!input || !results) return;
+
+  const matches = filterDevices(input.value).slice(0, 6);
+  if (!input.value.trim()) {
+    results.style.display = 'none';
+    results.innerHTML = '';
+    return;
+  }
+
+  if (!matches.length) {
+    results.innerHTML = '<div class="empty-state" style="padding:14px;">לא נמצא לקוח או מכשיר</div>';
+    results.style.display = 'block';
+    return;
+  }
+
+  results.innerHTML = matches.map(d => {
+    const title = d.customerName || 'לקוח ללא שם';
+    const number = d.customerNumber ? ' · #' + d.customerNumber : '';
+    return `
+      <button class="quick-search-result" data-quick-device="${escapeHtml(d.deviceId)}">
+        <div class="main">${escapeHtml(title + number)}</div>
+        <div class="sub">${escapeHtml(d.deviceId)}</div>
+      </button>`;
+  }).join('');
+  results.style.display = 'block';
+
+  results.querySelectorAll('[data-quick-device]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      input.value = '';
+      results.style.display = 'none';
+      openDeviceDetail(btn.getAttribute('data-quick-device'));
+    });
+  });
+}
+
+document.getElementById('quickCustomerSearch').addEventListener('input', renderQuickCustomerSearch);
+document.getElementById('quickCustomerSearch').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const matches = filterDevices(e.target.value);
+  if (matches.length === 1) {
+    e.preventDefault();
+    e.target.value = '';
+    document.getElementById('quickCustomerResults').style.display = 'none';
+    openDeviceDetail(matches[0].deviceId);
+  }
+});
+document.addEventListener('click', e => {
+  const card = document.querySelector('.quick-search-card');
+  if (card && !card.contains(e.target)) {
+    document.getElementById('quickCustomerResults').style.display = 'none';
+  }
+});
 
 function renderDeviceList(devices) {
   const listEl = document.getElementById('devicesList');
@@ -720,6 +803,13 @@ function renderDeviceDetail(deviceId) {
     </div>
 
     <div class="detail-section">
+      <h3>אבחון ובדיקות</h3>
+      <div class="field-row">
+        <button class="open-detail-btn" id="detailDiagnostics">פתח אבחון מלא</button>
+      </div>
+    </div>
+
+    <div class="detail-section">
       <h3>פרטי לקוח</h3>
       <div class="field-row">
         <input class="customer-input" id="detailCustomerName" placeholder="שם לקוח" value="${escapeHtml(d.customerName || '')}" />
@@ -782,6 +872,14 @@ function renderDeviceDetail(deviceId) {
 
 function bindDetailHandlers(d) {
   const deviceId = d.deviceId;
+
+  document.getElementById('detailDiagnostics').addEventListener('click', () => {
+    if (window.openDeviceDiagnostics) {
+      window.openDeviceDiagnostics(deviceId);
+    } else {
+      alert('האבחון עדיין נטען - נסה שוב בעוד רגע');
+    }
+  });
 
   document.getElementById('detailSaveCustomer').addEventListener('click', async () => {
     const name = document.getElementById('detailCustomerName').value.trim();
