@@ -6,7 +6,8 @@
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:usesCleartextTraffic="false"
-        android:label="יהודי כשר">
+        android:label="יהודי כשר"
+        android:theme="@style/Theme.YehudiKasher.Browser">
         <activity
             android:name=".MainActivity"
             android:exported="true"
