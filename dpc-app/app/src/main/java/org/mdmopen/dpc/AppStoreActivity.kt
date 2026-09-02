@@ -211,42 +211,38 @@ class AppStoreActivity : Activity() {
             setPadding(0, dp(6), 0, 0)
         }
 
-        // Installed apps don't get background updates while Play Store is
-        // hidden most of the time, and tapping the tile just opens the app -
-        // so this is the only way the customer can ever reach an update:
-        // it's a separate clickable label (own click listener wins over the
-        // tile's) that reopens the same guarded Play Store page, which shows
-        // "Update" there when one is available and does nothing otherwise.
-        val updateAvailable = if (installed && app.playUpdatedAt != null) {
-            try {
-                val info = packageManager.getPackageInfo(app.packageName, 0)
-                app.playUpdatedAt > info.lastUpdateTime
-            } catch (_: Exception) {
-                false
-            }
-        } else {
-            false
-        }
+        // Status is resolved automatically when the store screen is built:
+        // install if absent, update if the Play metadata points to a newer/
+        // different release, otherwise installed. Prefer the actual Play
+        // version string when available; fall back to the Play listing's
+        // updated timestamp for older catalog rows that do not have a version.
+        val updateAvailable = isUpdateAvailable(app, installed)
 
         val status = TextView(this).apply {
             text = when {
-                !installed -> "התקן"
-                // playUpdatedAt is only a heuristic (Play listing last-touched
-                // time, not a real version check - see backend/playStoreSearch.js)
-                // so this must never claim certainty the way "עדכון זמין" would.
-                updateAvailable -> "ייתכן שקיים עדכון"
-                // Not a confirmed "no update exists" - just that no update
-                // signal was found, same heuristic caveat as above.
-                app.playUpdatedAt != null -> "לא זוהה עדכון"
-                else -> "סטטוס לא ידוע"
+                !installed -> "התקנה"
+                updateAvailable -> "עדכן"
+                else -> "מותקן"
             }
             textSize = 10.5f
             typeface = mediumFont
-            setTextColor(Color.parseColor(if (installed) OK else ACCENT))
+            setTextColor(
+                Color.parseColor(
+                    when {
+                        !installed -> ACCENT
+                        updateAvailable -> ACCENT
+                        else -> OK
+                    }
+                )
+            )
             gravity = Gravity.CENTER
             setPadding(0, dp(2), 0, 0)
-            if (installed) {
+
+            // Only actionable states open Play Store. "מותקן" is a status,
+            // not a disguised "check for update" button.
+            if (!installed || updateAvailable) {
                 isClickable = true
+                isFocusable = true
                 setOnClickListener { openPlayStoreForInstall(app.packageName) }
             }
         }
@@ -280,6 +276,26 @@ class AppStoreActivity : Activity() {
                 if (installed) openInstalledApp(app.packageName)
                 else openPlayStoreForInstall(app.packageName)
             }
+        }
+    }
+
+    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
+        if (!installed) return false
+
+        return try {
+            val info = packageManager.getPackageInfo(app.packageName, 0)
+            val installedVersion = info.versionName?.trim()
+            val playVersion = app.playVersion?.trim()
+
+            when {
+                !playVersion.isNullOrEmpty() && !installedVersion.isNullOrEmpty() ->
+                    !playVersion.equals(installedVersion, ignoreCase = true)
+                app.playUpdatedAt != null ->
+                    app.playUpdatedAt > info.lastUpdateTime
+                else -> false
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
