@@ -1,19 +1,54 @@
 package org.yehudikasher.browser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class UrlPolicyTest {
-    private val policy = UrlPolicy(setOf("example.com"))
+    private val policy = UrlPolicy(
+        listOf(
+            LocalPolicyRule("example.com"),
+            LocalPolicyRule("allowed.example.org", allowSubdomains = true)
+        )
+    )
 
     @Test
     fun exactAllowedHttpsHost_isAllowed() {
-        assertEquals(LocalDecision.ALLOW, policy.evaluate("https://example.com").decision)
+        val result = policy.evaluate("https://example.com/path")
+        assertEquals(LocalDecision.ALLOW, result.decision)
+        assertEquals("example.com", result.normalizedHost)
     }
 
     @Test
-    fun subdomain_isBlockedByDefault() {
-        assertEquals(LocalDecision.BLOCK, policy.evaluate("https://www.example.com").decision)
+    fun unknownHost_isBlocked() {
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://evil.example.net").decision
+        )
+    }
+
+    @Test
+    fun subdomain_isBlockedWhenRuleDoesNotAllowIt() {
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://www.example.com").decision
+        )
+    }
+
+    @Test
+    fun subdomain_isAllowedOnlyAcrossRealLabelBoundary() {
+        assertEquals(
+            LocalDecision.ALLOW,
+            policy.evaluate("https://deep.allowed.example.org").decision
+        )
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://badallowed.example.org.evil.com").decision
+        )
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://notallowed.example.org").decision
+        )
     }
 
     @Test
@@ -51,10 +86,58 @@ class UrlPolicyTest {
     }
 
     @Test
+    fun ipv4Literal_isBlocked() {
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://192.168.1.1/").decision
+        )
+    }
+
+    @Test
+    fun ipv6Literal_isBlocked() {
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://[2001:db8::1]/").decision
+        )
+    }
+
+    @Test
+    fun backslashConfusion_isBlocked() {
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://example.com\\@evil.com/").decision
+        )
+    }
+
+    @Test
+    fun nonDefaultHttpsPort_isBlocked() {
+        assertEquals(
+            LocalDecision.BLOCK,
+            policy.evaluate("https://example.com:8443/").decision
+        )
+        assertEquals(
+            LocalDecision.ALLOW,
+            policy.evaluate("https://example.com:443/").decision
+        )
+    }
+
+    @Test
     fun trailingDot_isNormalized() {
         assertEquals(
             LocalDecision.ALLOW,
             policy.evaluate("https://EXAMPLE.com./").decision
         )
+    }
+
+    @Test
+    fun invalidRulesNeverBecomeAllowRules() {
+        assertNull(UrlPolicy.normalizeHost("localhost"))
+        assertNull(UrlPolicy.normalizeHost("*.example.com"))
+    }
+
+    @Test
+    fun overlyLongUrl_isBlocked() {
+        val url = "https://example.com/" + "a".repeat(9000)
+        assertEquals(LocalDecision.BLOCK, policy.evaluate(url).decision)
     }
 }
