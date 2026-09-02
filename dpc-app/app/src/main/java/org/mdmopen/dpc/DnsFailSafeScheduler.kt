@@ -36,12 +36,30 @@ import android.content.Context
 object DnsFailSafeScheduler {
 
     private const val JOB_ID = 1002
+    private const val IMMEDIATE_JOB_ID = 1003
     private const val INTERVAL_MS = 15 * 60_000L
 
     /** Called every sync (see PolicySync.run()) - only schedules the watchdog
      * for a device that has ever been given a DNS policy at all, and cancels
      * it again once that's no longer true, so a device that never touches
      * this feature never carries the extra periodic job. */
+    /** One-shot check used after boot. Requiring ANY network means Android
+     * fires it as soon as connectivity is available instead of waiting for
+     * the first 15-minute periodic slot. */
+    fun scheduleImmediateCheck(context: Context) {
+        if (Config.dnsDesiredProviderHost(context) == null) return
+        val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
+        val job = JobInfo.Builder(
+            IMMEDIATE_JOB_ID,
+            ComponentName(context, DnsFailSafeJobService::class.java)
+        )
+            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+            .setMinimumLatency(0)
+            .setOverrideDeadline(30_000L)
+            .build()
+        scheduler.schedule(job)
+    }
+
     fun scheduleIfNeeded(context: Context) {
         val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
         if (Config.dnsDesiredProviderHost(context) == null) {
