@@ -44,6 +44,7 @@ Status: PHASE 0A CODE + VISUAL FOUNDATION COMPLETE — Android build + physical-
   - Service Worker requests intercepted with an empty blocked response.
   - If required Service Worker hardening cannot be installed, JavaScript is disabled and the browser reports a hardening failure.
 - Safe Browsing startup is requested when supported.
+- Safe Browsing threat callbacks fail closed via AndroidX WebKit compatibility APIs: the browser explicitly returns to safety, stops loading, and shows a blocked state. This avoids relying on framework-only API signatures on the minSdk 26 client.
 - No backend/admin/worker files were changed.
 
 ## STATIC REVIEW UPDATE
@@ -113,7 +114,7 @@ This creates an explicit high-risk PoC question: an allowed subresource/iframe U
 ## SERVER IMPACT
 - No wire-contract change is required.
 - Claude's current `filtered-browser-server` contract remains compatible.
-- Claude has completed server Phase 1.1 hardening and Phase 2 admin workflow; no Android field/status changes are required.
+- Claude has completed server Phase 2.3 load/abuse/failure hardening. The client contract is unchanged for decisions; HTTP 429 and malformed/oversized-request 400 responses remain ordinary non-2xx fail-closed technical failures and must never become ALLOW.
 - Client remains on local policy mocks until Phase 0A device verification succeeds.
 - Unknown/error/server failure must never become `ALLOW`.
 
@@ -149,7 +150,7 @@ This creates an explicit high-risk PoC question: an allowed subresource/iframe U
 
 ## COORDINATION
 - Claude should not start Redis, Analyzer Worker, AI, Safe Browsing service integration, RDAP/domain-age automation, FCM emergency revoke, or policy signing yet.
-- No `docs/design-spec.md` or `/design/**` artifact with `[DESIGN_READY]` was present on `filtered-browser-server` at this check, so no final Android visual-design implementation is pending from GPT yet.
+- Claude's `[DESIGN_READY]` spec has been received and the Android visual foundation below has already been implemented. Final `[DESIGN_IMPLEMENTED]` remains intentionally withheld until build + physical-device verification and the real REVIEW/offline states are honestly wired.
 
 
 ## DESIGN IMPLEMENTATION UPDATE
@@ -174,3 +175,15 @@ Not marked `[DESIGN_IMPLEMENTED]` yet:
 - REVIEW state is not wired because Phase 0A has no real server request submission; the UI must not falsely claim a request was sent.
 - Offline state is not wired because signed local policy cache does not exist yet; the UI must not claim approved offline sites until that trusted cache exists.
 - Physical rendering/device review is still pending.
+
+## SERVER PHASE 2.3 COORDINATION UPDATE
+
+Fresh server review confirms Phase 2.3 is complete on `filtered-browser-server`:
+- 49/49 unit tests passed.
+- 46/46 real PostgreSQL integration tests passed.
+- 38/38 real Chromium Admin UI E2E tests remain the verified Phase 2.2 baseline.
+- `POST /api/devices/:deviceId/browser/check` now has per-device abuse protection: HTTP 429 after more than 40 checks in a rolling 10-second window.
+- Oversized URL input (>8192 chars) fails closed with HTTP 400.
+- PostgreSQL failure/unavailability paths were exercised fail-closed.
+- The new limiter is intentionally in-memory/single-process for the current single-instance deployment; shared Redis-style limiting is deferred until horizontal scaling actually exists.
+- No Android client API change is required yet; all non-2xx responses remain technical failure / blocked, never ALLOW.
