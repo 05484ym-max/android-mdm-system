@@ -55,8 +55,8 @@ if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
-   'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'RELEASE_DEVICE_OWNER',
-   'ENABLE_DNS_FILTERING', 'DISABLE_DNS_FILTERING'];
+   'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'OPEN_DEBUGGING_TEMP',
+   'RELEASE_DEVICE_OWNER', 'ENABLE_DNS_FILTERING', 'DISABLE_DNS_FILTERING'];
 // Pre-installed system components OPEN_PLAY_STORE_SYSTEM_COMPONENT is allowed
 // to target - deliberately separate from the customer app catalog, since
 // these are never something a customer "installs" or an admin assigns via
