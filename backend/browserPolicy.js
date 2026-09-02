@@ -295,6 +295,44 @@ async function evaluateDomain({ db, host, url, deviceId }) {
   });
 }
 
+// ---------- Phase 2: shared-request resolution semantics (spec mirror) ----------
+//
+// A domain requested by several devices must not have one device's
+// DEVICE-scope resolution silently close the request out for the others
+// still waiting - that was flagged as a critical correctness requirement.
+// The real enforcement happens atomically in SQL (see db.js's
+// resolveBrowserRequest: `UPDATE ... WHERE decision IS NULL`, and the
+// parent only flips to RESOLVED once every sibling row is non-null) -
+// this function is NOT itself called from the request path (a live
+// database transaction is what actually has to be race-safe under
+// concurrent resolutions, not a plain JS array transform). It exists so
+// the *intended* semantics can be proven correct with a real, running
+// test instead of only a hand-reviewed SQL statement - see
+// test-browser-policy.js's "shared request" test block, which mirrors
+// this function's behavior against db.js's SQL line by line.
+
+/**
+ * Pure simulation of one resolution action against a request's current
+ * per-device state. `devices` is [{ deviceId, decision }], decision null
+ * meaning "still waiting". Returns { devices: <new state>, fullyResolved }.
+ *
+ * GLOBAL sets `decision` on every still-waiting (null) row - a global rule
+ * genuinely does answer everyone who was waiting at once.
+ * DEVICE sets `decision` only on the named device's row, and only if it
+ * was still null (already-resolved devices are left untouched - resolving
+ * the same device twice must never silently overwrite the earlier answer).
+ */
+function applyRequestResolution(devices, action) {
+  const next = action.scope === 'GLOBAL'
+    ? devices.map(d => (d.decision === null ? { ...d, decision: action.decision } : d))
+    : devices.map(d => (
+      d.deviceId === action.deviceId && d.decision === null
+        ? { ...d, decision: action.decision }
+        : d
+    ));
+  return { devices: next, fullyResolved: next.every(d => d.decision !== null) };
+}
+
 module.exports = {
   DECISIONS,
   DECIDED_TTL_MS,
@@ -307,4 +345,5 @@ module.exports = {
   evaluateDomain,
   validateDomainRuleInput,
   domainCovers,
+  applyRequestResolution,
 };

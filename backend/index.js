@@ -192,7 +192,12 @@ function requireAdmin(req, res, next) {
     return res.status(401).json({ error: 'not authenticated' });
   }
   try {
-    jwt.verify(token, JWT_SECRET);
+    // Exposed as req.admin so routes that write an audit trail (see the
+    // Browser Policy admin endpoints) can record who made the change.
+    // There is only one shared admin login today (ADMIN_USERNAME), not
+    // per-admin accounts, so this identifies "the admin panel", not a
+    // specific real person - documented as a known limitation.
+    req.admin = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
     res.status(401).json({ error: 'invalid session' });
@@ -1245,7 +1250,9 @@ app.post('/api/devices/:deviceId/browser/check', requireDevice, wrap(async (req,
 }));
 
 app.get('/api/browser/domains', requireAdmin, wrap(async (req, res) => {
-  res.json(await db.listBrowserDomains());
+  const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+  const decision = typeof req.query.decision === 'string' ? req.query.decision : undefined;
+  res.json(await db.listBrowserDomains({ search, decision }));
 }));
 
 app.post('/api/browser/domains', requireAdmin, wrap(async (req, res) => {
@@ -1272,12 +1279,37 @@ app.post('/api/browser/domains', requireAdmin, wrap(async (req, res) => {
     confidence: typeof req.body.confidence === 'number' ? req.body.confidence : null,
     reason: typeof req.body.reason === 'string' ? req.body.reason : null,
     approvalMethod: 'admin_manual',
+    actor: req.admin && req.admin.username,
   });
   res.json(saved);
 }));
 
+// Deletes a global rule (reverts the domain to "no decision" = REVIEW).
+// A clear, safe, auditable semantic - never touches device overrides or
+// request history (see db.deleteBrowserDomain's own doc).
+app.delete('/api/browser/domains/:domain', requireAdmin, wrap(async (req, res) => {
+  const host = browserPolicy.normalizeHost(req.params.domain);
+  const deleted = await db.deleteBrowserDomain(host, {
+    actor: req.admin && req.admin.username,
+    reason: typeof req.body?.reason === 'string' ? req.body.reason : null,
+  });
+  if (!deleted) {
+    return res.status(404).json({ error: 'no rule exists for this domain' });
+  }
+  res.json({ status: 'deleted', domain: host });
+}));
+
 app.get('/api/browser/requests', requireAdmin, wrap(async (req, res) => {
   res.json(await db.listPendingBrowserRequests());
+}));
+
+// Per-device breakdown of one request - lets the admin panel show exactly
+// which devices are still waiting vs. already answered before picking a
+// DEVICE-scope target (see "Global vs Device scope" - the UI must never
+// let an admin think they approved one device when they approved everyone,
+// or vice versa).
+app.get('/api/browser/requests/:id/devices', requireAdmin, wrap(async (req, res) => {
+  res.json(await db.listBrowserRequestDevices(req.params.id));
 }));
 
 app.post('/api/browser/requests/:id/resolve', requireAdmin, wrap(async (req, res) => {
@@ -1316,11 +1348,39 @@ app.post('/api/browser/requests/:id/resolve', requireAdmin, wrap(async (req, res
     decision,
     deviceId: req.body.deviceId,
     reason: typeof req.body.reason === 'string' ? req.body.reason : null,
+    actor: req.admin && req.admin.username,
   });
   if (!result) {
-    return res.status(404).json({ error: 'request not found or already resolved' });
+    // GLOBAL: request already resolved or never existed. DEVICE: this
+    // specific device has no still-pending row on this request (already
+    // resolved for them, or they never actually requested this domain) -
+    // NOT necessarily "the request is gone", which is why this is worth
+    // a distinct message rather than reusing the GLOBAL 404 text.
+    return res.status(404).json({
+      error: scope === 'GLOBAL'
+        ? 'request not found or already resolved'
+        : 'no pending request found for this device on this domain (already resolved, or never requested)',
+    });
   }
-  res.json({ status: 'resolved', domain: result.domain });
+  res.json({
+    status: 'resolved',
+    domain: result.domain,
+    scope: result.scope,
+    ...(result.scope === 'DEVICE' ? {
+      deviceId: result.deviceId,
+      // Tells the admin panel whether this was the LAST device still
+      // waiting (request now fully closed) or others remain pending -
+      // exactly the distinction the UI must never blur (see item 6).
+      requestFullyResolved: result.requestFullyResolved,
+    } : {}),
+  });
+}));
+
+// Recent policy-CHANGE audit trail (never browsing history - see
+// db.insertAuditRow's doc). Optional ?domain= to see one domain's history.
+app.get('/api/browser/audit', requireAdmin, wrap(async (req, res) => {
+  const domain = typeof req.query.domain === 'string' ? browserPolicy.normalizeHost(req.query.domain) : undefined;
+  res.json(await db.listBrowserPolicyAudit({ domain, limit: req.query.limit }));
 }));
 
 app.use((err, req, res, next) => {

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -230,12 +231,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS browser_requests_pending_domain_idx
 -- users asked for this" count - a plain counter column would double-count
 -- the same device re-triggering a request (e.g. retrying after "site under
 -- review").
+-- decision/resolved_at are per-DEVICE resolution state (Phase 2) - a
+-- request shared by several devices must let an admin resolve it for ONE
+-- device (DEVICE scope) without silently closing it out for the others
+-- still waiting. NULL decision = this device is still pending. The parent
+-- browser_requests row only flips to RESOLVED via DEVICE scope once every
+-- sibling row here has a non-null decision (see resolveBrowserRequest);
+-- a GLOBAL resolution sets decision on every row here directly, since a
+-- global rule genuinely does answer every device's request at once.
 CREATE TABLE IF NOT EXISTS browser_request_devices (
   request_id  UUID NOT NULL REFERENCES browser_requests(id) ON DELETE CASCADE,
   device_id   TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (request_id, device_id)
 );
+
+-- Added in Phase 2 - CREATE TABLE IF NOT EXISTS above is a no-op against a
+-- database that already ran it in Phase 1, so these columns need their own
+-- explicit migration (same convention as every other table in this file).
+ALTER TABLE browser_request_devices
+  ADD COLUMN IF NOT EXISTS decision TEXT CHECK (decision IN ('ALLOW', 'BLOCK'));
+ALTER TABLE browser_request_devices ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 
 -- Every /browser/check outcome, for audit and for building real reputation
 -- signal later (Phase 3+) - append-only, never updated.
@@ -262,6 +278,31 @@ CREATE TABLE IF NOT EXISTS browser_policy_meta (
 );
 INSERT INTO browser_policy_meta (key, value) VALUES ('policy_version', 1)
   ON CONFLICT (key) DO NOTHING;
+
+-- ---------- Filtered Browser: Admin workflow + audit (Phase 2) ----------
+-- Policy-CHANGE audit, not browsing history: one row per admin write
+-- (domain upsert/delete, request resolve). Never logs a device's browsing
+-- activity - that's browser_decision_log's job (Phase 1), a separate,
+-- append-only table this one has nothing to do with. actor is best-effort:
+-- Phase 2 has a single shared admin login (see AUTH_ENABLED/ADMIN_USERNAME
+-- in index.js), not distinct per-admin accounts, so this records the
+-- configured admin username from the session JWT, not a real user id.
+CREATE TABLE IF NOT EXISTS browser_policy_audit (
+  id                   UUID PRIMARY KEY,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor                TEXT,
+  action               TEXT NOT NULL,
+  domain               TEXT NOT NULL,
+  scope                TEXT NOT NULL CHECK (scope IN ('GLOBAL', 'DEVICE')),
+  device_id            TEXT,
+  old_decision         TEXT,
+  new_decision         TEXT,
+  reason               TEXT,
+  policy_version_after BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS browser_policy_audit_domain_idx
+  ON browser_policy_audit (domain, created_at DESC);
 `;
 
 async function init() {
@@ -903,22 +944,92 @@ async function getBrowserDeviceOverride(deviceId, host) {
   return rows[0] || null;
 }
 
-async function listBrowserDomains() {
+/** search: case-insensitive substring match on the domain. decision:
+ * exact filter (ALLOW/BLOCK/REVIEW). Both optional - admin panel's search
+ * box and status filter (Phase 2). */
+async function listBrowserDomains({ search, decision } = {}) {
+  const clauses = [];
+  const params = [];
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    clauses.push(`domain LIKE $${params.length}`);
+  }
+  if (decision) {
+    params.push(decision);
+    clauses.push(`decision = $${params.length}`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const { rows } = await pool.query(
-    `SELECT * FROM browser_domains ORDER BY updated_at DESC LIMIT 500`,
+    `SELECT * FROM browser_domains ${where} ORDER BY updated_at DESC LIMIT 500`,
+    params,
   );
   return rows.map(mapBrowserDomainRow);
 }
 
+/** Policy-change audit row, inside the caller's existing transaction -
+ * every write to browser_domains/browser_device_overrides in this file
+ * writes exactly one of these in the same transaction as the write it
+ * describes, so an audit entry can never exist without the change it
+ * documents actually having been committed (or vice versa). This is a
+ * log of POLICY changes only, never of device browsing activity - that
+ * stays in browser_decision_log, a separate table this never touches. */
+async function insertAuditRow(client, {
+  actor, action, domain, scope, deviceId, oldDecision, newDecision, reason, policyVersionAfter,
+}) {
+  await client.query(
+    `INSERT INTO browser_policy_audit
+       (id, actor, action, domain, scope, device_id, old_decision, new_decision, reason, policy_version_after)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      crypto.randomUUID(), actor || null, action, domain, scope, deviceId || null,
+      oldDecision || null, newDecision || null, reason || null, policyVersionAfter,
+    ],
+  );
+}
+
+async function listBrowserPolicyAudit({ domain, limit } = {}) {
+  const clauses = [];
+  const params = [];
+  if (domain) {
+    params.push(domain);
+    clauses.push(`domain = $${params.length}`);
+  }
+  params.push(Math.min(Math.max(Number(limit) || 100, 1), 500));
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT * FROM browser_policy_audit ${where} ORDER BY created_at DESC LIMIT $${params.length}`,
+    params,
+  );
+  return rows.map(row => ({
+    id: row.id,
+    createdAt: row.created_at.toISOString(),
+    actor: row.actor,
+    action: row.action,
+    domain: row.domain,
+    scope: row.scope,
+    deviceId: row.device_id,
+    oldDecision: row.old_decision,
+    newDecision: row.new_decision,
+    reason: row.reason,
+    policyVersionAfter: row.policy_version_after != null ? Number(row.policy_version_after) : null,
+  }));
+}
+
 /** Direct admin decision on a domain (bypasses the request queue entirely -
  * e.g. pre-seeding a known-good/known-bad list). Bumps both the domain's own
- * decisionVersion and the global policyVersion in the same transaction. */
+ * decisionVersion and the global policyVersion, and writes an audit row,
+ * all in the same transaction. */
 async function upsertBrowserDomain({
-  domain, decision, allowSubdomains, category, riskScore, confidence, reason, approvalMethod,
+  domain, decision, allowSubdomains, category, riskScore, confidence, reason, approvalMethod, actor,
 }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const existing = await client.query(
+      `SELECT decision FROM browser_domains WHERE domain = $1 FOR UPDATE`,
+      [domain],
+    );
+    const oldDecision = existing.rows[0] ? existing.rows[0].decision : null;
     const { rows } = await client.query(
       `INSERT INTO browser_domains
          (domain, decision, allow_subdomains, category, risk_score, confidence,
@@ -942,11 +1053,53 @@ async function upsertBrowserDomain({
         reason || null, Date.now(),
       ],
     );
-    await client.query(
-      `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version'`,
+    const { rows: metaRows } = await client.query(
+      `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version' RETURNING value`,
     );
+    await insertAuditRow(client, {
+      actor, action: 'domain_upsert', domain, scope: 'GLOBAL',
+      oldDecision, newDecision: decision, reason,
+      policyVersionAfter: Number(metaRows[0].value),
+    });
     await client.query('COMMIT');
     return mapBrowserDomainRow(rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** Deletes a global domain rule - reverts the domain to "no decision"
+ * (evaluates to REVIEW again, same as if it had never been ruled on).
+ * A clear, safe semantic: unlike an edit, there's no ambiguity about what
+ * "delete" means here. Returns false if no such rule existed. Never
+ * touches browser_device_overrides or browser_requests - deleting a
+ * global rule doesn't retroactively change per-device overrides or
+ * request history. */
+async function deleteBrowserDomain(domain, { actor, reason } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `DELETE FROM browser_domains WHERE domain = $1 RETURNING decision`,
+      [domain],
+    );
+    if (!rows[0]) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    const { rows: metaRows } = await client.query(
+      `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version' RETURNING value`,
+    );
+    await insertAuditRow(client, {
+      actor, action: 'domain_delete', domain, scope: 'GLOBAL',
+      oldDecision: rows[0].decision, newDecision: null, reason,
+      policyVersionAfter: Number(metaRows[0].value),
+    });
+    await client.query('COMMIT');
+    return true;
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -1000,9 +1153,19 @@ async function recordBrowserRequest(id, { domain, url, deviceId }) {
   }
 }
 
+/**
+ * requesterCount is the number of devices STILL WAITING on a decision
+ * (decision IS NULL) - the operationally meaningful count for an admin
+ * deciding what to do next. totalRequesterCount is everyone who ever asked
+ * about this domain under this request, including any already resolved
+ * individually via a prior DEVICE-scope resolution.
+ */
 async function listPendingBrowserRequests() {
   const { rows } = await pool.query(
-    `SELECT r.*, COUNT(DISTINCT rd.device_id)::int AS requester_count
+    `SELECT r.*,
+            COUNT(rd.device_id) FILTER (WHERE rd.decision IS NULL)::int AS pending_device_count,
+            COUNT(rd.device_id)::int AS total_device_count,
+            MAX(rd.created_at) AS last_requested_at
        FROM browser_requests r
        LEFT JOIN browser_request_devices rd ON rd.request_id = r.id
       WHERE r.status = 'PENDING'
@@ -1013,12 +1176,33 @@ async function listPendingBrowserRequests() {
   return rows.map(row => ({
     id: row.id,
     domain: row.domain,
-    firstUrl: row.first_url,
-    requesterCount: row.requester_count,
+    exampleUrl: row.first_url,
+    requesterCount: row.pending_device_count,
+    totalRequesterCount: row.total_device_count,
+    lastRequestedAt: row.last_requested_at ? row.last_requested_at.toISOString() : null,
     category: row.category,
     riskScore: row.risk_score != null ? Number(row.risk_score) : null,
     confidence: row.confidence != null ? Number(row.confidence) : null,
     reason: row.reason,
+    createdAt: row.created_at.toISOString(),
+  }));
+}
+
+/** Per-device breakdown for one request - powers the admin "open details"
+ * view where a specific device is picked for a DEVICE-scope resolution.
+ * decision is null for a device still waiting. */
+async function listBrowserRequestDevices(requestId) {
+  const { rows } = await pool.query(
+    `SELECT device_id, decision, resolved_at, created_at
+       FROM browser_request_devices
+      WHERE request_id = $1
+      ORDER BY created_at ASC`,
+    [requestId],
+  );
+  return rows.map(row => ({
+    deviceId: row.device_id,
+    decision: row.decision,
+    resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
     createdAt: row.created_at.toISOString(),
   }));
 }
@@ -1036,30 +1220,62 @@ async function getPendingBrowserRequestDomain(id) {
 }
 
 /**
- * Resolves a PENDING request either globally (writes/updates browser_domains)
- * or for one device (writes browser_device_overrides), and bumps the global
- * policyVersion - all in one transaction, so a crash mid-way never leaves a
- * request marked RESOLVED without the decision actually having been applied
- * anywhere. Returns null if the request was already resolved or doesn't exist.
+ * Resolves a request either globally or for one device - see db.js's
+ * comment on browser_request_devices for the full model. The critical
+ * property: a request shared by several devices is NEVER silently closed
+ * out for devices still waiting just because one of them got a DEVICE-
+ * scope decision.
+ *
+ * GLOBAL: writes/updates browser_domains, stamps every still-pending
+ * sibling device row with the same decision (a global rule genuinely does
+ * answer everyone who was waiting), closes the request, bumps
+ * policyVersion, writes an audit row - all one transaction.
+ *
+ * DEVICE: resolves ONLY this device's row in browser_request_devices and
+ * writes browser_device_overrides. The parent request only flips to
+ * RESOLVED once every sibling row has a non-null decision (checked here,
+ * every call) - if other devices are still waiting, the request stays
+ * PENDING and keeps showing up in listPendingBrowserRequests() for them.
+ *
+ * Returns null if there's nothing to resolve:
+ *   - GLOBAL: the request isn't PENDING or doesn't exist.
+ *   - DEVICE: this device has no still-pending row on this request
+ *     (already resolved for them, or they never actually requested it).
+ * On success: { domain, scope: 'GLOBAL' } or
+ * { domain, scope: 'DEVICE', deviceId, requestFullyResolved }.
  */
-async function resolveBrowserRequest(id, { scope, decision, deviceId, reason }) {
+async function resolveBrowserRequest(id, { scope, decision, deviceId, reason, actor }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query(
-      `UPDATE browser_requests
-          SET status = 'RESOLVED', resolution_scope = $2, resolution_decision = $3,
-              resolved_at = now(), updated_at = now()
-        WHERE id = $1 AND status = 'PENDING'
-        RETURNING domain`,
-      [id, scope, decision],
-    );
-    const domain = rows[0] ? rows[0].domain : null;
-    if (!domain) {
-      await client.query('ROLLBACK');
-      return null;
-    }
+
     if (scope === 'GLOBAL') {
+      const { rows } = await client.query(
+        `UPDATE browser_requests
+            SET status = 'RESOLVED', resolution_scope = 'GLOBAL', resolution_decision = $2,
+                resolved_at = now(), updated_at = now()
+          WHERE id = $1 AND status = 'PENDING'
+          RETURNING domain`,
+        [id, decision],
+      );
+      const domain = rows[0] ? rows[0].domain : null;
+      if (!domain) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      // A global rule answers every device still waiting on this request -
+      // stamp them so listBrowserRequestDevices() doesn't keep showing
+      // them as pending on a request that is, in fact, resolved.
+      await client.query(
+        `UPDATE browser_request_devices SET decision = $2, resolved_at = now()
+          WHERE request_id = $1 AND decision IS NULL`,
+        [id, decision],
+      );
+      const existingDomain = await client.query(
+        `SELECT decision FROM browser_domains WHERE domain = $1 FOR UPDATE`,
+        [domain],
+      );
+      const oldDecision = existingDomain.rows[0] ? existingDomain.rows[0].decision : null;
       await client.query(
         `INSERT INTO browser_domains (domain, decision, source, approval_method, reason, approved_at, decision_version)
          VALUES ($1, $2, 'admin_request', 'admin_manual', $3, $4, 1)
@@ -1073,20 +1289,83 @@ async function resolveBrowserRequest(id, { scope, decision, deviceId, reason }) 
            updated_at = now()`,
         [domain, decision, reason || null, Date.now()],
       );
-    } else {
+      const { rows: metaRows } = await client.query(
+        `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version' RETURNING value`,
+      );
+      await insertAuditRow(client, {
+        actor, action: 'request_resolve_global', domain, scope: 'GLOBAL',
+        oldDecision, newDecision: decision, reason,
+        policyVersionAfter: Number(metaRows[0].value),
+      });
+      await client.query('COMMIT');
+      return { domain, scope: 'GLOBAL' };
+    }
+
+    // DEVICE scope: only this device's row, only if it's still pending -
+    // the WHERE clause is what prevents double-resolving the same device
+    // twice (see "duplicate resolution" in the test list).
+    const { rows: deviceRows } = await client.query(
+      `UPDATE browser_request_devices
+          SET decision = $3, resolved_at = now()
+        WHERE request_id = $1 AND device_id = $2 AND decision IS NULL
+        RETURNING request_id`,
+      [id, deviceId, decision],
+    );
+    if (!deviceRows[0]) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const { rows: reqRows } = await client.query(
+      `SELECT domain FROM browser_requests WHERE id = $1`,
+      [id],
+    );
+    const domain = reqRows[0] ? reqRows[0].domain : null;
+    if (!domain) {
+      // FK guarantees the parent row exists, so this should be
+      // unreachable - fail closed rather than writing an override with
+      // no known domain if it somehow ever happened.
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const existingOverride = await client.query(
+      `SELECT decision FROM browser_device_overrides WHERE device_id = $1 AND domain = $2`,
+      [deviceId, domain],
+    );
+    const oldDecision = existingOverride.rows[0] ? existingOverride.rows[0].decision : null;
+    await client.query(
+      `INSERT INTO browser_device_overrides (device_id, domain, decision, reason)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (device_id, domain) DO UPDATE SET
+         decision = EXCLUDED.decision, reason = EXCLUDED.reason, created_at = now()`,
+      [deviceId, domain, decision, reason || null],
+    );
+    const { rows: remaining } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM browser_request_devices WHERE request_id = $1 AND decision IS NULL`,
+      [id],
+    );
+    const requestFullyResolved = remaining[0].n === 0;
+    if (requestFullyResolved) {
+      // Only flips PENDING -> RESOLVED when every device that ever asked
+      // has now individually been answered - a request with even one
+      // sibling still at decision IS NULL stays PENDING and keeps
+      // appearing in listPendingBrowserRequests() for that device.
       await client.query(
-        `INSERT INTO browser_device_overrides (device_id, domain, decision, reason)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (device_id, domain) DO UPDATE SET
-           decision = EXCLUDED.decision, reason = EXCLUDED.reason, created_at = now()`,
-        [deviceId, domain, decision, reason || null],
+        `UPDATE browser_requests
+            SET status = 'RESOLVED', resolution_scope = 'DEVICE', resolved_at = now(), updated_at = now()
+          WHERE id = $1 AND status = 'PENDING'`,
+        [id],
       );
     }
-    await client.query(
-      `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version'`,
+    const { rows: metaRows } = await client.query(
+      `UPDATE browser_policy_meta SET value = value + 1 WHERE key = 'policy_version' RETURNING value`,
     );
+    await insertAuditRow(client, {
+      actor, action: 'request_resolve_device', domain, scope: 'DEVICE', deviceId,
+      oldDecision, newDecision: decision, reason,
+      policyVersionAfter: Number(metaRows[0].value),
+    });
     await client.query('COMMIT');
-    return { domain };
+    return { domain, scope: 'DEVICE', deviceId, requestFullyResolved };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -1158,4 +1437,7 @@ module.exports = {
   getBrowserPolicyVersion,
   logBrowserDecision,
   getPendingBrowserRequestDomain,
+  listBrowserRequestDevices,
+  deleteBrowserDomain,
+  listBrowserPolicyAudit,
 };

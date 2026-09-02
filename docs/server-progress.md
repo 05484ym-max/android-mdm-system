@@ -49,6 +49,53 @@ Owner: Claude
   rejection-reason table, and the two concrete guarantees this closes
   (no accidental shared-hosting wildcard; one canonical row per real site).
 
+**Phase 2 (admin review workflow + policy management), this update:**
+- Read GPT's docs fresh from `filtered-browser-client` and my own
+  `server-progress.md`/`server-api-contract.md` before starting — no drift.
+- **Critical fix (flagged before this phase started):** a request shared by
+  several devices no longer gets silently closed out for devices still
+  waiting when one device is resolved with `scope: "DEVICE"`. Reworked the
+  data model: `browser_request_devices` now carries its own `decision`/
+  `resolved_at` per device (migration-safe `ALTER TABLE ADD COLUMN IF NOT
+  EXISTS`, since the table already existed from Phase 1). `resolveBrowserRequest`
+  rewritten: `GLOBAL` answers every still-waiting device at once and closes
+  the request; `DEVICE` answers only the named device and the parent only
+  flips to `RESOLVED` once every sibling row is non-null. Full writeup in
+  `server-api-contract.md`'s new "Shared-request resolution" section.
+- New `browser_policy_audit` table + `db.insertAuditRow` — one row per
+  admin policy change (never browsing history), written in the same
+  transaction as the change it documents, for every write path
+  (`upsertBrowserDomain`, `deleteBrowserDomain`, both branches of
+  `resolveBrowserRequest`). `actor` is the admin session's username
+  (`req.admin.username`, now exposed by `requireAdmin`).
+- New: `DELETE /api/browser/domains/:domain` (delete a global rule — clear,
+  safe "revert to no decision" semantics, audited).
+- New: `GET /api/browser/requests/:id/devices` (per-device breakdown of a
+  request, for the admin UI's "who's still waiting" view before a
+  DEVICE-scope action).
+- New: `GET /api/browser/audit?domain=` (policy-change history).
+- `GET /api/browser/domains` gained `?search=` and `?decision=` filters.
+- `GET /api/browser/requests` now reports `requesterCount` as devices
+  *still waiting* (was: everyone who ever asked) plus a new
+  `totalRequesterCount` and `lastRequestedAt` — the operationally correct
+  numbers for an admin deciding what to do next.
+- Built the admin panel UI: new "דפדפן מסונן" tab in the existing
+  `admin-panel/index.html` (own `browser.css`/`browser.js`, same isolation
+  convention as `health.js`/`alerts.js`/`diagnostics.js` — touches nothing
+  else in the existing panel). Requests view (global allow/block with
+  confirmation, expandable per-device list with its own allow/block-for-
+  this-device-only actions) and Domains view (search/filter, add/edit form,
+  delete with confirmation, expandable per-domain audit history). GLOBAL
+  vs. DEVICE is always shown with visually distinct badges (solid filled
+  for GLOBAL, outlined for DEVICE) and named explicitly in every
+  confirmation dialog, so an admin can't mistake one for the other.
+  Reuses the existing palette (`--accent`/`--ok`/`--danger`/etc. from
+  `index.html`'s `:root`) — no new global CSS tokens, one new local color
+  for REVIEW (amber, not previously needed anywhere else in the panel).
+- Server remains the sole source of truth: every admin-panel write goes
+  through the same backend validation as any other API caller — the UI
+  does not duplicate or substitute for it.
+
 ## TESTED
 
 All real, run-every-time (`node backend/test-browser-policy.js`), no
@@ -79,12 +126,42 @@ framework needed:
   hand-reviewed, not exercised against a real database — same disclosed
   limitation as Phase 1.
 
+**Phase 2 additions** (49/49 total now, `node backend/test-browser-policy.js`):
+- Extracted `browserPolicy.applyRequestResolution(devices, action)` — a
+  pure, DB-free mirror of `resolveBrowserRequest`'s SQL semantics (documented
+  in its own comment as a specification/test mirror, not something called
+  from the real request path — the live DB transaction is what actually has
+  to be race-safe, not a plain JS array transform). Used it to write real,
+  passing tests for exactly the scenario flagged as critical:
+  - Two devices share a request; resolving device A leaves device B still
+    at `decision: null` (not fully resolved).
+  - Resolving the last still-waiting device flips the request to fully
+    resolved.
+  - A `GLOBAL` resolution answers every still-waiting device at once.
+  - A duplicate `DEVICE` resolution attempt never overwrites an
+    already-answered device's earlier decision.
+  - A later `GLOBAL` resolution never overwrites a device that already got
+    an individual answer — only devices still waiting are affected.
+- **Explicitly NOT tested against a live database** (same disclosed gap as
+  Phase 1/1.1, now applying to more surface area): the actual transaction/
+  rollback behavior, `policyVersion`/`decisionVersion` bump correctness,
+  audit-row creation, and concurrent-resolve race safety are hand-reviewed
+  in the SQL (every multi-statement write is wrapped `BEGIN`/`COMMIT`/
+  `ROLLBACK`; every resolve path uses a `WHERE decision IS NULL` /
+  `WHERE status = 'PENDING'` guard specifically so two concurrent resolve
+  attempts can't both "win") but not exercised against Postgres. Also not
+  tested end-to-end: `requireAdmin` rejecting an unauthenticated request
+  (pre-existing, unchanged logic — only extended to expose `req.admin`) and
+  the admin-panel UI itself (no browser/DOM environment here — reviewed by
+  reading the code, not by clicking through it).
+
 ## CLIENT IMPACT
 
 None on the wire contract — `ALLOW`/`BLOCK`/`REVIEW` and every JSON field
-GPT's client depends on are unchanged. This phase only makes admin-side
-rule writes stricter; nothing the client sends or receives changed shape.
-GPT does not need to change anything in `/client/**` for this update.
+GPT's client depends on are unchanged. Phase 2 only adds/extends admin-only
+endpoints and the admin panel UI; nothing the Android client sends or
+receives changed shape. GPT does not need to change anything in
+`/client/**` for this update.
 
 ## KNOWN LIMITATIONS
 
@@ -100,6 +177,20 @@ GPT does not need to change anything in `/client/**` for this update.
   invariant that `allowSubdomains=true` only ever exists on a genuine
   registrable domain is enforced once, at write time, not re-derived on
   every check. Documented as a deliberate architecture choice, not a gap.
+- **Phase 2**: `browser_device_overrides` still has no `allowSubdomains`
+  column — a DEVICE-scope resolution is always exact-domain-only, by design
+  (unchanged from Phase 1).
+- **Phase 2**: `browser_policy_audit.actor` identifies the shared admin
+  login, not a specific real person — there is no per-admin account system.
+  Acceptable for a single-operator panel; would need real multi-admin
+  auth to mean more than that.
+- **Phase 2**: the admin panel's "delete rule" and "edit rule" both reuse
+  the existing single `POST /api/browser/domains` (upsert) / new `DELETE`
+  endpoint — there is no separate `PATCH`. Deliberate: one write path per
+  resource is simpler to validate and audit than two overlapping ones.
+- No automatic approval, AI, Redis, queue, analyzer worker, Safe Browsing,
+  RDAP/domain-age, FCM emergency revoke, or policy signing yet — explicitly
+  out of scope for Phase 2 per instruction, not started.
 
 ## NEXT
 

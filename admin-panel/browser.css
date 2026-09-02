@@ -1,0 +1,88 @@
+/* "דפדפן מסונן" (Filtered Browser) admin tab - reuses the existing palette
+   (--bg/--card-bg/--card-border/--accent/--text/--text-dim/--danger/--ok
+   from index.html's :root) rather than redefining it, so this stays
+   visually consistent with the rest of the panel without touching any
+   shared/unrelated styling. --warn is new (not in :root) - REVIEW is a
+   status this admin tab is the first to need. */
+
+.browser-toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.browser-search-input {
+  flex: 1; min-width: 160px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text);
+  font-family: inherit; font-size: 0.9rem;
+}
+.browser-filter-select {
+  padding: 10px 12px; border-radius: 10px; border: 1px solid var(--card-border);
+  background: var(--card-bg); color: var(--text); font-family: inherit; font-size: 0.9rem;
+}
+
+.browser-card, .browser-domain-row {
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 14px;
+  padding: 14px; margin-bottom: 10px;
+}
+
+.browser-card-header, .browser-domain-row-main {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;
+}
+.browser-domain, .browser-domain-name { font-size: 1.05rem; font-weight: 800; color: var(--text); word-break: break-all; }
+.browser-url { color: var(--text-dim); font-size: 0.78rem; direction: ltr; text-align: right; word-break: break-all; margin-bottom: 8px; }
+
+.browser-badge {
+  display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 700;
+}
+.browser-badge.ok { background: var(--accent-tint); color: var(--ok); }
+.browser-badge.bad { background: rgba(179,67,44,0.12); color: var(--danger); }
+.browser-badge.warn { background: rgba(165,102,29,0.12); color: #A5661D; }
+.browser-badge.subdomains { background: var(--accent-tint); color: var(--accent); }
+
+/* GLOBAL vs DEVICE must never be visually similar enough to confuse -
+   solid/filled for the wide-blast-radius GLOBAL action, outlined for the
+   narrow DEVICE one. This distinction is deliberate, not decorative. */
+.browser-scope-badge {
+  display: inline-block; padding: 5px 10px; border-radius: 8px; font-size: 0.75rem; font-weight: 700;
+}
+.browser-scope-badge.global { background: var(--accent); color: #fff; }
+.browser-scope-badge.device { background: transparent; color: var(--accent); border: 1.5px solid var(--accent-soft); }
+
+.browser-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 14px; margin-bottom: 10px; }
+.browser-field { font-size: 0.78rem; }
+.browser-field span { display: block; color: var(--text-dim); }
+.browser-field b { color: var(--text); word-break: break-word; }
+
+.browser-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.browser-btn {
+  border: 0; border-radius: 9px; padding: 9px 14px; font-weight: 700; font-size: 0.82rem;
+  cursor: pointer; font-family: inherit; color: #fff; background: var(--accent);
+}
+.browser-btn.small { padding: 6px 10px; font-size: 0.75rem; }
+.browser-btn.ok { background: var(--ok); }
+.browser-btn.bad { background: var(--danger); }
+.browser-btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--card-border); }
+.browser-btn:disabled { opacity: 0.55; cursor: default; }
+
+.browser-devices { margin-top: 10px; border-top: 1px dashed var(--card-border); padding-top: 10px; display: grid; gap: 8px; }
+.browser-device-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--bg); border-radius: 10px; padding: 8px 10px;
+}
+.browser-device-row.resolved { opacity: 0.75; }
+.browser-device-id { font-family: monospace; font-size: 0.78rem; color: var(--text); direction: ltr; }
+
+.browser-history { margin-top: 10px; border-top: 1px dashed var(--card-border); padding-top: 10px; display: grid; gap: 6px; }
+.browser-audit-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.78rem; color: var(--text);
+  padding: 6px 0; border-bottom: 1px solid var(--card-border);
+}
+.browser-audit-time { color: var(--text-dim); min-width: 120px; }
+
+.browser-domain-form {
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 14px;
+  padding: 14px; margin-bottom: 16px; display: grid; gap: 8px;
+}
+.browser-domain-form-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.browser-domain-form input[type="text"], .browser-domain-form select {
+  flex: 1; min-width: 140px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--card-border); background: var(--bg); color: var(--text);
+  font-family: inherit; font-size: 0.88rem;
+}
+.browser-checkbox-row { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text); }

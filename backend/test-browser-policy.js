@@ -292,4 +292,50 @@ check('validateDomainRuleInput: never throws on pathological strings', () => {
   }
 });
 
+// ---------- Phase 2: shared-request resolution (applyRequestResolution) ----------
+// Mirrors db.js's resolveBrowserRequest SQL semantics line-by-line - see
+// that function's own tests further down for the exact scenario GPT
+// flagged as critical: a request shared by two devices must not have one
+// device's resolution silently close it out for the other.
+
+check('shared request: DEVICE resolution for A leaves B still pending', () => {
+  const devices = [{ deviceId: 'A', decision: null }, { deviceId: 'B', decision: null }];
+  const r = bp.applyRequestResolution(devices, { scope: 'DEVICE', deviceId: 'A', decision: 'ALLOW' });
+  assert.deepStrictEqual(r.devices, [{ deviceId: 'A', decision: 'ALLOW' }, { deviceId: 'B', decision: null }]);
+  assert.strictEqual(r.fullyResolved, false, 'request must NOT be fully resolved while B is still waiting');
+});
+
+check('shared request: resolving the last still-waiting device fully resolves it', () => {
+  const afterA = [{ deviceId: 'A', decision: 'ALLOW' }, { deviceId: 'B', decision: null }];
+  const r = bp.applyRequestResolution(afterA, { scope: 'DEVICE', deviceId: 'B', decision: 'BLOCK' });
+  assert.deepStrictEqual(r.devices, [{ deviceId: 'A', decision: 'ALLOW' }, { deviceId: 'B', decision: 'BLOCK' }]);
+  assert.strictEqual(r.fullyResolved, true);
+});
+
+check('shared request: GLOBAL resolution answers every still-waiting device at once', () => {
+  const devices = [{ deviceId: 'A', decision: null }, { deviceId: 'B', decision: null }, { deviceId: 'C', decision: null }];
+  const r = bp.applyRequestResolution(devices, { scope: 'GLOBAL', decision: 'ALLOW' });
+  assert.deepStrictEqual(r.devices, [
+    { deviceId: 'A', decision: 'ALLOW' }, { deviceId: 'B', decision: 'ALLOW' }, { deviceId: 'C', decision: 'ALLOW' },
+  ]);
+  assert.strictEqual(r.fullyResolved, true);
+});
+
+check('shared request: duplicate DEVICE resolution never overwrites an already-answered device', () => {
+  const devices = [{ deviceId: 'A', decision: 'ALLOW' }, { deviceId: 'B', decision: null }];
+  const r = bp.applyRequestResolution(devices, { scope: 'DEVICE', deviceId: 'A', decision: 'BLOCK' });
+  // A already had an answer (ALLOW) - a second DEVICE resolution attempt
+  // for the same device must be a no-op on A's row, not silently flip it.
+  assert.strictEqual(r.devices.find(d => d.deviceId === 'A').decision, 'ALLOW');
+  assert.strictEqual(r.fullyResolved, false, 'B is still untouched and waiting');
+});
+
+check('shared request: GLOBAL resolution does not overwrite a device already answered individually', () => {
+  const devices = [{ deviceId: 'A', decision: 'BLOCK' }, { deviceId: 'B', decision: null }];
+  const r = bp.applyRequestResolution(devices, { scope: 'GLOBAL', decision: 'ALLOW' });
+  assert.strictEqual(r.devices.find(d => d.deviceId === 'A').decision, 'BLOCK', "A's earlier individual answer must survive");
+  assert.strictEqual(r.devices.find(d => d.deviceId === 'B').decision, 'ALLOW');
+  assert.strictEqual(r.fullyResolved, true);
+});
+
 console.log(`\n${passed} passed, 0 failed`);

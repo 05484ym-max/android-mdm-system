@@ -1,7 +1,7 @@
 # Filtered Browser — Server API Contract
 
 Owner: Claude (Backend / Admin / Worker)
-Status: Phase 1 + Phase 1.1 (hardening) IMPLEMENTED (foundations only — see Known Phase 1 Limitations)
+Status: Phase 1 + 1.1 (hardening) + 2 (admin workflow) IMPLEMENTED — see Known Phase 1 Limitations (still current for anything not covered by Phase 2)
 Branch: `filtered-browser-server`
 
 This document describes what the server actually guarantees to the Android
@@ -163,43 +163,82 @@ All require the existing admin session cookie (`requireAdmin`, same as
 every other `/api/...` admin route).
 
 ```
-GET  /api/browser/domains
+GET  /api/browser/domains?search=<text>&decision=ALLOW|BLOCK|REVIEW
 ```
-Returns every row in `browser_domains` (global policy), most recently
-updated first.
+Returns rows from `browser_domains` (global policy), most recently updated
+first. Both query params are optional; `search` is a case-insensitive
+substring match on the domain.
 
 ```
 POST /api/browser/domains
 { "domain": "example.com", "decision": "ALLOW", "allowSubdomains": false,
   "category": "news", "riskScore": 0.1, "confidence": 0.9, "reason": "..." }
 ```
-Directly sets (or updates) the global decision for a domain — bypasses the
-request queue entirely (e.g. for pre-seeding a known-good/known-bad list).
-Bumps that domain's `decisionVersion` and the global `policyVersion`.
-
-**As of Phase 1.1**, `domain` is validated before being written — see
-"Domain rule validation" below. An invalid domain returns:
+Directly sets (or updates — same endpoint, upsert semantics) the global
+decision for a domain — bypasses the request queue entirely (e.g. for
+pre-seeding a known-good/known-bad list, or editing an existing rule's
+category/reason/`allowSubdomains`). Bumps that domain's `decisionVersion`
+and the global `policyVersion`, and writes an audit row (action
+`domain_upsert`). `domain` is validated before being written — see "Domain
+rule validation" below. An invalid domain returns HTTP 400, never reaches
+the database:
 ```json
 { "error": "invalid domain: <reason>" }
 ```
-with HTTP 400 and never reaches the database.
+
+```
+DELETE /api/browser/domains/:domain
+{ "reason": "..." }
+```
+*(Phase 2)* Deletes a global rule — the domain reverts to "no decision"
+(evaluates to `REVIEW` again on the next `/browser/check`, exactly as if it
+had never been ruled on). Never touches `browser_device_overrides` or
+request history. Writes an audit row (action `domain_delete`, `newDecision:
+null`). Returns 404 if no rule exists for that domain.
 
 ```
 GET  /api/browser/requests
 ```
-Returns every `PENDING` request, each with a `requesterCount` (distinct
-devices that asked about that domain).
+Returns every request still `PENDING` overall (see "Shared-request
+resolution" below for what that means once more than one device is
+involved), each shaped as:
+```json
+{
+  "id": "...", "domain": "example.com", "exampleUrl": "https://example.com/x",
+  "requesterCount": 2, "totalRequesterCount": 3,
+  "createdAt": "...", "lastRequestedAt": "...",
+  "category": null, "riskScore": null, "confidence": null, "reason": null
+}
+```
+`requesterCount` is devices **still waiting** on a decision (the
+operationally meaningful number — this is what changed from Phase 1.1);
+`totalRequesterCount` is everyone who ever asked, including anyone already
+answered individually via a prior `DEVICE`-scope resolution.
+
+```
+GET  /api/browser/requests/:id/devices
+```
+*(Phase 2)* Per-device breakdown of one request:
+```json
+[
+  { "deviceId": "...", "decision": null, "resolvedAt": null, "createdAt": "..." },
+  { "deviceId": "...", "decision": "ALLOW", "resolvedAt": "...", "createdAt": "..." }
+]
+```
+`decision: null` means that device is still waiting. Powers the admin panel's
+"show pending devices" view before a `DEVICE`-scope resolve — an admin must
+be able to see exactly who is still waiting before picking one.
 
 ```
 POST /api/browser/requests/:id/resolve
 { "scope": "GLOBAL", "decision": "ALLOW", "reason": "..." }
 { "scope": "DEVICE", "decision": "BLOCK", "deviceId": "...", "reason": "..." }
 ```
-Resolves a pending request either globally (writes `browser_domains`) or
-for one device (writes a `browser_device_overrides` row) — done in a single
-transaction, so a crash mid-way never leaves a request marked resolved
-without the decision actually having been applied. Returns 404 if the
-request was already resolved or doesn't exist.
+Response:
+```json
+{ "status": "resolved", "domain": "example.com", "scope": "GLOBAL" }
+{ "status": "resolved", "domain": "example.com", "scope": "DEVICE", "deviceId": "...", "requestFullyResolved": false }
+```
 
 **As of Phase 1.1**, `scope: "GLOBAL"` also runs the request's stored
 domain through the same validation as `POST /api/browser/domains` *before*
@@ -212,6 +251,55 @@ shared-hosting boundary like `github.io`) returns HTTP 400 and is left
 `scope: "DEVICE"` is not affected — per-device overrides never carry
 `allowSubdomains` (see the data model), so the Public Suffix risk this
 closes doesn't apply there.
+
+**As of Phase 2** (critical semantic — see "Shared-request resolution"
+below): `scope: "GLOBAL"` writes `browser_domains` and answers **every**
+device that was still waiting on the request; `scope: "DEVICE"` writes
+`browser_device_overrides` for **only** the named device. A request shared
+by several devices is only marked fully resolved once every one of them has
+been answered — resolving it for one device leaves it visibly `PENDING`
+(with a reduced `requesterCount`) for the others, it is never silently
+closed out from under them. `requestFullyResolved` in the response tells
+the caller whether this particular call was the one that closed it. A 404
+on `scope: "DEVICE"` means *this device* has no still-pending row on this
+request (already answered, or never actually requested it) — not
+necessarily that the whole request is gone.
+
+```
+GET  /api/browser/audit?domain=<host>&limit=<n>
+```
+*(Phase 2)* Recent policy-**change** audit trail (never browsing history —
+see the data model). Both params optional; `limit` defaults to 100, capped
+at 500. Each entry: `{ id, createdAt, actor, action, domain, scope,
+deviceId, oldDecision, newDecision, reason, policyVersionAfter }`. `actor`
+is the admin-panel session's username — Phase 2 has one shared admin login,
+not per-admin accounts, so this identifies "the admin panel", not a
+specific real person (documented limitation, not a gap in this endpoint).
+
+## Shared-request resolution (Phase 2)
+
+This is the model behind the two endpoints above, and the fix for a
+correctness issue flagged before this phase started: if device A and
+device B both request `example.com`, and an admin resolves it for device A
+only (`scope: "DEVICE"`), device B's request must not vanish or read as
+resolved. Concretely:
+- Each requesting device gets its own row in `browser_request_devices`
+  (`decision: null` while waiting).
+- `scope: "GLOBAL"` sets every still-`null` row to the same decision (a
+  global rule genuinely does answer everyone at once) and closes the
+  parent request.
+- `scope: "DEVICE"` sets only the named device's row, and only if it was
+  still `null` (resolving the same device twice is a no-op on the second
+  call, returning 404 — see "duplicate resolution" in the test suite). The
+  parent request closes only once every row is non-`null`.
+- A device already individually resolved is never overwritten by a later
+  `GLOBAL` resolution on the same request (its earlier, specific answer is
+  preserved) — only the devices still waiting are affected.
+
+All of this happens inside a single database transaction per resolve call,
+so a crash mid-way never leaves a request marked resolved without the
+corresponding `browser_domains`/`browser_device_overrides` write — and
+never the reverse — actually having committed.
 
 ## Domain rule validation (Phase 1.1)
 
@@ -271,15 +359,28 @@ defense-in-depth re-check on every database read, not only relied on in SQL.
 - `browser_device_overrides` — `(device_id, domain)` PK, `decision`,
   `reason`, `created_at`.
 - `browser_requests` — pending/resolved review queue, one PENDING row per
-  domain at a time.
-- `browser_request_devices` — distinct requesting devices per request.
+  domain at a time (`status`, `resolution_scope`, `resolution_decision` —
+  the latter two are only meaningful for a `GLOBAL` resolution; a request
+  closed via individual `DEVICE` resolutions leaves them `null` since each
+  device may have gotten a different answer — see each device's own row
+  instead).
+- `browser_request_devices` — one row per requesting device per request.
+  **Phase 2**: `decision` (`null` while that device is still waiting,
+  `ALLOW`/`BLOCK` once answered) and `resolved_at` — see "Shared-request
+  resolution" above.
 - `browser_decision_log` — append-only audit trail of every `/browser/check`
-  outcome.
+  outcome (device browsing activity, not policy changes).
 - `browser_policy_meta` — single row holding the global `policy_version`
   counter.
+- `browser_policy_audit` — **Phase 2**. One row per admin **policy change**
+  (never per navigation/browsing event — that stays in
+  `browser_decision_log`): `actor`, `action`, `domain`, `scope`, `device_id`,
+  `old_decision`, `new_decision`, `reason`, `policy_version_after`. Written
+  in the same transaction as the change it documents.
 
 Full column definitions and comments are in `backend/db.js` (SCHEMA
-constant, "Filtered Browser: Browser Policy foundation" section).
+constant, "Filtered Browser: Browser Policy foundation" / "Admin workflow +
+audit" sections).
 
 ## Known Phase 1 limitations (read before assuming more than this)
 

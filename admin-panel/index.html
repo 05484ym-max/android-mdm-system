@@ -238,6 +238,7 @@
 <link rel="stylesheet" href="health.css">
 <link rel="stylesheet" href="diagnostics.css">
 <link rel="stylesheet" href="alerts.css">
+<link rel="stylesheet" href="browser.css">
 </head>
 <body>
 
@@ -323,6 +324,55 @@
   <div id="alertsList"></div>
 </div>
 
+<div class="tab-content" data-tab-content="browser">
+  <div class="sub-tabs">
+    <button class="sub-tab-btn active" data-browser-mode="requests">בקשות לאתרים</button>
+    <button class="sub-tab-btn" data-browser-mode="domains">רשימת דומיינים</button>
+  </div>
+
+  <div id="browserRequestsView">
+    <div class="browser-toolbar">
+      <button class="add-app-btn" id="browserRequestsRefreshBtn">⟳ רענן</button>
+    </div>
+    <div id="browserRequestsList"></div>
+  </div>
+
+  <div id="browserDomainsView" style="display:none;">
+    <form class="browser-domain-form" id="browserDomainForm">
+      <div class="browser-domain-form-row">
+        <input type="text" id="browserDomainInput" placeholder="example.com" required>
+        <select id="browserDecisionInput">
+          <option value="ALLOW">אשר (ALLOW)</option>
+          <option value="BLOCK">חסום (BLOCK)</option>
+          <option value="REVIEW">השאר בבדיקה (REVIEW)</option>
+        </select>
+      </div>
+      <div class="browser-domain-form-row">
+        <input type="text" id="browserCategoryInput" placeholder="קטגוריה (לא חובה)">
+        <input type="text" id="browserReasonInput" placeholder="סיבה / הערה (לא חובה)">
+      </div>
+      <label class="browser-checkbox-row">
+        <input type="checkbox" id="browserAllowSubdomainsInput">
+        כלול את כל תת-הדומיינים (allowSubdomains) - רק לדומיין הרשמי המלא, לא לכתובת משנה
+      </label>
+      <div class="browser-domain-form-row">
+        <button type="submit" class="add-app-btn">שמור כלל</button>
+      </div>
+    </form>
+    <div class="browser-toolbar">
+      <input type="text" class="browser-search-input" id="browserDomainSearchInput" placeholder="חיפוש דומיין...">
+      <select class="browser-filter-select" id="browserDomainFilterSelect">
+        <option value="">כל הסטטוסים</option>
+        <option value="ALLOW">מאושרים</option>
+        <option value="BLOCK">חסומים</option>
+        <option value="REVIEW">בבדיקה</option>
+      </select>
+      <button class="add-app-btn" id="browserDomainsRefreshBtn">⟳ רענן</button>
+    </div>
+    <div id="browserDomainsList"></div>
+  </div>
+</div>
+
 <div class="tab-content" data-tab-content="enroll">
   <div class="enroll-card">
     <h2>רישום מכשיר חדש</h2>
@@ -351,6 +401,10 @@
   <button class="nav-btn" data-tab="alerts">
     <span class="nav-icon">🔔</span>
     <span class="nav-label">התראות</span>
+  </button>
+  <button class="nav-btn" data-tab="browser">
+    <span class="nav-icon">🌐</span>
+    <span class="nav-label">דפדפן מסונן</span>
   </button>
 </nav>
 
@@ -1132,5 +1186,6 @@ loadDevices();
 <script src="health.js"></script>
 <script src="diagnostics.js"></script>
 <script src="alerts.js"></script>
+<script src="browser.js"></script>
 </body>
 </html>
