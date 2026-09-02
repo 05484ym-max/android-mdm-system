@@ -57,10 +57,12 @@ object WallpaperBranding {
     // (see below) to fix a real re-branding-every-sync bug, not a sizing one.
     // v7: emblem now drawn at ~43% opacity (watermark-level) instead of
     // solid, so it doesn't visually compete with the customer's own photo.
-    // v8: setBitmap() for FLAG_SYSTEM and FLAG_LOCK combined into one call
-    // instead of two sequential ones - a customer reported the emblem only
-    // showing on the lock screen, not the home screen, on their device.
-    private const val RECIPE_VERSION = 8
+    // v8: setBitmap() for FLAG_SYSTEM and FLAG_LOCK combined into one call.
+    // v9: do not abort branding when Samsung blocks reading the customer's
+    // current wallpaper. Reuse a previously saved original when available,
+    // otherwise generate a safe branded fallback; write home and lock
+    // separately so each target gets an explicit update.
+    private const val RECIPE_VERSION = 9
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
@@ -72,14 +74,8 @@ object WallpaperBranding {
             val dpm = context.getSystemService(DevicePolicyManager::class.java)
             if (!dpm.isDeviceOwnerApp(context.packageName)) return "לא Device Owner"
 
-            // WallpaperManager silently hands back a built-in placeholder
-            // instead of throwing when read access isn't actually there -
-            // branding that placeholder would overwrite the customer's real
-            // photo with it. Never proceed without confirming the grant
-            // really took effect, rather than hoping it did.
-            if (!wallpaperReadPermissionGranted(context, dpm)) return "אין הרשאת קריאת רקע"
-
             val wallpaperManager = WallpaperManager.getInstance(context)
+            val canReadWallpaper = wallpaperReadPermissionGranted(context, dpm)
             val currentId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val originalFile = File(context.filesDir, ORIGINAL_FILE)
@@ -95,20 +91,38 @@ object WallpaperBranding {
             // customer's real photo) whenever its id matches what we set -
             // re-source from the saved original so a recipe change re-brands
             // cleanly instead of stamping the new emblem onto the old one.
-            val original = if (isOurOwnComposite && originalFile.exists()) {
-                BitmapFactory.decodeFile(originalFile.absolutePath)
-                    ?: return "שגיאה: לא ניתן לקרוא את הרקע השמור"
-            } else {
-                val drawable = wallpaperManager.drawable ?: return "שגיאה: אין ציור רקע"
-                val fresh = drawableToBitmap(drawable)
-                try {
-                    context.openFileOutput(ORIGINAL_FILE, Context.MODE_PRIVATE).use {
-                        fresh.compress(Bitmap.CompressFormat.PNG, 100, it)
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not save the original wallpaper", e)
+            val original = when {
+                isOurOwnComposite && originalFile.exists() -> {
+                    BitmapFactory.decodeFile(originalFile.absolutePath)
+                        ?: return "שגיאה: לא ניתן לקרוא את הרקע השמור"
                 }
-                fresh
+
+                canReadWallpaper -> {
+                    val drawable = wallpaperManager.drawable
+                    if (drawable != null) {
+                        val fresh = drawableToBitmap(drawable)
+                        try {
+                            context.openFileOutput(ORIGINAL_FILE, Context.MODE_PRIVATE).use {
+                                fresh.compress(Bitmap.CompressFormat.PNG, 100, it)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not save the original wallpaper", e)
+                        }
+                        fresh
+                    } else if (originalFile.exists()) {
+                        BitmapFactory.decodeFile(originalFile.absolutePath)
+                            ?: createFallbackWallpaper(context)
+                    } else {
+                        createFallbackWallpaper(context)
+                    }
+                }
+
+                originalFile.exists() -> {
+                    BitmapFactory.decodeFile(originalFile.absolutePath)
+                        ?: createFallbackWallpaper(context)
+                }
+
+                else -> createFallbackWallpaper(context)
             }
 
             val emblem = BitmapFactory.decodeResource(context.resources, R.drawable.emblem_transparent)
@@ -116,17 +130,19 @@ object WallpaperBranding {
 
             val branded = compositeEmblem(original, emblem)
 
-            // One call for both targets, not two sequential ones: some OEM wallpaper
-            // services only reliably repaint the home screen (unlike the lock screen,
-            // which keyguard always redraws fresh on every lock) when system+lock are
-            // set together in a single call, rather than two rapid separate calls that
-            // can trigger only one "wallpaper changed" refresh instead of two.
+            // Explicitly update each target. Samsung firmware has shown
+            // inconsistent repaint behaviour when SYSTEM|LOCK are combined,
+            // so each wallpaper gets its own committed write.
             wallpaperManager.setBitmap(
-                branded, null, true,
-                WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
+                branded, null, true, WallpaperManager.FLAG_SYSTEM
+            )
+            wallpaperManager.setBitmap(
+                branded, null, true, WallpaperManager.FLAG_LOCK
             )
 
-            val newId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
+            val newHomeId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
+            val newLockId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_LOCK)
+            val newId = newHomeId
             // commit(), not apply(): this runs on every sync (see PolicySync.run()),
             // often from a background job the OS can kill right after. apply()'s
             // write to disk is asynchronous - if the process dies before it lands,
@@ -137,7 +153,12 @@ object WallpaperBranding {
                 .putInt(KEY_LAST_ID, newId)
                 .putInt(KEY_RECIPE_VERSION, RECIPE_VERSION)
                 .commit()
-            return "עודכן בהצלחה"
+            return if (newHomeId != -1 && newLockId != -1) {
+                if (canReadWallpaper) "עודכן בהצלחה"
+                else "עודכן בהצלחה (רקע חלופי)"
+            } else {
+                "שגיאה: לא התקבל מזהה רקע בית/נעילה"
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Could not brand the wallpaper", e)
             return "שגיאה: ${e.message}"
@@ -182,6 +203,16 @@ object WallpaperBranding {
         }
         if (!anyGranted) Log.w(TAG, "No storage-read permission granted - skipping wallpaper branding")
         return anyGranted
+    }
+
+    private fun createFallbackWallpaper(context: Context): Bitmap {
+        val metrics = context.resources.displayMetrics
+        val width = metrics.widthPixels.coerceAtLeast(1080)
+        val height = metrics.heightPixels.coerceAtLeast(1920)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(android.graphics.Color.rgb(242, 241, 230))
+        return bitmap
     }
 
     private fun drawableToBitmap(drawable: Drawable): Bitmap {
