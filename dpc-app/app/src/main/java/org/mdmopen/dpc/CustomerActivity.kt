@@ -1,19 +1,26 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -32,6 +39,8 @@ class CustomerActivity : Activity() {
     private lateinit var storeNavItem: NavItem
     private lateinit var adminNavItem: NavItem
     private var isPersonalAreaActive = false
+    private var selectedStoreCategory = "all"
+    private var storeSearchQuery = ""
 
     private val BG = "#F2F1E6"
     private val CARD = "#FFFFFF"
@@ -254,36 +263,198 @@ class CustomerActivity : Activity() {
         contentArea.removeAllViews()
 
         val apps = approvedApps()
-        if (apps.isEmpty()) {
-            contentArea.addView(TextView(this).apply {
-                text = "עדיין לא אושרו אפליקציות למכשיר זה"
+            .sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
+
+        val search = EditText(this).apply {
+            hint = "חפש אפליקציה"
+            textSize = 14f
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            setSingleLine(true)
+            gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT
+            background = flatRounded(CARD, dp(14).toFloat())
+            setPadding(dp(16), dp(11), dp(16), dp(11))
+            setText(storeSearchQuery)
+            setSelection(text.length)
+        }
+        contentArea.addView(
+            search,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(10)
+            }
+        )
+
+        val categories = linkedMapOf("all" to "הכל")
+        apps.forEach { app ->
+            if (app.category.isNotBlank() && app.category !in categories) {
+                categories[app.category] = app.categoryLabel.ifBlank { "אחר" }
+            }
+        }
+        if (selectedStoreCategory !in categories) selectedStoreCategory = "all"
+
+        val categoryRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        categories.forEach { (key, label) ->
+            val active = key == selectedStoreCategory
+            categoryRow.addView(TextView(this).apply {
+                text = label
+                textSize = 12f
+                typeface = mediumFont
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor(if (active) CARD else ACCENT))
+                background = flatRounded(if (active) ACCENT else CARD, dp(18).toFloat())
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    selectedStoreCategory = key
+                    showAppStore()
+                }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginEnd = dp(8)
+                bottomMargin = dp(4)
+            })
+        }
+
+        contentArea.addView(
+            HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                addView(categoryRow)
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
+        )
+
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        contentArea.addView(
+            listContainer,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        fun render() {
+            renderStoreContent(listContainer, apps)
+        }
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                storeSearchQuery = s?.toString().orEmpty()
+                render()
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        render()
+    }
+
+    private fun renderStoreContent(container: LinearLayout, apps: List<CatalogApp>) {
+        container.removeAllViews()
+
+        val query = storeSearchQuery.trim().lowercase()
+        val filtered = apps.filter { app ->
+            val categoryMatches =
+                selectedStoreCategory == "all" || app.category == selectedStoreCategory
+            val textMatches =
+                query.isEmpty() ||
+                    app.name.lowercase().contains(query) ||
+                    app.packageName.lowercase().contains(query) ||
+                    app.categoryLabel.lowercase().contains(query)
+            categoryMatches && textMatches
+        }.sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
+
+        if (filtered.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = if (apps.isEmpty()) {
+                    "עדיין לא אושרו אפליקציות למכשיר זה"
+                } else {
+                    "לא נמצאו אפליקציות תואמות"
+                }
                 textSize = 14f
                 setTextColor(Color.parseColor(MUTED))
                 gravity = Gravity.CENTER
-                setPadding(0, dp(40), 0, 0)
+                setPadding(0, dp(34), 0, 0)
             })
             return
         }
 
+        if (selectedStoreCategory == "all" && query.isEmpty()) {
+            val updates = filtered.filter { app ->
+                val installed = isInstalled(app.packageName)
+                installed && isUpdateAvailable(app, installed)
+            }
+            if (updates.isNotEmpty()) {
+                addStoreSectionTitle(container, "עדכונים")
+                addStoreGrid(container, updates)
+            }
+
+            val recommended = filtered.filter { it.isRecommended }
+            if (recommended.isNotEmpty()) {
+                addStoreSectionTitle(container, "מומלצות")
+                addStoreGrid(container, recommended)
+            }
+        }
+
+        val title = when {
+            query.isNotEmpty() -> "תוצאות"
+            selectedStoreCategory != "all" ->
+                filtered.firstOrNull()?.categoryLabel?.ifBlank { "אפליקציות" } ?: "אפליקציות"
+            else -> "כל האפליקציות"
+        }
+        addStoreSectionTitle(container, title)
+        addStoreGrid(container, filtered)
+    }
+
+    private fun addStoreSectionTitle(parent: LinearLayout, title: String) {
+        parent.addView(TextView(this).apply {
+            text = title
+            textSize = 15f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.RIGHT
+            setPadding(dp(2), dp(10), dp(2), dp(12))
+        })
+    }
+
+    private fun addStoreGrid(parent: LinearLayout, apps: List<CatalogApp>) {
         val columns = 2
-        apps.chunked(columns).forEachIndexed { index, rowApps ->
+        apps.chunked(columns).forEach { rowApps ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             rowApps.forEach { app ->
                 row.addView(
                     appTile(app),
                     LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginStart = dp(6); marginEnd = dp(6) }
+                        .apply {
+                            marginStart = dp(6)
+                            marginEnd = dp(6)
+                        }
                 )
             }
             repeat(columns - rowApps.size) {
                 row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
             }
-            contentArea.addView(
+            parent.addView(
                 row,
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, if (index == 0) dp(20) else 0, 0, dp(20)) }
+                ).apply { bottomMargin = dp(20) }
             )
         }
     }
@@ -320,21 +491,21 @@ class CustomerActivity : Activity() {
             setPadding(0, dp(8), 0, 0)
         }
 
-        // Installed apps don't get background updates while Play Store is
-        // hidden most of the time, and tapping the tile just opens the app -
-        // so this is the only way the customer can ever reach an update:
-        // it's a separate clickable label (own click listener wins over the
-        // tile's) that reopens the same guarded Play Store page, which shows
-        // "Update" there when one is available and does nothing otherwise.
+        val updateAvailable = isUpdateAvailable(app, installed)
         val status = TextView(this).apply {
-            text = if (installed) "✓ מותקן · בדוק עדכון" else "התקנה"
+            text = when {
+                !installed -> "התקנה"
+                updateAvailable -> "עדכן"
+                else -> "✓ מותקן"
+            }
             textSize = 11f
             typeface = mediumFont
-            setTextColor(Color.parseColor(if (installed) OK else ACCENT))
+            setTextColor(Color.parseColor(if (installed && !updateAvailable) OK else ACCENT))
             gravity = Gravity.CENTER
             setPadding(0, dp(3), 0, 0)
-            if (installed) {
+            if (!installed || updateAvailable) {
                 isClickable = true
+                isFocusable = true
                 setOnClickListener { openPlayStoreForInstall(app.packageName) }
             }
         }
@@ -355,10 +526,43 @@ class CustomerActivity : Activity() {
         }
     }
 
-    private fun isInstalled(packageName: String): Boolean {
+    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
+        if (!installed) return false
+
         return try {
-            packageManager.getPackageInfo(packageName, 0)
-            true
+            val info = packageManager.getPackageInfo(app.packageName, 0)
+            val installedVersion = info.versionName?.trim()
+            val playVersion = app.playVersion?.trim()
+
+            when {
+                !playVersion.isNullOrEmpty() && !installedVersion.isNullOrEmpty() ->
+                    !playVersion.equals(installedVersion, ignoreCase = true)
+                app.playUpdatedAt != null ->
+                    app.playUpdatedAt > info.lastUpdateTime
+                else -> false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isInstalled(packageName: String): Boolean {
+        val installedByPackageManager = try {
+            val info = packageManager.getApplicationInfo(
+                packageName,
+                PackageManager.MATCH_UNINSTALLED_PACKAGES
+            )
+            (info.flags and ApplicationInfo.FLAG_INSTALLED) != 0
+        } catch (_: Exception) {
+            false
+        }
+        if (installedByPackageManager) return true
+
+        return try {
+            val dpm = getSystemService(DevicePolicyManager::class.java)
+            val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+            dpm.isDeviceOwnerApp(this.packageName) &&
+                dpm.isApplicationHidden(admin, packageName)
         } catch (_: Exception) {
             false
         }
