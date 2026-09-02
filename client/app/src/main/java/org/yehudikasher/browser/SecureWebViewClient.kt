@@ -1,13 +1,15 @@
 package org.yehudikasher.browser
 
 import android.graphics.Bitmap
-import android.net.Uri
+import android.net.http.SslError
+import android.webkit.ClientCertRequest
+import android.webkit.HttpAuthHandler
 import android.webkit.SslErrorHandler
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.net.http.SslError
 
 class SecureWebViewClient(
     private val policy: UrlPolicy,
@@ -15,8 +17,7 @@ class SecureWebViewClient(
 ) : WebViewClient() {
 
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-        val url = request?.url?.toString()
-        return enforceNavigation(view, url)
+        return enforceNavigation(view, request?.url?.toString())
     }
 
     @Deprecated("Deprecated in Android API, kept for defensive compatibility")
@@ -38,8 +39,7 @@ class SecureWebViewClient(
         view: WebView?,
         request: WebResourceRequest?
     ): WebResourceResponse? {
-        val url = request?.url?.toString()
-        val result = policy.evaluate(url)
+        val result = policy.evaluate(request?.url?.toString())
         return if (result.decision == LocalDecision.ALLOW) {
             super.shouldInterceptRequest(view, request)
         } else {
@@ -54,6 +54,47 @@ class SecureWebViewClient(
     ) {
         handler?.cancel()
         onBlocked(error?.url.orEmpty(), "ssl_error")
+    }
+
+    override fun onReceivedHttpAuthRequest(
+        view: WebView?,
+        handler: HttpAuthHandler?,
+        host: String?,
+        realm: String?
+    ) {
+        handler?.cancel()
+        onBlocked(host.orEmpty(), "http_auth_blocked")
+    }
+
+    override fun onReceivedClientCertRequest(view: WebView?, request: ClientCertRequest?) {
+        request?.cancel()
+        onBlocked(request?.host.orEmpty(), "client_cert_request_blocked")
+    }
+
+    override fun onReceivedError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        error: WebResourceError?
+    ) {
+        if (request?.isForMainFrame == true) {
+            view?.stopLoading()
+            onBlocked(request.url?.toString().orEmpty(), "main_frame_network_error")
+            return
+        }
+        super.onReceivedError(view, request, error)
+    }
+
+    override fun onReceivedHttpError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        errorResponse: WebResourceResponse?
+    ) {
+        if (request?.isForMainFrame == true) {
+            view?.stopLoading()
+            onBlocked(request.url?.toString().orEmpty(), "main_frame_http_error")
+            return
+        }
+        super.onReceivedHttpError(view, request, errorResponse)
     }
 
     private fun enforceNavigation(view: WebView?, rawUrl: String?): Boolean {
