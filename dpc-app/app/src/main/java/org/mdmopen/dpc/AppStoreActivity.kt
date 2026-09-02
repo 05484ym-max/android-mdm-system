@@ -454,10 +454,11 @@ class AppStoreActivity : Activity() {
             val playVersion = app.playVersion?.trim()
 
             when {
-                !playVersion.isNullOrEmpty() && !installedVersion.isNullOrEmpty() ->
-                    !playVersion.equals(installedVersion, ignoreCase = true)
-                app.playUpdatedAt != null ->
-                    app.playUpdatedAt > info.lastUpdateTime
+                !playVersion.isNullOrEmpty() &&
+                    !installedVersion.isNullOrEmpty() &&
+                    app.playUpdatedAt != null ->
+                    !playVersion.equals(installedVersion, ignoreCase = true) &&
+                        app.playUpdatedAt > info.lastUpdateTime
                 else -> false
             }
         } catch (_: Exception) {
