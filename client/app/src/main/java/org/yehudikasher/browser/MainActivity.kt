@@ -276,7 +276,7 @@ class MainActivity : AppCompatActivity() {
             showBlocked(url.orEmpty(), "downloads_disabled")
         }
 
-        view.webViewClient = SecureWebViewClient(policy, ::showBlocked)
+        view.webViewClient = SecureWebViewClient(policy, ::showBlocked, ::showTechnicalError)
     }
 
     private fun navigateFromAddressBar() {
