@@ -71,14 +71,16 @@ object PolicySync {
         }
 
         return buildString {
-            append("מותרות ${result.policy.allowedApps.size} · ")
+            // Put wallpaper diagnostics first so the long customer sync Toast
+            // doesn't hide the only signal we need while diagnosing Samsung.
+            append("רקע: $wallpaperResult")
+            append("\nמותרות ${result.policy.allowedApps.size} · ")
             append("הושעו ${enforcement.suspended.size} · ")
             append("שוחררו ${enforcement.unsuspended.size} · ")
             append("נכשלו ${enforcement.failed.size} · ")
             append("דולגו ${enforcement.systemAppsSkipped} מערכת · ")
             append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
-            append("סנכרון כל ${result.policy.syncIntervalMinutes} דק' · ")
-            append("רקע: $wallpaperResult")
+            append("סנכרון כל ${result.policy.syncIntervalMinutes} דק'")
             dnsReconcileResult?.let { append("\n• DNS: $it") }
             dnsFailSafeResult?.let { append("\n• $it") }
             outcomes.forEach { append("\n• $it") }
