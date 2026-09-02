@@ -149,7 +149,7 @@ object WallpaperBranding {
                     )
                     if (read.first != null) {
                         lockSource = read.second
-                        read.first.also { saveOriginal(it, lockOriginalFile) }
+                        read.first!!.also { saveOriginal(it, lockOriginalFile) }
                     } else if (beforeLockId == -1) {
                         lockSource = "shared-home"
                         homeOriginal
