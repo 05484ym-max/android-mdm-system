@@ -243,6 +243,15 @@ class AppStoreActivity : Activity() {
         }
 
         if (selectedCategory == "all" && query.isEmpty()) {
+            val updates = filtered.filter { app ->
+                val installed = isInstalled(app.packageName)
+                installed && isUpdateAvailable(app, installed)
+            }
+            if (updates.isNotEmpty()) {
+                addSectionTitle(content, "עדכונים")
+                addAppGrid(content, updates)
+            }
+
             val recommended = filtered.filter { it.isRecommended }
             if (recommended.isNotEmpty()) {
                 addSectionTitle(content, "מומלצות")
