@@ -65,17 +65,17 @@ const ALLOWED_COMMANDS =
 const SYSTEM_COMPONENT_DISPLAY_NAMES = {
   'com.google.android.gms': 'Google Play Services',
 };
-// Placeholder - the real DNS-over-TLS provider for kosher filtering hasn't
-// been chosen yet (see the design round that preceded this implementation).
+// Default DNS-over-TLS provider for fleet filtering. AdGuard's public
+// default resolver blocks ads and trackers and supports Android Private DNS.
 // Never trust ENABLE_DNS_FILTERING's target host from client input; this is
 // the sole source of truth for it, same principle as SYSTEM_COMPONENT_DISPLAY_NAMES.
-const DNS_PROVIDER_HOST = process.env.DNS_PROVIDER_HOST || 'dns.google';
-// dns.google is a plain encrypted resolver, not a content filter - this must
-// stay false until a real filtering provider is configured, so neither the
-// customer app nor the admin panel ever claims ad/content blocking is
-// active when it isn't. Same '1'-string convention as TRUST_PROXY/
-// SECURE_COOKIES/ALLOW_INSECURE_ADMIN above.
-const DNS_PROVIDER_FILTERS_CONTENT = process.env.DNS_PROVIDER_FILTERS_CONTENT === '1';
+const DEFAULT_DNS_PROVIDER_HOST = 'dns.adguard-dns.com';
+const DNS_PROVIDER_HOST = process.env.DNS_PROVIDER_HOST || DEFAULT_DNS_PROVIDER_HOST;
+// Allow an explicit environment override. When no override is supplied, the
+// built-in AdGuard default is truthfully marked as a filtering resolver.
+const DNS_PROVIDER_FILTERS_CONTENT = process.env.DNS_PROVIDER_FILTERS_CONTENT == null
+  ? DNS_PROVIDER_HOST === DEFAULT_DNS_PROVIDER_HOST
+  : process.env.DNS_PROVIDER_FILTERS_CONTENT === '1';
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
