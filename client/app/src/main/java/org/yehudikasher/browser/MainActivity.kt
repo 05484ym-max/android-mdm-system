@@ -28,7 +28,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         WebView.setWebContentsDebuggingEnabled(false)
-        SecureServiceWorker.installFailClosedPolicy()
+        val serviceWorkerSafe = SecureServiceWorker.installFailClosedPolicy()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -65,7 +65,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView = WebView(this)
-        configureWebView(webView)
+        configureWebView(webView, serviceWorkerSafe)
 
         root.addView(bar)
         root.addView(statusView)
@@ -92,9 +92,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun configureWebView(view: WebView) {
+    private fun configureWebView(view: WebView, serviceWorkerSafe: Boolean) {
         val settings = view.settings
-        settings.javaScriptEnabled = true
+        settings.javaScriptEnabled = serviceWorkerSafe
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
         settings.allowFileAccess = false
@@ -128,6 +128,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         view.webViewClient = SecureWebViewClient(policy, ::showBlocked)
+
+        if (!serviceWorkerSafe) {
+            showBlocked("", "service_worker_hardening_failed")
+        }
 
         WebViewCompat.startSafeBrowsing(this) { success ->
             if (!success) {
