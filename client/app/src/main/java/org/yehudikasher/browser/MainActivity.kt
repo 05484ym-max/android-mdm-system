@@ -502,6 +502,7 @@ class MainActivity : AppCompatActivity() {
     private fun blockedMessage(reason: String): String {
         return when (reason) {
             "downloads_disabled" -> "הורדת קבצים חסומה בדפדפן המאובטח."
+            "safe_browsing_threat" -> "האתר זוהה כמסוכן ולכן נחסם."
             "ssl_error" -> "החיבור המאובטח לאתר נכשל ולכן האתר נחסם."
             "http_auth_blocked", "client_cert_request_blocked" ->
                 "האתר ביקש מנגנון אימות שאינו מאושר בדפדפן המאובטח."
