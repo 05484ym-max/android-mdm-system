@@ -35,9 +35,13 @@ object WallpaperBranding {
     // (see wallpaperReadPermissionGranted below), which would have silently
     // blocked every retry since. A fresh prefs file forces one clean re-try.
     private const val PREFS = "dpc_wallpaper_v2"
-    private const val KEY_LAST_ID = "last_branded_wallpaper_id"
+    private const val KEY_LAST_ID = "last_branded_wallpaper_id" // legacy v8/v9
+    private const val KEY_LAST_HOME_ID = "last_branded_home_wallpaper_id"
+    private const val KEY_LAST_LOCK_ID = "last_branded_lock_wallpaper_id"
     private const val KEY_RECIPE_VERSION = "recipe_version"
-    private const val ORIGINAL_FILE = "wallpaper_original.png"
+    private const val ORIGINAL_FILE = "wallpaper_original.png" // legacy original
+    private const val ORIGINAL_HOME_FILE = "wallpaper_original_home.png"
+    private const val ORIGINAL_LOCK_FILE = "wallpaper_original_lock.png"
 
     // Bump this whenever compositeEmblem()'s sizing or the emblem asset
     // itself changes, so a device already branded under an older recipe
@@ -58,11 +62,14 @@ object WallpaperBranding {
     // v7: emblem now drawn at ~43% opacity (watermark-level) instead of
     // solid, so it doesn't visually compete with the customer's own photo.
     // v8: setBitmap() for FLAG_SYSTEM and FLAG_LOCK combined into one call.
-    // v9: do not abort branding when Samsung blocks reading the customer's
-    // current wallpaper. Reuse a previously saved original when available,
-    // otherwise generate a safe branded fallback; write home and lock
-    // separately so each target gets an explicit update.
-    private const val RECIPE_VERSION = 9
+    // v9 attempted a generated fallback when the current wallpaper could not
+    // be read. That could replace the customer's chosen wallpaper, which is
+    // not acceptable.
+    // v10 keeps the exact same emblem size/position/opacity, reads the real
+    // wallpaper through getWallpaperFile() first (Samsung-friendly), keeps
+    // home and lock originals separate, and never invents/replaces a
+    // customer's wallpaper just to force the watermark.
+    private const val RECIPE_VERSION = 10
 
     /**
      * Returns a short, human-readable outcome so the customer's own sync
@@ -75,93 +82,127 @@ object WallpaperBranding {
             if (!dpm.isDeviceOwnerApp(context.packageName)) return "לא Device Owner"
 
             val wallpaperManager = WallpaperManager.getInstance(context)
-            val canReadWallpaper = wallpaperReadPermissionGranted(context, dpm)
-            val currentId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
+            val canReadDrawable = wallpaperReadPermissionGranted(context, dpm)
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val originalFile = File(context.filesDir, ORIGINAL_FILE)
 
-            val isOurOwnComposite = currentId != -1 &&
-                prefs.getInt(KEY_LAST_ID, Int.MIN_VALUE) == currentId
+            val homeId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
+            val lockId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_LOCK)
 
-            if (isOurOwnComposite && prefs.getInt(KEY_RECIPE_VERSION, -1) == RECIPE_VERSION) {
-                return "כבר מעודכן" // Already branded this exact photo with the current recipe.
+            val homeAlreadyBranded = homeId != -1 &&
+                prefs.getInt(KEY_LAST_HOME_ID, prefs.getInt(KEY_LAST_ID, Int.MIN_VALUE)) == homeId
+            val lockAlreadyBranded = lockId != -1 &&
+                prefs.getInt(KEY_LAST_LOCK_ID, Int.MIN_VALUE) == lockId
+            val sameRecipe = prefs.getInt(KEY_RECIPE_VERSION, -1) == RECIPE_VERSION
+
+            if (homeAlreadyBranded && lockAlreadyBranded && sameRecipe) {
+                return "כבר מעודכן"
             }
 
-            // The live wallpaper is our own previous composite (not the
-            // customer's real photo) whenever its id matches what we set -
-            // re-source from the saved original so a recipe change re-brands
-            // cleanly instead of stamping the new emblem onto the old one.
-            val original = when {
-                isOurOwnComposite && originalFile.exists() -> {
-                    BitmapFactory.decodeFile(originalFile.absolutePath)
-                        ?: return "שגיאה: לא ניתן לקרוא את הרקע השמור"
-                }
+            val emblem = BitmapFactory.decodeResource(
+                context.resources,
+                R.drawable.emblem_transparent
+            ) ?: return "שגיאה: קובץ הסמל חסר"
 
-                canReadWallpaper -> {
-                    val drawable = wallpaperManager.drawable
-                    if (drawable != null) {
-                        val fresh = drawableToBitmap(drawable)
-                        try {
-                            context.openFileOutput(ORIGINAL_FILE, Context.MODE_PRIVATE).use {
-                                fresh.compress(Bitmap.CompressFormat.PNG, 100, it)
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not save the original wallpaper", e)
-                        }
-                        fresh
-                    } else if (originalFile.exists()) {
-                        BitmapFactory.decodeFile(originalFile.absolutePath)
-                            ?: createFallbackWallpaper(context)
-                    } else {
-                        createFallbackWallpaper(context)
-                    }
-                }
+            val legacyOriginal = File(context.filesDir, ORIGINAL_FILE)
+            val homeOriginalFile = File(context.filesDir, ORIGINAL_HOME_FILE)
+            val lockOriginalFile = File(context.filesDir, ORIGINAL_LOCK_FILE)
 
-                originalFile.exists() -> {
-                    BitmapFactory.decodeFile(originalFile.absolutePath)
-                        ?: createFallbackWallpaper(context)
-                }
+            val homeOriginal = when {
+                homeAlreadyBranded && homeOriginalFile.exists() ->
+                    BitmapFactory.decodeFile(homeOriginalFile.absolutePath)
+                homeAlreadyBranded && legacyOriginal.exists() ->
+                    BitmapFactory.decodeFile(legacyOriginal.absolutePath)
+                else -> readWallpaperBitmap(
+                    context,
+                    wallpaperManager,
+                    WallpaperManager.FLAG_SYSTEM,
+                    canReadDrawable
+                )?.also { saveOriginal(it, homeOriginalFile) }
+            } ?: return "שגיאה: לא ניתן לקרוא את רקע הבית בלי להחליף אותו"
 
-                else -> createFallbackWallpaper(context)
-            }
+            val lockOriginal = when {
+                lockAlreadyBranded && lockOriginalFile.exists() ->
+                    BitmapFactory.decodeFile(lockOriginalFile.absolutePath)
+                else -> readWallpaperBitmap(
+                    context,
+                    wallpaperManager,
+                    WallpaperManager.FLAG_LOCK,
+                    false
+                )?.also { saveOriginal(it, lockOriginalFile) }
+                    // If there is no independent lock wallpaper, Android uses
+                    // the system wallpaper there too. In that case reuse the
+                    // real home original rather than inventing a new image.
+                    ?: if (lockId == -1) homeOriginal else null
+            } ?: return "שגיאה: לא ניתן לקרוא את רקע הנעילה בלי להחליף אותו"
 
-            val emblem = BitmapFactory.decodeResource(context.resources, R.drawable.emblem_transparent)
-                ?: return "שגיאה: קובץ הסמל חסר"
+            // compositeEmblem() is intentionally unchanged: 30% width,
+            // 28% from the top and alpha 110. The emblem is baked into the
+            // wallpaper, so launcher/application icons naturally render above
+            // it rather than being covered by an overlay.
+            val brandedHome = compositeEmblem(homeOriginal, emblem)
+            val brandedLock = compositeEmblem(lockOriginal, emblem)
 
-            val branded = compositeEmblem(original, emblem)
-
-            // Explicitly update each target. Samsung firmware has shown
-            // inconsistent repaint behaviour when SYSTEM|LOCK are combined,
-            // so each wallpaper gets its own committed write.
             wallpaperManager.setBitmap(
-                branded, null, true, WallpaperManager.FLAG_SYSTEM
+                brandedHome, null, true, WallpaperManager.FLAG_SYSTEM
             )
             wallpaperManager.setBitmap(
-                branded, null, true, WallpaperManager.FLAG_LOCK
+                brandedLock, null, true, WallpaperManager.FLAG_LOCK
             )
 
             val newHomeId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_SYSTEM)
             val newLockId = wallpaperManager.getWallpaperId(WallpaperManager.FLAG_LOCK)
-            val newId = newHomeId
-            // commit(), not apply(): this runs on every sync (see PolicySync.run()),
-            // often from a background job the OS can kill right after. apply()'s
-            // write to disk is asynchronous - if the process dies before it lands,
-            // the next sync forgets it already branded this exact photo and
-            // re-sets the wallpaper again, which is visible to the customer as a
-            // flash/jump on the home and lock screen every sync cycle.
+
+            if (newHomeId == -1 || newLockId == -1) {
+                return "שגיאה: לא התקבל מזהה רקע בית/נעילה"
+            }
+
             prefs.edit()
-                .putInt(KEY_LAST_ID, newId)
+                .putInt(KEY_LAST_HOME_ID, newHomeId)
+                .putInt(KEY_LAST_LOCK_ID, newLockId)
                 .putInt(KEY_RECIPE_VERSION, RECIPE_VERSION)
                 .commit()
-            return if (newHomeId != -1 && newLockId != -1) {
-                if (canReadWallpaper) "עודכן בהצלחה"
-                else "עודכן בהצלחה (רקע חלופי)"
-            } else {
-                "שגיאה: לא התקבל מזהה רקע בית/נעילה"
-            }
+
+            return "עודכן בהצלחה"
         } catch (e: Exception) {
             Log.w(TAG, "Could not brand the wallpaper", e)
             return "שגיאה: ${e.message}"
+        }
+    }
+
+    private fun readWallpaperBitmap(
+        context: Context,
+        wallpaperManager: WallpaperManager,
+        flag: Int,
+        allowDrawableFallback: Boolean,
+    ): Bitmap? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                wallpaperManager.getWallpaperFile(flag)?.use { pfd ->
+                    BitmapFactory.decodeFileDescriptor(pfd.fileDescriptor)?.let { return it }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not read wallpaper file for flag=$flag", e)
+            }
+        }
+
+        if (flag == WallpaperManager.FLAG_SYSTEM && allowDrawableFallback) {
+            try {
+                wallpaperManager.drawable?.let { return drawableToBitmap(it) }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not read system wallpaper drawable", e)
+            }
+        }
+
+        return null
+    }
+
+    private fun saveOriginal(bitmap: Bitmap, file: File) {
+        try {
+            file.outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not save original wallpaper", e)
         }
     }
 
@@ -201,18 +242,8 @@ object WallpaperBranding {
             if (!granted) Log.w(TAG, "$permission still not granted after requesting it")
             anyGranted = anyGranted || granted
         }
-        if (!anyGranted) Log.w(TAG, "No storage-read permission granted - skipping wallpaper branding")
+        if (!anyGranted) Log.w(TAG, "No storage-read permission granted - will try getWallpaperFile() directly")
         return anyGranted
-    }
-
-    private fun createFallbackWallpaper(context: Context): Bitmap {
-        val metrics = context.resources.displayMetrics
-        val width = metrics.widthPixels.coerceAtLeast(1080)
-        val height = metrics.heightPixels.coerceAtLeast(1920)
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(android.graphics.Color.rgb(242, 241, 230))
-        return bitmap
     }
 
     private fun drawableToBitmap(drawable: Drawable): Bitmap {
