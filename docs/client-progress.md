@@ -96,11 +96,12 @@ A full Android Gradle build has **not** been executed from GPT's current runtime
 
 Therefore Phase 0A is **not VERIFIED** yet.
 
-Android's own WebView documentation also makes two device-level checks mandatory before security sign-off:
-- `shouldOverrideUrlLoading` is not called for POST navigations.
-- `shouldInterceptRequest` is only called for the initial URL of a redirect chain, not every redirect hop.
+Android's WebView API documentation makes device-level bypass testing mandatory:
+- `shouldOverrideUrlLoading` is **not called for POST requests**.
+- `shouldInterceptRequest` is called only for the **initial URL** of a redirect chain, not subsequent redirect URLs.
+- `shouldInterceptRequest` is not called for `javascript:` or `blob:` URLs.
 
-Those behaviors are why source review alone cannot prove the required fail-closed behavior for form submissions and every redirect hop.
+This creates an explicit high-risk PoC question: an allowed subresource/iframe URL that redirects to a blocked host must not be allowed to contact/render the blocked target. Source review alone cannot prove that guarantee.
 
 ## SERVER IMPACT
 - No wire-contract change is required.
@@ -118,6 +119,9 @@ Those behaviors are why source review alone cannot prove the required fail-close
    - top-level navigation
    - HTTP redirect to allowed host
    - HTTP redirect to blocked host
+   - redirect chain with multiple hops
+   - allowed subresource redirecting to blocked host
+   - allowed iframe redirecting to blocked host
    - JavaScript navigation
    - GET form navigation
    - POST form navigation
@@ -133,7 +137,7 @@ Those behaviors are why source review alone cannot prove the required fail-close
    - `javascript:`
    - downloads
    - external intents
-4. If any navigation can contact or render a non-ALLOW target before interception, Phase 0A fails and the browser architecture must be tightened before local policy cache/API integration.
+4. If any navigation or subresource can contact or render a non-ALLOW target before interception, Phase 0A fails and the browser architecture must be tightened before local policy cache/API integration.
 5. Only after build + physical-device bypass tests pass: mark `[DESIGN_IMPLEMENTED]` when a Claude `[DESIGN_READY]` spec exists, then proceed to signed policy / SQLCipher / real API integration.
 
 ## COORDINATION
