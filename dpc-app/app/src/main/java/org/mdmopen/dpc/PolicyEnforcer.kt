@@ -80,6 +80,15 @@ class PolicyEnforcer(private val context: Context) {
                 toUnsuspend += app.packageName
                 continue
             }
+            // An approved installed app must always be explicitly unhidden first.
+            // Hidden packages can stop resolving a launcher intent on some OEM builds
+            // (notably Samsung), so checking getLaunchIntentForPackage() before the
+            // allowlist can strand an already-installed approved app in the hidden state.
+            if (app.packageName in allowed) {
+                toUnsuspend += app.packageName
+                continue
+            }
+
             // Apps with no launcher entry are never visible to the customer either way -
             // suspending them only risks breaking a background system service for no gain.
             if (context.packageManager.getLaunchIntentForPackage(app.packageName) == null) {
@@ -91,13 +100,13 @@ class PolicyEnforcer(private val context: Context) {
                 // reported, since hiding either carries a much bigger blast radius than
                 // this dry-run is meant to size up.
                 val isSystemApp = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                if (!isSystemApp && app.packageName != currentImePackage && app.packageName !in allowed) {
+                if (!isSystemApp && app.packageName != currentImePackage) {
                     noLauncherCandidates += NoLauncherCandidate(app.packageName, labelFor(app))
                 }
                 continue
             }
-            if (app.packageName in allowed) toUnsuspend += app.packageName
-            else toSuspend += app.packageName
+
+            toSuspend += app.packageName
         }
 
         // Hidden (not merely suspended) so unapproved apps disappear from the
