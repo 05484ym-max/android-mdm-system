@@ -547,6 +547,44 @@ async function listAppsPendingPlayMetadataRefresh(limit) {
   return rows.map(row => row.package_name);
 }
 
+async function claimAppsForPlayMetadataRefresh(cutoffMs, limit) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT package_name
+         FROM apps_catalog
+        WHERE play_metadata_checked_at IS NULL
+           OR play_metadata_checked_at < $1
+        ORDER BY play_metadata_checked_at ASC NULLS FIRST, added_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT $2`,
+      [cutoffMs, limit],
+    );
+
+    const packages = rows.map(row => row.package_name);
+    if (packages.length) {
+      // Lease the claimed rows immediately. Other server instances will skip
+      // them until the freshness window expires, preventing a fleet-wide sync
+      // burst from causing duplicate Google Play lookups.
+      await client.query(
+        `UPDATE apps_catalog
+            SET play_metadata_checked_at = $2
+          WHERE package_name = ANY($1::text[])`,
+        [packages, Date.now()],
+      );
+    }
+
+    await client.query('COMMIT');
+    return packages;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Records that a Play metadata fetch *succeeded*, independent of whether
  * Google actually returned a usable play_updated_at for this package -
@@ -776,6 +814,7 @@ module.exports = {
   listAppsCatalog,
   addAppToCatalog,
   listAppsPendingPlayMetadataRefresh,
+  claimAppsForPlayMetadataRefresh,
   recordPlayMetadataCheckSuccess,
   recordPlayMetadataCheckFailure,
   countAppsPendingPlayMetadataRefresh,
