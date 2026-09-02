@@ -4,19 +4,19 @@ import android.graphics.Bitmap
 import android.net.http.SslError
 import android.webkit.ClientCertRequest
 import android.webkit.HttpAuthHandler
-import android.webkit.SafeBrowsingResponse
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
-import android.webkit.WebViewClient
+import androidx.webkit.SafeBrowsingResponseCompat
+import androidx.webkit.WebViewClientCompat
 
 class SecureWebViewClient(
     private val policy: UrlPolicy,
     private val onBlocked: (String, String) -> Unit,
     private val onTechnicalError: (String, String) -> Unit
-) : WebViewClient() {
+) : WebViewClientCompat() {
 
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         return enforceNavigation(view, request?.url?.toString())
@@ -53,7 +53,7 @@ class SecureWebViewClient(
         view: WebView?,
         request: WebResourceRequest?,
         threatType: Int,
-        callback: SafeBrowsingResponse?
+        callback: SafeBrowsingResponseCompat?
     ) {
         // Never allow WebView's default/interstitial behavior to become a
         // policy bypass. A Safe Browsing hit is an unconditional fail-closed
