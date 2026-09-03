@@ -1,8 +1,13 @@
 package org.yehudikasher.browser
 
 object LocalPolicyStore {
-    fun createPolicy(): UrlPolicy {
-        val debugAllowlist = if (BuildConfig.DEBUG) {
+    /** The fixed rules every UrlPolicy this app builds starts from -
+     * BrowsingPolicyEngine layers remotely-approved hosts on top of this
+     * same base each time it rebuilds its policy (see
+     * BrowsingPolicyEngine.rebuildPolicy), so debug-only convenience hosts
+     * are never lost just because a real host got approved. */
+    fun baseRules(): List<LocalPolicyRule> {
+        return if (BuildConfig.DEBUG) {
             listOf(
                 LocalPolicyRule("example.com"),
                 LocalPolicyRule("example.org", allowSubdomains = true)
@@ -10,7 +15,7 @@ object LocalPolicyStore {
         } else {
             emptyList()
         }
-
-        return UrlPolicy(debugAllowlist)
     }
+
+    fun createPolicy(): UrlPolicy = UrlPolicy(baseRules())
 }

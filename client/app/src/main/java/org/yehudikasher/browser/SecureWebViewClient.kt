@@ -10,10 +10,12 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import java.util.Locale
 
 class SecureWebViewClient(
-    private val policy: UrlPolicy,
+    private val engine: BrowsingPolicyEngine,
     private val onBlocked: (String, String) -> Unit,
+    private val onChecking: (String) -> Unit,
     private val onTechnicalError: (String, String) -> Unit
 ) : WebViewClient() {
 
@@ -27,25 +29,43 @@ class SecureWebViewClient(
     }
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-        val result = policy.evaluate(url)
-        if (result.decision != LocalDecision.ALLOW) {
-            view?.stopLoading()
-            onBlocked(url.orEmpty(), result.reason)
-            return
+        when (val decision = engine.evaluateNavigation(url)) {
+            is NavigationDecision.Allow -> super.onPageStarted(view, url, favicon)
+            is NavigationDecision.PendingApproval -> {
+                view?.stopLoading()
+                handlePendingApproval(view, url.orEmpty(), decision.host)
+            }
+            is NavigationDecision.Blocked -> {
+                view?.stopLoading()
+                onBlocked(url.orEmpty(), decision.reason)
+            }
         }
-        super.onPageStarted(view, url, favicon)
     }
 
+    /** Subresources (images, scripts, iframes, ...) never get the
+     * pending-approval retry flow that a real page navigation does (see
+     * enforceNavigation/onPageStarted) - anything not already on an
+     * approved host is simply never fetched. That is exactly what makes an
+     * unknown/unapproved iframe or subresource unable to bypass policy: it
+     * cannot trigger its own remote approval and load anyway. */
     override fun shouldInterceptRequest(
         view: WebView?,
         request: WebResourceRequest?
     ): WebResourceResponse? {
-        val result = policy.evaluate(request?.url?.toString())
-        return if (result.decision == LocalDecision.ALLOW) {
-            super.shouldInterceptRequest(view, request)
-        } else {
-            BlockedResponse.empty()
+        val url = request?.url?.toString()
+        val navigationDecision = engine.evaluateNavigation(url)
+        if (navigationDecision !is NavigationDecision.Allow || url == null) {
+            return BlockedResponse.empty()
         }
+
+        if (request?.isForMainFrame != true && isLikelyImageRequest(request)) {
+            val imageDecision = engine.evaluateImage(url)
+            if (ImageFilterPolicy.shouldHide(engine.currentFilterLevel(), imageDecision)) {
+                return BlockedResponse.placeholderImage()
+            }
+        }
+
+        return super.shouldInterceptRequest(view, request)
     }
 
     override fun onReceivedSslError(
@@ -86,13 +106,60 @@ class SecureWebViewClient(
     }
 
     private fun enforceNavigation(view: WebView?, rawUrl: String?): Boolean {
-        val result = policy.evaluate(rawUrl)
-        if (result.decision == LocalDecision.ALLOW) {
-            return false
+        return when (val decision = engine.evaluateNavigation(rawUrl)) {
+            is NavigationDecision.Allow -> false
+            is NavigationDecision.PendingApproval -> {
+                view?.stopLoading()
+                handlePendingApproval(view, rawUrl.orEmpty(), decision.host)
+                true
+            }
+            is NavigationDecision.Blocked -> {
+                view?.stopLoading()
+                onBlocked(rawUrl.orEmpty(), decision.reason)
+                true
+            }
         }
+    }
 
-        view?.stopLoading()
-        onBlocked(rawUrl.orEmpty(), result.reason)
-        return true
+    /** Every redirect to a new host runs through this exact same path
+     * (onPageStarted/shouldOverrideUrlLoading fire again for the redirect
+     * target, calling evaluateNavigation fresh on it) - a redirect to an
+     * unapproved host is just another PendingApproval, checked before it
+     * ever opens, same as a first-time navigation. */
+    private fun handlePendingApproval(view: WebView?, url: String, host: String) {
+        onChecking(host)
+        engine.requestHostApproval(host) { approved ->
+            if (approved) {
+                val target = view
+                target?.post { target.loadUrl(url) }
+            } else {
+                onBlocked(url, "not_in_local_policy")
+            }
+        }
+    }
+
+    /** Best-effort only - WebView gives no direct "this is an &lt;img&gt;
+     * fetch" signal. A real image fetch's Accept header is led by image
+     * types (e.g. "image/avif,image/webp,image/apng,image/svg+xml,
+     * image/*,*/*;q=0.8"); requiring it to *start* with "image/" (not
+     * merely contain it) is what keeps this from also matching the main
+     * page's own navigation request, whose Accept header commonly lists
+     * "image/webp" too, just not first (e.g. "text/html,...,image/webp,
+     * .../*;q=0.8") - already additionally excluded by the isForMainFrame
+     * check at this function's one call site, kept here too as a second,
+     * independent safeguard against ever hiding real page content. */
+    private fun isLikelyImageRequest(request: WebResourceRequest?): Boolean {
+        val accept = request?.requestHeaders?.entries
+            ?.firstOrNull { it.key.equals("Accept", ignoreCase = true) }
+            ?.value
+        if (accept != null && accept.trim().startsWith("image/", ignoreCase = true)) return true
+
+        val path = request?.url?.path?.lowercase(Locale.US) ?: return false
+        return IMAGE_EXTENSIONS.any { path.endsWith(it) }
+    }
+
+    companion object {
+        private val IMAGE_EXTENSIONS =
+            listOf(".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif")
     }
 }

@@ -36,7 +36,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var contentFrame: FrameLayout
     private lateinit var statePanel: LinearLayout
 
-    private val policy by lazy { LocalPolicyStore.createPolicy() }
+    /** HttpRemoteClassifier's endpoint contract (POST .../api/browser-filter/
+     * classify) is a placeholder this Android-side change had to assume -
+     * see that class's own comment. Pointed at the same backend the rest of
+     * this project already talks to (dpc-app's ApiClient.DEFAULT_SERVER_URL),
+     * since the classification service is expected to live there once
+     * wired up server-side. */
+    private val policyEngine by lazy {
+        BrowsingPolicyEngine(
+            classifier = HttpRemoteClassifier(CLASSIFICATION_BASE_URL),
+            filterLevel = { FilterLevelStore.currentLevel(applicationContext) },
+        )
+    }
 
     private val bgColor = Color.parseColor("#F2F1E6")
     private val cardColor = Color.parseColor("#FFFFFF")
@@ -127,12 +138,12 @@ class MainActivity : AppCompatActivity() {
         showHome()
 
         if (!serviceWorkerSafe) {
-            showTechnicalError("service_worker_hardening_failed")
+            showTechnicalError("", "service_worker_hardening_failed")
         } else if (WebViewFeature.isFeatureSupported(WebViewFeature.START_SAFE_BROWSING)) {
             @Suppress("DEPRECATION")
             WebViewCompat.startSafeBrowsing(applicationContext) { success ->
                 if (!success) {
-                    showTechnicalError("safe_browsing_init_failed")
+                    showTechnicalError("", "safe_browsing_init_failed")
                 }
             }
         }
@@ -276,7 +287,7 @@ class MainActivity : AppCompatActivity() {
             showBlocked(url.orEmpty(), "downloads_disabled")
         }
 
-        view.webViewClient = SecureWebViewClient(policy, ::showBlocked, ::showTechnicalError)
+        view.webViewClient = SecureWebViewClient(policyEngine, ::showBlocked, ::showChecking, ::showTechnicalError)
     }
 
     private fun navigateFromAddressBar() {
@@ -287,13 +298,42 @@ class MainActivity : AppCompatActivity() {
             else -> ""
         }
 
-        val result = policy.evaluate(candidate)
-        if (result.decision == LocalDecision.ALLOW) {
-            addressBar.setText(candidate)
+        when (val decision = policyEngine.evaluateNavigation(candidate)) {
+            is NavigationDecision.Allow -> {
+                addressBar.setText(candidate)
+                showLoading()
+                webView.loadUrl(candidate)
+            }
+            is NavigationDecision.PendingApproval -> {
+                addressBar.setText(candidate)
+                showChecking(decision.host)
+                policyEngine.requestHostApproval(decision.host) { approved ->
+                    runOnUiThread {
+                        if (approved) {
+                            webView.loadUrl(candidate)
+                        } else {
+                            showBlocked(candidate, "not_in_local_policy")
+                        }
+                    }
+                }
+            }
+            is NavigationDecision.Blocked -> {
+                showBlocked(candidate, decision.reason)
+            }
+        }
+    }
+
+    /** A host that passed every structural check but isn't approved yet -
+     * see BrowsingPolicyEngine/NavigationDecision.PendingApproval - keeps
+     * the same loading UI a normal navigation already shows, plus a small
+     * "בודק..." chip, while the remote check runs in the background. */
+    private fun showChecking(host: String) {
+        runOnUiThread {
             showLoading()
-            webView.loadUrl(candidate)
-        } else {
-            showBlocked(candidate, result.reason)
+            statusChip.text = "בודק..."
+            statusChip.setTextColor(warnColor)
+            statusChip.background = roundedBackground(warnTintColor, dp(999).toFloat())
+            statusChip.visibility = View.VISIBLE
         }
     }
 
@@ -352,7 +392,7 @@ class MainActivity : AppCompatActivity() {
                 addressBar.setText(url)
             }
 
-            val domain = policy.evaluate(url).normalizedHost ?: displayHost(url)
+            val domain = displayHost(url)
             showStateCard(
                 tintColor = dangerTintColor,
                 icon = "⛔",
@@ -371,19 +411,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showTechnicalError(reason: String) {
+    private fun showTechnicalError(url: String, reason: String) {
         runOnUiThread {
             webView.stopLoading()
             webView.visibility = View.GONE
             progressBar.visibility = View.GONE
             statusChip.visibility = View.GONE
 
+            val domainSource = url.ifBlank { addressBar.text?.toString().orEmpty() }
             showStateCard(
                 tintColor = warnTintColor,
                 icon = "⚠",
                 iconColor = warnColor,
                 title = "לא ניתן היה לבדוק את האתר",
-                domain = displayHost(addressBar.text?.toString().orEmpty()),
+                domain = displayHost(domainSource),
                 body = "מטעמי בטיחות, האתר לא נפתח כרגע.",
                 primaryLabel = "נסה שוב",
                 onPrimary = {
@@ -540,4 +581,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private const val CLASSIFICATION_BASE_URL = "https://android-mdm-system.onrender.com"
+    }
 }
