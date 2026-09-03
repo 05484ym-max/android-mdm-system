@@ -187,3 +187,10 @@ Fresh server review confirms Phase 2.3 is complete on `filtered-browser-server`:
 - PostgreSQL failure/unavailability paths were exercised fail-closed.
 - The new limiter is intentionally in-memory/single-process for the current single-instance deployment; shared Redis-style limiting is deferred until horizontal scaling actually exists.
 - No Android client API change is required yet; all non-2xx responses remain technical failure / blocked, never ALLOW.
+
+
+## Build / CodeQL status — 2026-09-03
+
+- Android client compile errors found by CodeQL validation were fixed on `fix/browser-codeql-build` and fast-forwarded into `filtered-browser-client`.
+- Verified by GitHub Actions run `33720078875`: MDM Java/Kotlin, filtered-browser Java/Kotlin, and JavaScript/TypeScript CodeQL jobs all completed successfully.
+- This verifies CI build/static-analysis coverage. Physical-device bypass testing is still required before marking the browser client fully VERIFIED.
