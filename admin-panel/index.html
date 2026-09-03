@@ -237,6 +237,13 @@
     background: var(--bg); border: 1px solid var(--card-border); border-radius: 8px;
     padding: 1px 6px; margin-inline-start: 4px;
   }
+  .apk-source-badge {
+    display: inline-block; color: #fff; font-size: 0.6rem; font-weight: 700;
+    background: var(--accent); border-radius: 8px; padding: 1px 6px; margin-inline-start: 4px;
+  }
+  .apk-upload-status { min-height: 1.2em; font-size: 0.82rem; color: var(--text-dim); margin-top: 8px; }
+  .apk-upload-status.error { color: var(--danger); }
+  .apk-upload-status.success { color: var(--accent); }
   .appstore-preview {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
     gap: 10px; margin-bottom: 14px;
@@ -371,7 +378,7 @@
     <div id="catalogList"><div class="empty-state">טוען...</div></div>
     <div class="add-app-row" id="appImportActions" style="margin-top:10px;">
       <button class="add-app-btn" id="openPlaySearchBtn">חפש ב-Google Play</button>
-      <button class="add-app-btn" id="openApkUploadBtn" disabled title="העלאת APK תחובר בשלב הבא אחרי בחירת אחסון קבוע">העלה APK</button>
+      <button class="add-app-btn" id="openApkUploadBtn">העלה APK</button>
     </div>
     <div class="add-app-row" id="addAppToCatalogRow">
       <input class="package-input" id="newAppName" placeholder="שם האפליקציה (לדוגמה: וויז)" />
@@ -453,6 +460,21 @@
       <button class="toggle-btn" id="closePlaySearchBtn">סגור</button>
     </div>
     <div id="playSearchResults"><div class="empty-state">חפש אפליקציה לפי שם</div></div>
+  </div>
+</div>
+
+<div id="apkUploadModal" class="play-search-modal" style="display:none; z-index:45;">
+  <div class="login-card" style="max-width:520px; max-height:88vh; overflow-y:auto;">
+    <h2>העלאת APK</h2>
+    <input type="file" class="login-input" id="apkFileInput" accept=".apk,application/vnd.android.package-archive" />
+    <input class="login-input" id="apkAppName" placeholder="שם האפליקציה" />
+    <input class="login-input" id="apkPackageName" placeholder="com.example.app" style="direction:ltr;" />
+    <select class="login-input" id="apkCategorySelect"></select>
+    <div class="add-app-row">
+      <button class="add-app-btn" id="apkUploadSubmitBtn">העלה</button>
+      <button class="toggle-btn" id="apkUploadCancelBtn">ביטול</button>
+    </div>
+    <div id="apkUploadStatus" class="apk-upload-status"></div>
   </div>
 </div>
 
@@ -1218,7 +1240,7 @@ function renderCatalog(apps) {
     listEl.innerHTML = `<div class="catalog-grid">${apps.map(a => `
       <div class="catalog-tile">
         ${catalogIconHtml(a)}
-        <div class="catalog-name">${escapeHtml(a.name)}</div>
+        <div class="catalog-name">${escapeHtml(a.name)}${a.appSource === 'APK' ? '<span class="apk-source-badge" title="הועלה כקובץ APK">APK</span>' : ''}</div>
         <div class="catalog-package">${escapeHtml(a.packageName)}</div>
         <div class="catalog-tile-actions">
           <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
@@ -1436,6 +1458,7 @@ document.getElementById('deviceSearch').addEventListener('input', () => {
 loadDevices();
 </script>
 <script src="app-import.js"></script>
+<script src="apk-upload.js"></script>
 <script src="health.js"></script>
 <script src="diagnostics.js"></script>
 <script src="alerts.js"></script>
