@@ -12,7 +12,6 @@
   if (!modal || !openBtn || !cancelBtn || !submitBtn || !fileInput || !nameInput ||
       !packageInput || !categorySelect || !statusEl) return;
 
-  const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
   let uploadInFlight = false;
 
   function escapeHtml(str) {
@@ -66,7 +65,6 @@
 
     const file = fileInput.files[0];
     const name = nameInput.value.trim();
-    const packageName = packageInput.value.trim();
     const category = categorySelect.value;
 
     if (!file) {
@@ -81,15 +79,9 @@
       setStatus('יש להזין שם אפליקציה', 'error');
       return;
     }
-    if (!PACKAGE_NAME_REGEX.test(packageName)) {
-      setStatus('שם חבילה לא תקין (לדוגמה: com.example.app)', 'error');
-      return;
-    }
-
     const formData = new FormData();
     formData.append('apk', file);
     formData.append('name', name);
-    formData.append('packageName', packageName);
     if (category) formData.append('category', category);
 
     uploadInFlight = true;
@@ -111,7 +103,8 @@
       let body = {};
       try { body = JSON.parse(xhr.responseText); } catch { /* non-JSON error body */ }
       if (xhr.status >= 200 && xhr.status < 300) {
-        setStatus(`הועלה בהצלחה: ${body.name || name}`, 'success');
+        packageInput.value = body.packageName || '';
+        setStatus(`הועלה בהצלחה: ${body.name || name}${body.packageName ? ` (${body.packageName})` : ''}`, 'success');
         if (typeof loadAppsCatalog === 'function') loadAppsCatalog();
         setTimeout(() => { modal.style.display = 'none'; }, 1200);
       } else {
