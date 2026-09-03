@@ -125,9 +125,9 @@ jobs:
           build-mode: manual
           queries: security-extended
 
-      - name: Build filtered browser Android sources for CodeQL
+      - name: Test and build filtered browser Android sources for CodeQL
         working-directory: client
-        run: gradle assembleDebug
+        run: gradle testDebugUnitTest assembleDebug
 
       - name: Analyze filtered browser Java/Kotlin
         uses: github/codeql-action/analyze@v4
