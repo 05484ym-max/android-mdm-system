@@ -1,0 +1,69 @@
+name: Browser Client Build & Tests
+
+# This branch (filtered-browser-client) predates the CodeQL workflow that
+# elsewhere in this project builds `client/` (that workflow lives on other
+# branches and always checks out a fixed `filtered-browser-client` ref
+# regardless of what actually triggered it, so it can't verify a feature
+# branch's own commits). This workflow exists so testDebugUnitTest and
+# assembleDebug actually run against whatever is really on this ref -
+# needed because this sandbox has no network access to Google's/Maven's
+# plugin repositories to run a full Android Gradle build locally at all.
+
+on:
+  push:
+    paths:
+      - 'client/**'
+      - '.github/workflows/browser-client-tests.yml'
+  pull_request:
+    paths:
+      - 'client/**'
+      - '.github/workflows/browser-client-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-client-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: testDebugUnitTest + assembleDebug
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Run unit tests
+        working-directory: client
+        run: gradle testDebugUnitTest
+
+      - name: Build debug APK
+        working-directory: client
+        run: gradle assembleDebug
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-client-debug-apk
+          path: client/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
