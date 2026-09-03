@@ -9,11 +9,18 @@ on:
     paths:
       - 'backend/browserClassifier.js'
       - 'backend/publicUrl.js'
+      - 'ai-service/Dockerfile'
+      - 'ai-service/requirements.txt'
+      - 'ai-service/app.py'
+      - 'ai-service/test_policy.py'
+      - 'ai-service/policy.py'
       - 'backend/test-browser-image-cache-integration.js'
       - 'backend/test-image-moderator.js'
       - 'backend/test-safe-remote-image.js'
       - 'backend/imageModerator.js'
       - 'backend/safeRemoteImage.js'
+      - 'backend/singleFlight.js'
+      - 'backend/test-single-flight.js'
       - 'backend/db.js'
       - 'backend/index.js'
       - 'backend/test-browser-classifier.js'
@@ -47,6 +54,10 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: backend/package-lock.json
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install dependencies
         working-directory: backend
         run: npm ci
@@ -56,12 +67,21 @@ jobs:
       - name: Test public URL construction
         working-directory: backend
         run: node test-public-url.js
-      - name: Test HAREDI_STRICT image moderation
+      - name: Test HAREDI_STRICT image moderation client
         working-directory: backend
         run: node test-image-moderator.js
+      - name: Test local HAREDI_STRICT AI policy
+        working-directory: ai-service
+        run: python -m unittest -v test_policy.py
+      - name: Compile local AI service
+        working-directory: ai-service
+        run: python -m py_compile app.py policy.py
       - name: Test SSRF-safe image validation
         working-directory: backend
         run: node test-safe-remote-image.js
+      - name: Test moderation single-flight coalescing
+        working-directory: backend
+        run: node test-single-flight.js
 
   fail-closed-http:
     name: Browser classifier fail-closed HTTP (real PostgreSQL)
