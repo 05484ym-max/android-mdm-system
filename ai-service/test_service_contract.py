@@ -30,8 +30,11 @@ class LocalAiServiceContractTests(unittest.TestCase):
             "MAX_BYTES",
             "MAX_IMAGE_PIXELS",
             "DEFAULT_SIGLIP_MODEL",
+            "DEFAULT_SIGLIP_REVISION",
             "DEFAULT_NSFW_MODEL",
+            "DEFAULT_NSFW_REVISION",
             "DEFAULT_GENDER_MODEL",
+            "DEFAULT_GENDER_REVISION",
             "YUNET_SHA256",
             "_siglip_scores",
             "_nsfw_score",
@@ -59,6 +62,22 @@ class LocalAiServiceContractTests(unittest.TestCase):
         self.assertIn('YUNET_REPO = "opencv/opencv_zoo"', self.app_source)
         self.assertNotIn("nudenet", self.requirements.lower())
         self.assertNotIn("NudeDetector", self.app_source)
+
+    def test_huggingface_models_are_revision_pinned_and_remote_code_disabled(self):
+        self.assertIn(
+            'DEFAULT_SIGLIP_REVISION = "a89f5c5093f902bf39d3cd4d81d2c09867f0724b"',
+            self.app_source,
+        )
+        self.assertIn(
+            'DEFAULT_NSFW_REVISION = "008722e6cd8dff64efa75fb2a8482c80e41434ca"',
+            self.app_source,
+        )
+        self.assertIn(
+            'DEFAULT_GENDER_REVISION = "ecab7935ec1df4243f7832b87df94b4cd1530502"',
+            self.app_source,
+        )
+        self.assertGreaterEqual(self.app_source.count("trust_remote_code=False"), 3)
+        self.assertGreaterEqual(self.app_source.count('model_kwargs={"use_safetensors": True}'), 3)
         self.assertNotIn("trust_remote_code=True", self.app_source)
 
     def test_gender_parser_accepts_reviewed_model_labels(self):
