@@ -54,6 +54,7 @@ function evaluateVisionResponse(payload) {
 
   const safe = response.safeSearchAnnotation || {};
   const labels = Array.isArray(response.labelAnnotations) ? response.labelAnnotations : [];
+  const faces = Array.isArray(response.faceAnnotations) ? response.faceAnnotations : [];
 
   const adultRank = LIKELIHOOD_RANK[safe.adult] || 0;
   const racyRank = LIKELIHOOD_RANK[safe.racy] || 0;
@@ -76,6 +77,18 @@ function evaluateVisionResponse(payload) {
 
   const personScore = labelScore(labels, PERSON_LABELS);
   const maleScore = labelScore(labels, MALE_LABELS);
+
+  // Vision face detection does not provide gender. In HAREDI_STRICT, a face
+  // without a separate high-confidence male label is therefore ambiguous and
+  // blocked. This catches portraits where generic label detection failed to
+  // emit "woman"/"person" at all.
+  if (faces.length > 0 && maleScore < MALE_SCORE_THRESHOLD) {
+    return {
+      allowed: false,
+      reason: 'ambiguous_face',
+      details: { faceCount: faces.length, maleScore },
+    };
+  }
 
   // HAREDI_STRICT: a person-like image that is not confidently identified as
   // male is blocked. This deliberately prefers false positives to exposing a
@@ -120,6 +133,7 @@ async function moderateImage(buffer, fetchImpl = fetch) {
       features: [
         { type: 'SAFE_SEARCH_DETECTION' },
         { type: 'LABEL_DETECTION', maxResults: 30 },
+        { type: 'FACE_DETECTION', maxResults: 10 },
       ],
     }],
   };
