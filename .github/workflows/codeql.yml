@@ -1,4 +1,5 @@
 name: CodeQL Security Scan
+# Validation target includes strict blob/data image hardening.
 
 on:
   push:
