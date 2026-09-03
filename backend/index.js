@@ -1912,6 +1912,7 @@ function imageModerationDecisionIsCacheable(result) {
     'racy_content',
     'revealing_clothing',
     'female_detected',
+    'ambiguous_face',
     'ambiguous_person',
   ]).has(result.reason);
 }
