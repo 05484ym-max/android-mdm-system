@@ -17,14 +17,14 @@ permissions:
 
 jobs:
   real-model-smoke:
-    name: Real YuNet + FairFace + NSFW + SigLIP2 inference
+    name: Real YuNet + AgeGender + NSFW + SigLIP2 inference
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       AI_MAX_CONCURRENCY: '1'
       SIGLIP_MODEL: google/siglip2-base-patch16-512
       NSFW_MODEL: viddexa/nsfw-detection-mini
-      GENDER_MODEL: dima806/fairface_gender_image_detection
+      GENDER_MODEL: abhilash88/age-gender-prediction
     steps:
       - name: Checkout
         uses: actions/checkout@v6
