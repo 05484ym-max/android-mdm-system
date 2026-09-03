@@ -12,11 +12,15 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -36,6 +40,8 @@ class AppStoreActivity : Activity() {
     private val mediumFont = Typeface.create("sans-serif-medium", Typeface.NORMAL)
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var selectedCategory = "all"
+    private var searchQuery = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,16 +60,13 @@ class AppStoreActivity : Activity() {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(BG))
-            // Same fix as CustomerActivity: the manifest's supportsRtl alone
-            // isn't relied on here - forced explicitly so this screen matches
-            // regardless of device locale.
             layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
 
         page.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(24), dp(18), dp(24), dp(14))
+            setPadding(dp(24), dp(18), dp(24), dp(12))
 
             addView(LinearLayout(this@AppStoreActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -89,42 +92,75 @@ class AppStoreActivity : Activity() {
             addView(syncBadge())
         })
 
-        val content = LinearLayout(this).apply {
+        val approved = approvedApps()
+            .sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
+
+        val controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(4), dp(20), dp(24))
+            setPadding(dp(20), 0, dp(20), dp(8))
         }
 
-        val apps = approvedApps()
-        if (apps.isEmpty()) {
-            content.addView(TextView(this).apply {
-                text = "עדיין לא אושרו אפליקציות למכשיר זה"
-                textSize = 14f
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(30), 0, 0)
-            })
-        } else {
-            val columns = 3
-            apps.chunked(columns).forEach { rowApps ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                rowApps.forEach { app ->
-                    row.addView(
-                        appTile(app),
-                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    )
-                }
-                repeat(columns - rowApps.size) {
-                    row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
-                }
-                content.addView(
-                    row,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { setMargins(0, 0, 0, dp(20)) }
-                )
-            }
+        val search = EditText(this).apply {
+            hint = "חפש אפליקציה"
+            textSize = 14f
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            setSingleLine(true)
+            gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT
+            background = flatRounded("#FFFFFF", dp(14).toFloat())
+            setPadding(dp(16), dp(11), dp(16), dp(11))
+            setText(searchQuery)
+            setSelection(text.length)
         }
+        controls.addView(
+            search,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10) }
+        )
+
+        val categoryBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val categoryScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            addView(categoryBar)
+        }
+        controls.addView(
+            categoryScroll,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+        page.addView(controls)
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(6), dp(20), dp(24))
+        }
+
+        fun refresh() {
+            renderCategoryChips(categoryBar, approved) {
+                selectedCategory = it
+                refresh()
+            }
+            renderCatalogContent(content, approved)
+        }
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                searchQuery = s?.toString().orEmpty()
+                renderCatalogContent(content, approved)
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        refresh()
 
         page.addView(
             ScrollView(this).apply {
@@ -135,6 +171,136 @@ class AppStoreActivity : Activity() {
         )
 
         return page
+    }
+
+    private fun renderCategoryChips(
+        bar: LinearLayout,
+        apps: List<CatalogApp>,
+        onSelect: (String) -> Unit
+    ) {
+        bar.removeAllViews()
+
+        val categories = linkedMapOf("all" to "הכל")
+        apps.forEach { app ->
+            if (app.category.isNotBlank() && app.category !in categories) {
+                categories[app.category] = app.categoryLabel.ifBlank { "אחר" }
+            }
+        }
+
+        // If a category disappeared from this device's approved catalog,
+        // return to "all" instead of leaving the screen stuck on an empty filter.
+        if (selectedCategory !in categories) selectedCategory = "all"
+
+        categories.forEach { (key, label) ->
+            val active = key == selectedCategory
+            bar.addView(TextView(this).apply {
+                text = label
+                textSize = 12f
+                typeface = mediumFont
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor(if (active) "#FFFFFF" else ACCENT))
+                background = flatRounded(if (active) ACCENT else "#FFFFFF", dp(18).toFloat())
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { onSelect(key) }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginEnd = dp(8)
+                bottomMargin = dp(4)
+            })
+        }
+    }
+
+    private fun renderCatalogContent(content: LinearLayout, apps: List<CatalogApp>) {
+        content.removeAllViews()
+
+        val query = searchQuery.trim().lowercase()
+        val filtered = apps.filter { app ->
+            val categoryMatches = selectedCategory == "all" || app.category == selectedCategory
+            val textMatches = query.isEmpty() ||
+                app.name.lowercase().contains(query) ||
+                app.packageName.lowercase().contains(query) ||
+                app.categoryLabel.lowercase().contains(query)
+            categoryMatches && textMatches
+        }.sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
+
+        if (filtered.isEmpty()) {
+            content.addView(TextView(this).apply {
+                text = if (apps.isEmpty()) {
+                    "עדיין לא אושרו אפליקציות למכשיר זה"
+                } else {
+                    "לא נמצאו אפליקציות תואמות"
+                }
+                textSize = 14f
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(30), 0, 0)
+            })
+            return
+        }
+
+        if (selectedCategory == "all" && query.isEmpty()) {
+            val updates = filtered.filter { app ->
+                val installed = isInstalled(app.packageName)
+                installed && isUpdateAvailable(app, installed)
+            }
+            if (updates.isNotEmpty()) {
+                addSectionTitle(content, "עדכונים")
+                addAppGrid(content, updates)
+            }
+
+            val recommended = filtered.filter { it.isRecommended }
+            if (recommended.isNotEmpty()) {
+                addSectionTitle(content, "מומלצות")
+                addAppGrid(content, recommended)
+            }
+        }
+
+        val sectionTitle = when {
+            query.isNotEmpty() -> "תוצאות"
+            selectedCategory != "all" ->
+                filtered.firstOrNull()?.categoryLabel?.ifBlank { "אפליקציות" } ?: "אפליקציות"
+            else -> "כל האפליקציות"
+        }
+        addSectionTitle(content, sectionTitle)
+        addAppGrid(content, filtered)
+    }
+
+    private fun addSectionTitle(parent: LinearLayout, title: String) {
+        parent.addView(TextView(this).apply {
+            text = title
+            textSize = 15f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.RIGHT
+            setPadding(dp(2), dp(10), dp(2), dp(12))
+        })
+    }
+
+    private fun addAppGrid(parent: LinearLayout, apps: List<CatalogApp>) {
+        val columns = 3
+        apps.chunked(columns).forEach { rowApps ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            rowApps.forEach { app ->
+                row.addView(
+                    appTile(app),
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                )
+            }
+            repeat(columns - rowApps.size) {
+                row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
+            }
+            parent.addView(
+                row,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 0, dp(18)) }
+            )
+        }
     }
 
     /** Same sync badge as CustomerActivity's header - this screen is a
@@ -282,21 +448,17 @@ class AppStoreActivity : Activity() {
     private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
         if (!installed) return false
 
-        return try {
-            val info = packageManager.getPackageInfo(app.packageName, 0)
-            val installedVersion = info.versionName?.trim()
-            val playVersion = app.playVersion?.trim()
-
-            when {
-                !playVersion.isNullOrEmpty() && !installedVersion.isNullOrEmpty() ->
-                    !playVersion.equals(installedVersion, ignoreCase = true)
-                app.playUpdatedAt != null ->
-                    app.playUpdatedAt > info.lastUpdateTime
-                else -> false
-            }
-        } catch (_: Exception) {
-            false
-        }
+        // Google Play's public metadata is catalog-level, not device-specific.
+        // A different version/timestamp can mean staged rollout, device/ABI
+        // targeting, regional rollout, or simply metadata that is newer than
+        // what this exact device is currently eligible to install.
+        //
+        // Therefore we deliberately do NOT label an installed app as "עדכן"
+        // from versionName/timestamp heuristics alone. False update prompts are
+        // worse than a conservative "מותקן". When we later have an
+        // authoritative device-specific update signal, this is the one place
+        // that should consume it.
+        return false
     }
 
     private fun isInstalled(packageName: String): Boolean {
