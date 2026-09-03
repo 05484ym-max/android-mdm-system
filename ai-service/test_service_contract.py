@@ -30,8 +30,11 @@ class LocalAiServiceContractTests(unittest.TestCase):
             "MAX_BYTES",
             "MAX_IMAGE_PIXELS",
             "DEFAULT_SIGLIP_MODEL",
+            "DEFAULT_SIGLIP_REVISION",
             "DEFAULT_NSFW_MODEL",
+            "DEFAULT_NSFW_REVISION",
             "DEFAULT_GENDER_MODEL",
+            "DEFAULT_GENDER_REVISION",
             "YUNET_SHA256",
             "_siglip_scores",
             "_nsfw_score",
@@ -39,6 +42,7 @@ class LocalAiServiceContractTests(unittest.TestCase):
             "_verified_yunet_path",
             "_decode_image",
             "_run_models",
+            "lifespan",
             "moderate",
         }:
             self.assertIn(required, names)
@@ -61,6 +65,22 @@ class LocalAiServiceContractTests(unittest.TestCase):
         self.assertNotIn("NudeDetector", self.app_source)
         self.assertNotIn("trust_remote_code=True", self.app_source)
 
+    def test_huggingface_models_are_revision_pinned_and_safetensors_only(self):
+        self.assertIn("DEFAULT_SIGLIP_REVISION", self.app_source)
+        self.assertIn("DEFAULT_NSFW_REVISION", self.app_source)
+        self.assertIn("DEFAULT_GENDER_REVISION", self.app_source)
+        self.assertIn('revision=os.environ.get("SIGLIP_REVISION", DEFAULT_SIGLIP_REVISION)', self.app_source)
+        self.assertIn('revision=os.environ.get("NSFW_REVISION", DEFAULT_NSFW_REVISION)', self.app_source)
+        self.assertIn('revision=os.environ.get("GENDER_REVISION", DEFAULT_GENDER_REVISION)', self.app_source)
+        self.assertGreaterEqual(self.app_source.count('model_kwargs={"use_safetensors": True}'), 3)
+        self.assertGreaterEqual(self.app_source.count("trust_remote_code=False"), 3)
+
+    def test_siglip_prompts_are_exact_and_partial_responses_fail_closed(self):
+        self.assertIn("candidate_labels=SIGLIP_PROMPTS", self.app_source)
+        self.assertIn('hypothesis_template="{}"', self.app_source)
+        self.assertIn("if set(scores) != expected:", self.app_source)
+        self.assertIn("siglip_incomplete_result", self.app_source)
+
     def test_gender_parser_accepts_reviewed_model_labels(self):
         self.assertIn('{"female", "woman"}', self.app_source)
         self.assertIn('{"male", "man"}', self.app_source)
@@ -78,6 +98,13 @@ class LocalAiServiceContractTests(unittest.TestCase):
         self.assertIn("BoundedSemaphore", self.app_source)
         self.assertIn('"allowed": False', self.app_source)
         self.assertIn('"reason": "local_ai_error"', self.app_source)
+
+    def test_health_never_claims_production_ready_before_preload_and_token(self):
+        self.assertIn("LOCAL_AI_PRELOAD_MODELS", self.app_source)
+        self.assertIn("_models_ready = False", self.app_source)
+        self.assertIn('"ready": _models_ready', self.app_source)
+        self.assertIn('"productionReady": _models_ready and token_configured', self.app_source)
+        self.assertNotIn('"productionReady": True', self.app_source)
 
     def test_container_copies_policy_and_runs_non_root(self):
         self.assertIn("COPY --chown=appuser:appuser app.py policy.py ./", self.dockerfile)
