@@ -59,6 +59,29 @@ class HarediStrictPolicyTests(unittest.TestCase):
         self.assertFalse(result["allowed"])
         self.assertEqual(result["reason"], "ambiguous_person")
 
+    def test_uncertain_non_person_image_blocks(self):
+        result = evaluate(
+            [],
+            {
+                "a photograph of a woman": 0.10,
+                "a photograph of a man": 0.12,
+                "a photograph with no person": 0.30,
+            },
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "ambiguous_image")
+
+    def test_confident_no_person_can_pass(self):
+        result = evaluate(
+            [],
+            {
+                "a photograph of a woman": 0.04,
+                "a photograph of a man": 0.03,
+                "a photograph with no person": 0.84,
+            },
+        )
+        self.assertTrue(result["allowed"])
+
     def test_swimsuit_blocks(self):
         result = evaluate(
             [],
