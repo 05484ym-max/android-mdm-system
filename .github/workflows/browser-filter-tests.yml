@@ -127,6 +127,20 @@ jobs:
           cat /tmp/result.json
           test "$code" = "503"
           node -e "const j=require('/tmp/result.json'); if(j.allowed!==false||j.reason!=='classifier_not_configured') process.exit(1)"
+      - name: Prove image proxy blocks literal-IP SSRF
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/image-block.svg -D /tmp/image-headers.txt -w '%{http_code}' \
+            -X POST 'http://127.0.0.1:4555/api/browser/image' \
+            -H 'Content-Type: application/json' \
+            --data '{"url":"https://127.0.0.1/private.png"}')
+          test "$code" = "200"
+          grep -qi '^Content-Type: image/svg+xml' /tmp/image-headers.txt
+          grep -qi '^X-Filter-Decision: block' /tmp/image-headers.txt
+          grep -qi '^X-Filter-Reason: image_ip_literal_blocked' /tmp/image-headers.txt
+          grep -q 'התמונה הוסתרה' /tmp/image-block.svg
+
       - name: Show log on failure
         if: failure()
         working-directory: backend
