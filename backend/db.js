@@ -50,6 +50,15 @@ ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS category_source TEXT NOT NULL 
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS is_recommended BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
 
+-- Persistent APK upload. Additive defaults preserve every existing Play row.
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_url TEXT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_sha256 TEXT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_size_bytes BIGINT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_storage_key TEXT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS app_source TEXT NOT NULL DEFAULT 'PLAY'
+  CHECK (app_source IN ('PLAY', 'APK'));
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS commands (
   id           UUID PRIMARY KEY,
   device_id    TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
@@ -515,13 +524,20 @@ function mapCatalogRow(row) {
     categorySource: row.category_source,
     isRecommended: row.is_recommended,
     sortOrder: row.sort_order,
+    appSource: row.app_source,
+    apkUrl: row.apk_url,
+    apkSha256: row.apk_sha256,
+    apkSizeBytes: row.apk_size_bytes != null ? Number(row.apk_size_bytes) : null,
+    apkStorageKey: row.apk_storage_key,
+    uploadedAt: row.uploaded_at ? row.uploaded_at.toISOString() : null,
   };
 }
 
 async function listAppsCatalog() {
   const { rows } = await pool.query(
     `SELECT package_name, name, icon_url, play_version, play_updated_at, added_at,
-            category, category_source, is_recommended, sort_order
+            category, category_source, is_recommended, sort_order,
+            app_source, apk_url, apk_sha256, apk_size_bytes, apk_storage_key, uploaded_at
        FROM apps_catalog
       ORDER BY sort_order ASC, name ASC`,
   );
@@ -569,6 +585,29 @@ async function addAppToCatalog(packageName, name, iconUrl, playVersion = null, p
        END`,
     [packageName, name, iconUrl || null, playVersion, playUpdatedAt, category],
   );
+}
+
+async function insertUploadedApp({ packageName, name, category, apkUrl, apkSha256, apkSizeBytes, apkStorageKey }) {
+  const { rows } = await pool.query(
+    `INSERT INTO apps_catalog
+       (package_name, name, category, category_source, app_source,
+        apk_url, apk_sha256, apk_size_bytes, apk_storage_key, uploaded_at)
+     VALUES ($1, $2, COALESCE($3, 'other'), CASE WHEN $3 IS NOT NULL THEN 'MANUAL' ELSE 'DEFAULT' END,
+             'APK', $4, $5, $6, $7, now())
+     ON CONFLICT (package_name) DO UPDATE SET
+       name = $2,
+       category = CASE WHEN $3 IS NOT NULL THEN $3 ELSE apps_catalog.category END,
+       category_source = CASE WHEN $3 IS NOT NULL THEN 'MANUAL' ELSE apps_catalog.category_source END,
+       app_source = 'APK',
+       apk_url = $4,
+       apk_sha256 = $5,
+       apk_size_bytes = $6,
+       apk_storage_key = $7,
+       uploaded_at = now()
+     RETURNING *`,
+    [packageName, name, category || null, apkUrl, apkSha256, apkSizeBytes, apkStorageKey],
+  );
+  return mapCatalogRow(rows[0]);
 }
 
 /**
@@ -900,6 +939,7 @@ module.exports = {
   listEnrollments,
   listAppsCatalog,
   addAppToCatalog,
+  insertUploadedApp,
   updateAppCatalogMeta,
   listAppsPendingPlayMetadataRefresh,
   claimAppsForPlayMetadataRefresh,
