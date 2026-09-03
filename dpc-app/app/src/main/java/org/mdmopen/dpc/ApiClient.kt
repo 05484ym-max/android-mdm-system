@@ -70,6 +70,10 @@ data class UpdateItem(
     val body: String,
     val pinned: Boolean,
     val publishedAt: String,
+    val mediaType: String? = null,
+    val mediaUrl: String? = null,
+    val mediaMimeType: String? = null,
+    val mediaSizeBytes: Long? = null,
 )
 
 class ApiException(message: String) : Exception(message)
@@ -191,6 +195,10 @@ class ApiClient(
                 body = item.getString("body"),
                 pinned = item.optBoolean("pinned", false),
                 publishedAt = item.getString("publishedAt"),
+                mediaType = if (item.isNull("mediaType")) null else item.optString("mediaType", null),
+                mediaUrl = if (item.isNull("mediaUrl")) null else item.optString("mediaUrl", null),
+                mediaMimeType = if (item.isNull("mediaMimeType")) null else item.optString("mediaMimeType", null),
+                mediaSizeBytes = if (item.isNull("mediaSizeBytes")) null else item.optLong("mediaSizeBytes"),
             )
         }
     }
