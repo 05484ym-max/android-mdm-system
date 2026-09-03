@@ -144,6 +144,27 @@ async function waitForCount(getCount, expected, timeoutMs = 8000) {
       assert.ok(text.includes('אין עדיין הודעות'));
     });
 
+    await test('media picker accepts supported image/video types and previews a selected image locally', async () => {
+      const input = page.locator('#newsMediaInput');
+      assert.strictEqual(await input.count(), 1);
+      const accept = await input.getAttribute('accept');
+      for (const type of ['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm']) {
+        assert.ok(accept.includes(type), `missing accepted type: ${type}`);
+      }
+
+      await input.setInputFiles({
+        name: 'preview.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]),
+      });
+      await page.waitForSelector('#newsMediaPreview img');
+      assert.strictEqual(await page.locator('#newsMediaPreview').isVisible(), true);
+
+      // Clear it again so the legacy text-only create below proves that the
+      // existing no-media path stays fully backward compatible.
+      await input.setInputFiles([]);
+    });
+
     await test('creating a published, pinned update via the real form works end-to-end', async () => {
       await page.fill('#newsTitleInput', 'הודעה ראשונה');
       await page.fill('#newsBodyInput', 'זהו תוכן ההודעה הראשונה לבדיקה');
