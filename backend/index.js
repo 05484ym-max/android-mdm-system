@@ -1922,6 +1922,7 @@ function imageModerationDecisionIsCacheable(result) {
     'female_detected',
     'ambiguous_face',
     'ambiguous_person',
+    'ambiguous_image',
   ]).has(result.reason);
 }
 
