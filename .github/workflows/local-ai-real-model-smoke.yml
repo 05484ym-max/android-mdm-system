@@ -6,6 +6,7 @@ on:
       - feature/haredi-image-filter
     paths:
       - 'ai-service/test_real_models_smoke.py'
+      - 'ai-service/test_policy.py'
       - 'ai-service/requirements.txt'
       - 'ai-service/app.py'
       - 'ai-service/policy.py'
@@ -44,6 +45,9 @@ jobs:
       - name: Install local AI runtime
         working-directory: ai-service
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Run policy tests before model download
+        working-directory: ai-service
+        run: python -m unittest -v test_policy.py
       - name: Run real model inference smoke
         working-directory: ai-service
         run: python -m unittest -v test_real_models_smoke.py
