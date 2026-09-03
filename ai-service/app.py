@@ -23,7 +23,12 @@ def _load_nudenet() -> NudeDetector:
     global _nudenet
     if _nudenet is None:
         model_path = os.environ.get("NUDENET_MODEL_PATH")
+        require_640 = os.environ.get("NUDENET_REQUIRE_640", "0") == "1"
+        if require_640 and not model_path:
+            raise RuntimeError("NUDENET_REQUIRE_640 is enabled but NUDENET_MODEL_PATH is missing")
         if model_path:
+            if not os.path.isfile(model_path):
+                raise RuntimeError("NUDENET_MODEL_PATH does not exist")
             _nudenet = NudeDetector(model_path=model_path, inference_resolution=640)
         else:
             _nudenet = NudeDetector()
@@ -47,10 +52,13 @@ def _load_siglip():
 
 @app.get("/health")
 def health():
+    model_path = os.environ.get("NUDENET_MODEL_PATH")
+    require_640 = os.environ.get("NUDENET_REQUIRE_640", "0") == "1"
     return {
         "status": "ok",
         "policyVersion": POLICY_VERSION,
-        "nudenetModel": os.environ.get("NUDENET_MODEL_PATH", "bundled-320n"),
+        "productionReady": (not require_640) or bool(model_path),
+        "nudenetModel": model_path or "bundled-320n",
         "siglipModel": os.environ.get(
             "SIGLIP_MODEL",
             "google/siglip2-base-patch16-256",
