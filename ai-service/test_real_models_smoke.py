@@ -25,8 +25,9 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertIsNotNone(detector)
         self.assertIsInstance(ai_app._face_crops(image), list)
 
-        # Gender classifier must expose explicit Female/Male labels through a
-        # standard Transformers image-classification pipeline.
+        # Gender classifier must expose one recognized female label and one
+        # recognized male label. The production parser intentionally supports
+        # both Female/Male and Woman/Man naming conventions.
         gender = ai_app._load_gender()
         gender_raw = gender(image)
         gender_labels = {
@@ -34,8 +35,14 @@ class RealModelSmokeTests(unittest.TestCase):
             for item in (gender_raw or [])
             if isinstance(item, dict)
         }
-        self.assertIn("female", gender_labels)
-        self.assertIn("male", gender_labels)
+        self.assertTrue(
+            gender_labels.intersection({"female", "woman"}),
+            f"Gender model returned no recognized female label: {gender_labels}",
+        )
+        self.assertTrue(
+            gender_labels.intersection({"male", "man"}),
+            f"Gender model returned no recognized male label: {gender_labels}",
+        )
 
         # NSFW model must expose a stable unsafe/nsfw class.
         nsfw = ai_app._load_nsfw()
