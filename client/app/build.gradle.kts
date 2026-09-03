@@ -24,6 +24,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-poc"
+        buildConfigField(
+            "String",
+            "FILTER_API_BASE_URL",
+            "\"https://android-mdm-system.onrender.com\""
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
