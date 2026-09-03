@@ -545,7 +545,7 @@ class CustomerActivity : Activity() {
             if (!installed || updateAvailable) {
                 isClickable = true
                 isFocusable = true
-                setOnClickListener { openPlayStoreForInstall(app.packageName) }
+                setOnClickListener { installApp(app) }
             }
         }
 
@@ -560,7 +560,7 @@ class CustomerActivity : Activity() {
             addView(status)
             setOnClickListener {
                 if (installed) openInstalledApp(app.packageName)
-                else openPlayStoreForInstall(app.packageName)
+                else installApp(app)
             }
         }
     }
@@ -613,6 +613,50 @@ class CustomerActivity : Activity() {
      * the window closes (see PlayStoreGate). */
     private fun openPlayStoreForInstall(packageName: String) {
         PlayStoreGate.openForInstall(this, packageName)
+    }
+
+    /** Routes an install/update tap by where the app actually comes from.
+     * A PLAY-sourced app has a real Play Store listing, so that path is
+     * unchanged. An APK-sourced app (uploaded directly by an admin, see
+     * apkManifest.js/apkStorage.js on the server) was never published to
+     * Play - sending it through openPlayStoreForInstall opens Play Store to
+     * a listing that doesn't exist, which is what customers were seeing as
+     * a "no connection" error from Play Store itself. This mirrors
+     * AppStoreActivity.installCustomApk(), the admin-only screen that
+     * already installs APK-sourced apps correctly via
+     * AppInstaller.installFromUrl - customers reach the store through this
+     * screen instead, so it needs the same handling. */
+    private fun installApp(app: CatalogApp) {
+        if (app.appSource != "APK") {
+            openPlayStoreForInstall(app.packageName)
+            return
+        }
+
+        val apkUrl = app.apkUrl
+        val apkSha256 = app.apkSha256
+        if (apkUrl.isNullOrBlank() || apkSha256.isNullOrBlank()) {
+            Toast.makeText(this, "קובץ ההתקנה אינו זמין כרגע", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
+                runOnUiThread {
+                    Toast.makeText(this@CustomerActivity, "ההתקנה נשלחה למכשיר", Toast.LENGTH_LONG).show()
+                    showAppStore()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(
+                        this@CustomerActivity,
+                        "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
     }
 
     private fun loadIcon(app: CatalogApp, installed: Boolean, target: ImageView) {
