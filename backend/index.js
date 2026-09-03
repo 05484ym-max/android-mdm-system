@@ -24,6 +24,7 @@ const browserClassifier = require('./browserClassifier');
 const { publicBaseUrl } = require('./publicUrl');
 const safeRemoteImage = require('./safeRemoteImage');
 const imageModerator = require('./imageModerator');
+const { SingleFlight } = require('./singleFlight');
 
 const app = express();
 app.use(express.json());
@@ -1863,7 +1864,7 @@ app.get('/api/browser/check', wrap(async (req, res) => {
 
 const IMAGE_FILTER_POLICY_VERSION = imageModerator.POLICY_VERSION;
 const imageProxyRate = new Map();
-const imageModerationInFlight = new Map();
+const imageModerationSingleFlight = new SingleFlight();
 const IMAGE_PROXY_WINDOW_MS = 60 * 1000;
 const IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW = 240;
 
@@ -1931,10 +1932,7 @@ async function getOrModerateImageDecision(sha256Hex, remote) {
   );
   if (cached) return cached;
 
-  const existing = imageModerationInFlight.get(sha256Hex);
-  if (existing) return existing;
-
-  const work = (async () => {
+  return imageModerationSingleFlight.run(sha256Hex, async () => {
     // Re-check the database after winning the in-memory race in case another
     // process/instance populated the shared cache between the first read and
     // this point.
@@ -1960,16 +1958,7 @@ async function getOrModerateImageDecision(sha256Hex, remote) {
       decision = await db.saveBrowserImageModeration(decision);
     }
     return decision;
-  })();
-
-  imageModerationInFlight.set(sha256Hex, work);
-  try {
-    return await work;
-  } finally {
-    if (imageModerationInFlight.get(sha256Hex) === work) {
-      imageModerationInFlight.delete(sha256Hex);
-    }
-  }
+  });
 }
 
 app.post('/api/browser/image', wrap(async (req, res) => {
