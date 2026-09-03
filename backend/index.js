@@ -1916,8 +1916,8 @@ function imageModerationDecisionIsCacheable(result) {
   ]).has(result.reason);
 }
 
-app.get('/api/browser/image', wrap(async (req, res) => {
-  const rawUrl = typeof req.query.url === 'string' ? req.query.url : '';
+app.post('/api/browser/image', wrap(async (req, res) => {
+  const rawUrl = req.body && typeof req.body.url === 'string' ? req.body.url : '';
   if (!rawUrl || rawUrl.length > 8192) {
     return sendBlockedImage(res, 'invalid_image_url');
   }
