@@ -223,8 +223,14 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView(view: WebView, serviceWorkerSafe: Boolean) {
+        // Install document-start hardening before JavaScript is enabled and
+        // before any page is loaded. If this WebView cannot guarantee the
+        // pre-page hook, keep JavaScript disabled rather than allowing blob:
+        // image creation to bypass native request interception.
+        val documentStartImageSafe = StrictImageHardening.install(view)
+
         val settings = view.settings
-        settings.javaScriptEnabled = serviceWorkerSafe
+        settings.javaScriptEnabled = serviceWorkerSafe && documentStartImageSafe
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
         settings.allowFileAccess = false
