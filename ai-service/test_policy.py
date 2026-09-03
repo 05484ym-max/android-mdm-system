@@ -1,4 +1,4 @@
-from app import evaluate
+from policy import evaluate
 
 
 def test_female_face_blocks():
