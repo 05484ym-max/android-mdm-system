@@ -8,16 +8,15 @@ from typing import Any
 
 import cv2
 import numpy as np
-import torch
 from fastapi import FastAPI, Header, HTTPException, Request
 from huggingface_hub import hf_hub_download
 from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
-from transformers import AutoImageProcessor, AutoModel, pipeline
+from transformers import pipeline
 
 from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="2.0.0")
+app = FastAPI(title="Yehudi Kasher Local Image AI", version="3.0.0")
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
@@ -26,13 +25,11 @@ MAX_FACES = 8
 
 DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-512"
 DEFAULT_NSFW_MODEL = "viddexa/nsfw-detection-mini"
-DEFAULT_GENDER_MODEL = "abhilash88/age-gender-prediction"
+DEFAULT_GENDER_MODEL = "dima806/fairface_gender_image_detection"
 YUNET_REPO = "opencv/opencv_zoo"
 YUNET_FILE = "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 
-# Pillow also performs its own decompression-bomb check. Keep the explicit
-# width*height check below as a second, deterministic bound.
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
@@ -46,8 +43,7 @@ def _configured_concurrency() -> int:
 
 _siglip: Any = None
 _nsfw: Any = None
-_gender_processor: Any = None
-_gender_model: Any = None
+_gender: Any = None
 _face_detector: Any = None
 _model_load_lock = threading.Lock()
 _face_detector_lock = threading.Lock()
@@ -89,22 +85,17 @@ def _load_nsfw():
 
 
 def _load_gender():
-    global _gender_processor, _gender_model
-    if _gender_processor is not None and _gender_model is not None:
-        return _gender_processor, _gender_model
+    global _gender
+    if _gender is not None:
+        return _gender
     with _model_load_lock:
-        if _gender_processor is None or _gender_model is None:
-            model_name = os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL)
-            _gender_processor = AutoImageProcessor.from_pretrained(
-                model_name,
-                trust_remote_code=False,
+        if _gender is None:
+            _gender = pipeline(
+                task="image-classification",
+                model=os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL),
+                device=-1,
             )
-            _gender_model = AutoModel.from_pretrained(
-                model_name,
-                trust_remote_code=False,
-            )
-            _gender_model.eval()
-    return _gender_processor, _gender_model
+    return _gender
 
 
 def _verified_yunet_path() -> str:
@@ -234,33 +225,44 @@ def _gender_faces(image: Image.Image) -> list[dict]:
     if not crops:
         return []
 
-    processor, model = _load_gender()
+    classifier = _load_gender()
     results: list[dict] = []
     for crop, detection in crops:
-        inputs = processor(images=crop, return_tensors="pt")
-        with torch.no_grad():
-            output = model(**inputs)
-        logits = getattr(output, "logits", None)
-        if logits is None:
-            raise RuntimeError("gender_model_missing_logits")
-        values = logits.detach().cpu().float().reshape(-1).tolist()
-        if len(values) < 2:
-            raise RuntimeError("gender_model_invalid_logits")
-        gender_value = float(values[1])
-        if not math.isfinite(gender_value):
-            raise RuntimeError("gender_model_nonfinite")
-        female = gender_value if 0.0 <= gender_value <= 1.0 else 1.0 / (1.0 + math.exp(-gender_value))
-        female = max(0.0, min(1.0, female))
+        raw = classifier(crop)
+        female = None
+        male = None
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip().lower()
+            try:
+                score = float(item.get("score", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if not 0.0 <= score <= 1.0:
+                continue
+            if label == "female":
+                female = score
+            elif label == "male":
+                male = score
+
+        if female is None or male is None:
+            raise RuntimeError("gender_model_missing_labels")
+        total = female + male
+        if total <= 0.0:
+            raise RuntimeError("gender_model_invalid_scores")
+        female /= total
+        male /= total
         results.append({
             "female": female,
-            "male": 1.0 - female,
+            "male": male,
             "detection": max(0.0, min(1.0, detection)),
         })
     return results
 
 
 def _run_models(body: bytes, image: Image.Image) -> dict:
-    del body  # image bytes were validated before inference; models use decoded RGB.
+    del body
     with _inference_gate:
         nsfw = _nsfw_score(image)
         faces = _gender_faces(image)
