@@ -11,19 +11,17 @@ class FilteredImageProxy(
     private val baseUrl: String = BuildConfig.FILTER_API_BASE_URL,
 ) {
     fun shouldProxy(request: WebResourceRequest?): Boolean {
-        if (request == null || request.isForMainFrame) return false
-        if (!request.method.equals("GET", ignoreCase = true)) return false
-
+        if (request == null) return false
         val accept = request.requestHeaders.entries
             .firstOrNull { it.key.equals("Accept", ignoreCase = true) }
             ?.value
             .orEmpty()
-            .lowercase()
-
-        if (accept.contains("image/")) return true
-
-        val path = request.url.path.orEmpty().lowercase()
-        return IMAGE_EXTENSIONS.any(path::endsWith)
+        return looksLikeImageRequest(
+            isMainFrame = request.isForMainFrame,
+            method = request.method,
+            accept = accept,
+            path = request.url.path.orEmpty(),
+        )
     }
 
     fun fetch(rawUrl: String): WebResourceResponse {
@@ -102,6 +100,18 @@ class FilteredImageProxy(
     }
 
     companion object {
+        fun looksLikeImageRequest(
+            isMainFrame: Boolean,
+            method: String,
+            accept: String,
+            path: String,
+        ): Boolean {
+            if (isMainFrame || !method.equals("GET", ignoreCase = true)) return false
+            if (accept.lowercase().contains("image/")) return true
+            val lowerPath = path.lowercase()
+            return IMAGE_EXTENSIONS.any(lowerPath::endsWith)
+        }
+
         private const val MAX_PROXY_RESPONSE_BYTES = 6 * 1024 * 1024
 
         private val IMAGE_EXTENSIONS = setOf(
