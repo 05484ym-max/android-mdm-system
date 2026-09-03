@@ -53,12 +53,18 @@ class LocalAiServiceContractTests(unittest.TestCase):
             self.app_source,
         )
         self.assertIn(
-            'DEFAULT_GENDER_MODEL = "abhilash88/age-gender-prediction"',
+            'DEFAULT_GENDER_MODEL = "dima806/man_woman_face_image_detection"',
             self.app_source,
         )
         self.assertIn('YUNET_REPO = "opencv/opencv_zoo"', self.app_source)
         self.assertNotIn("nudenet", self.requirements.lower())
         self.assertNotIn("NudeDetector", self.app_source)
+        self.assertNotIn("trust_remote_code=True", self.app_source)
+
+    def test_gender_parser_accepts_reviewed_model_labels(self):
+        self.assertIn('{"female", "woman"}', self.app_source)
+        self.assertIn('{"male", "man"}', self.app_source)
+        self.assertIn("gender_model_missing_labels", self.app_source)
 
     def test_yunet_download_is_checksum_pinned(self):
         self.assertIn("hashlib.sha256", self.app_source)
