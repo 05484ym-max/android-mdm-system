@@ -76,6 +76,89 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const UPDATE_TITLE_MAX_LENGTH = 200;
 const UPDATE_BODY_MAX_LENGTH = 20000;
 const UPDATE_LIST_LIMIT_FOR_DEVICE = 50;
+const NEWS_MEDIA_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+const NEWS_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+const uploadNewsMediaField = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: NEWS_MEDIA_UPLOAD_MAX_BYTES },
+}).single('media');
+
+function optionalNewsMediaUpload(req, res, next) {
+  if (!req.is('multipart/form-data')) return next();
+  uploadNewsMediaField(req, res, err => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'media file is too large (maximum 50 MB)' });
+    }
+    return res.status(400).json({ error: 'invalid media multipart upload' });
+  });
+}
+
+function detectNewsMedia(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+  if (buffer.length >= 8 &&
+      buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+      buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a) {
+    return { mediaType: 'IMAGE', mimeType: 'image/png' };
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { mediaType: 'IMAGE', mimeType: 'image/jpeg' };
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return { mediaType: 'IMAGE', mimeType: 'image/webp' };
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
+    return { mediaType: 'VIDEO', mimeType: 'video/mp4' };
+  }
+  if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
+    return { mediaType: 'VIDEO', mimeType: 'video/webm' };
+  }
+  return null;
+}
+
+function parseNewsBoolean(value, fallback) {
+  if (value === undefined) return fallback;
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+}
+
+async function uploadNewsMedia(req, file) {
+  if (!file || !file.buffer || file.buffer.length === 0) return null;
+  const detected = detectNewsMedia(file.buffer);
+  if (!detected) {
+    const error = new Error('unsupported media file; use PNG/JPEG/WebP or MP4/WebM');
+    error.status = 400;
+    throw error;
+  }
+  if (detected.mediaType === 'IMAGE' && file.buffer.length > NEWS_IMAGE_MAX_BYTES) {
+    const error = new Error('image is too large (maximum 10 MB)');
+    error.status = 413;
+    throw error;
+  }
+  const storageConfig = apkStorage.loadStorageConfig();
+  const storageName = apkStorage.generateMediaStorageKey(detected.mimeType);
+  const uploaded = await apkStorage.uploadMedia(storageConfig, storageName, file.buffer, detected.mimeType);
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || (req.protocol + '://' + req.get('host'))).replace(/\/$/, '');
+  return {
+    mediaType: detected.mediaType,
+    mediaUrl: publicBaseUrl + '/api/customer-updates/media/' + encodeURIComponent(uploaded.assetId),
+    mediaStorageKey: uploaded.assetId,
+    mediaMimeType: detected.mimeType,
+    mediaSizeBytes: file.buffer.length,
+  };
+}
+
+async function deleteNewsMediaAsset(storageKey) {
+  if (!storageKey) return;
+  try {
+    await apkStorage.deleteApk(apkStorage.loadStorageConfig(), storageKey);
+  } catch (e) {
+    console.error('[customer-updates] media cleanup failed:', e.message);
+  }
+}
 
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
