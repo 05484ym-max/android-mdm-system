@@ -539,7 +539,7 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            topMargin = topMargin
+            this.topMargin = topMargin
         }
     }
 
