@@ -705,10 +705,11 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
 
   const storageConfig = apkStorage.loadStorageConfig();
   const sha256Hex = crypto.createHash('sha256').update(file.buffer).digest('hex');
-  const storageKey = apkStorage.generateApkStorageKey();
+  const storageName = apkStorage.generateApkStorageKey();
 
-  await apkStorage.uploadApk(storageConfig, storageKey, file.buffer);
-  const apkUrl = apkStorage.publicUrlForKey(storageConfig, storageKey);
+  const uploaded = await apkStorage.uploadApk(storageConfig, storageName, file.buffer);
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+  const apkUrl = `${publicBaseUrl}/api/apps/apk/${encodeURIComponent(uploaded.assetId)}`;
 
   let row;
   try {
@@ -719,10 +720,10 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
       apkUrl,
       apkSha256: sha256Hex,
       apkSizeBytes: file.buffer.length,
-      apkStorageKey: storageKey,
+      apkStorageKey: uploaded.assetId,
     });
   } catch (e) {
-    await apkStorage.deleteApk(storageConfig, storageKey);
+    await apkStorage.deleteApk(storageConfig, uploaded.assetId);
     throw e;
   }
 
@@ -733,6 +734,20 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
     sha256: row.apkSha256,
     sizeBytes: row.apkSizeBytes,
   });
+}));
+
+app.get('/api/apps/apk/:assetId', wrap(async (req, res) => {
+  if (!/^\d+$/.test(req.params.assetId)) {
+    return res.status(400).json({ error: 'invalid APK asset id' });
+  }
+  const storageConfig = apkStorage.loadStorageConfig();
+  const upstream = await apkStorage.downloadApk(storageConfig, req.params.assetId);
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  const length = upstream.headers.get('content-length');
+  if (length) res.setHeader('Content-Length', length);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  const bytes = Buffer.from(await upstream.arrayBuffer());
+  res.send(bytes);
 }));
 
 const REFRESH_PLAY_METADATA_BATCH_SIZE = 5;
