@@ -20,6 +20,8 @@ const playStoreSearch = require('./playStoreSearch');
 const appCategories = require('./appCategories');
 const apkStorage = require('./apkStorage');
 const apkManifest = require('./apkManifest');
+const browserClassifier = require('./browserClassifier');
+const { publicBaseUrl } = require('./publicUrl');
 
 const app = express();
 app.use(express.json());
@@ -141,10 +143,10 @@ async function uploadNewsMedia(req, file) {
   const storageConfig = apkStorage.loadStorageConfig();
   const storageName = apkStorage.generateMediaStorageKey(detected.mimeType);
   const uploaded = await apkStorage.uploadMedia(storageConfig, storageName, file.buffer, detected.mimeType);
-  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || (req.protocol + '://' + req.get('host'))).replace(/\/$/, '');
+  const baseUrl = publicBaseUrl(req);
   return {
     mediaType: detected.mediaType,
-    mediaUrl: publicBaseUrl + '/api/customer-updates/media/' + encodeURIComponent(uploaded.assetId),
+    mediaUrl: baseUrl + '/api/customer-updates/media/' + encodeURIComponent(uploaded.assetId),
     mediaStorageKey: uploaded.assetId,
     mediaMimeType: detected.mimeType,
     mediaSizeBytes: file.buffer.length,
@@ -1013,10 +1015,10 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
     throw e;
   }
 
-  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-  const apkUrl = `${publicBaseUrl}/api/apps/apk/${encodeURIComponent(uploaded.assetId)}`;
+  const baseUrl = publicBaseUrl(req);
+  const apkUrl = `${baseUrl}/api/apps/apk/${encodeURIComponent(uploaded.assetId)}`;
   const iconUrl = uploadedIcon
-    ? `${publicBaseUrl}/api/apps/icon/${encodeURIComponent(uploadedIcon.assetId)}`
+    ? `${baseUrl}/api/apps/icon/${encodeURIComponent(uploadedIcon.assetId)}`
     : null;
 
   let row;
@@ -1800,6 +1802,59 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   };
 
   res.json({ policy, catalog, commands, dns });
+}));
+
+// ---------- filtered browser automatic domain classification ----------
+//
+// Public by design: the standalone browser is a different Android package and
+// does not possess the DPC's device bearer token. The endpoint accepts only a
+// normalized hostname (no arbitrary URL/body), is globally cached in
+// PostgreSQL and rate-limited per source IP before a cache miss can consume a
+// vendor lookup. It returns only allow/block metadata - no private fleet data.
+const browserClassifierRate = new Map();
+const BROWSER_CLASSIFIER_WINDOW_MS = 60 * 1000;
+const BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW = 30;
+
+function browserClassifierRateAllowed(ip) {
+  const now = Date.now();
+  const key = String(ip || 'unknown').slice(0, 100);
+  const state = browserClassifierRate.get(key);
+  if (!state || now - state.startedAt >= BROWSER_CLASSIFIER_WINDOW_MS) {
+    browserClassifierRate.set(key, { startedAt: now, misses: 1 });
+    return true;
+  }
+  if (state.misses >= BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW) return false;
+  state.misses += 1;
+  return true;
+}
+
+app.get('/api/browser/check', wrap(async (req, res) => {
+  const host = browserClassifier.normalizeHost(
+    typeof req.query.host === 'string' ? req.query.host : '',
+  );
+  if (!host) {
+    return res.status(400).json({ allowed: false, reason: 'invalid_host' });
+  }
+
+  const cached = await db.getBrowserDomainClassification(host);
+  if (cached) {
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return res.json({ ...cached, cached: true });
+  }
+
+  if (!browserClassifierRateAllowed(req.ip)) {
+    return res.status(429).json({
+      host,
+      allowed: false,
+      reason: 'rate_limited',
+      cached: false,
+    });
+  }
+
+  const result = await browserClassifier.classifyHost(host);
+  const saved = await db.saveBrowserDomainClassification(result);
+  const status = result.reason === 'classifier_not_configured' ? 503 : 200;
+  res.status(status).json({ ...saved, cached: false });
 }));
 
 // ---------- customer updates ("news") - device-facing ----------
