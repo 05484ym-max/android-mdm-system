@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: local-ai-real-model-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   real-model-smoke:
     name: Real YuNet + ManWoman + NSFW + SigLIP2 inference
