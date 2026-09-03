@@ -1057,22 +1057,50 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
   });
 }));
 
+function detectStoredIconContentType(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+  if (buffer.length >= 8 &&
+      buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+      buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a) {
+    return 'image/png';
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (buffer.length >= 12 &&
+      buffer.toString('ascii', 0, 4) === 'RIFF' &&
+      buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
+}
+
 app.get('/api/apps/icon/:assetId', wrap(async (req, res) => {
   if (!/^\d+$/.test(req.params.assetId)) {
     return res.status(400).json({ error: 'invalid icon asset id' });
   }
   const storageConfig = apkStorage.loadStorageConfig();
   const upstream = await apkStorage.downloadApk(storageConfig, req.params.assetId);
-  const contentType = upstream.headers.get('content-type') || '';
-  if (!/^image\/(png|webp|jpeg)(?:;|$)/i.test(contentType)) {
-    throw new Error('GitHub icon asset returned an invalid content type');
+  const declaredLength = Number(upstream.headers.get('content-length') || 0);
+  if (declaredLength > 2 * 1024 * 1024) {
+    throw new Error('GitHub icon asset exceeds allowed size');
   }
+
+  const body = Buffer.from(await upstream.arrayBuffer());
+  if (!body.length) throw new Error('GitHub icon download returned an empty body');
+  if (body.length > 2 * 1024 * 1024) {
+    throw new Error('GitHub icon asset exceeds allowed size');
+  }
+
+  const contentType = detectStoredIconContentType(body);
+  if (!contentType) {
+    throw new Error('GitHub icon asset is not a supported image');
+  }
+
   res.setHeader('Content-Type', contentType);
-  const length = upstream.headers.get('content-length');
-  if (length) res.setHeader('Content-Length', length);
+  res.setHeader('Content-Length', String(body.length));
   res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-  if (!upstream.body) throw new Error('GitHub icon download returned an empty body');
-  Readable.fromWeb(upstream.body).pipe(res);
+  res.end(body);
 }));
 
 app.get('/api/apps/apk/:assetId', wrap(async (req, res) => {
