@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const https = require('https');
 
 const APK_CONTENT_TYPE = 'application/vnd.android.package-archive';
 const DEFAULT_RELEASE_TAG = 'app-store-assets';
@@ -71,24 +72,43 @@ function generateApkStorageKey() {
 
 async function uploadApk(config, key, buffer) {
   const release = await ensureRelease(config);
-  const url =
-    `https://uploads.github.com/repos/${config.repository}/releases/${release.id}/assets` +
-    `?name=${encodeURIComponent(key)}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...headers(config),
-      'Content-Type': APK_CONTENT_TYPE,
-      'Content-Length': String(buffer.length),
-    },
-    body: buffer,
+  const path =
+    `/repos/${config.repository}/releases/${release.id}/assets?name=${encodeURIComponent(key)}`;
+
+  const body = await new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'uploads.github.com',
+      port: 443,
+      path,
+      method: 'POST',
+      headers: {
+        ...headers(config),
+        'Content-Type': APK_CONTENT_TYPE,
+        'Content-Length': buffer.length,
+      },
+    }, res => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let parsed = null;
+        try {
+          parsed = text ? JSON.parse(text) : null;
+        } catch {
+          return reject(new Error(`GitHub release upload returned invalid JSON (HTTP ${res.statusCode})`));
+        }
+        if (res.statusCode < 200 || res.statusCode >= 300 || !parsed || !parsed.id) {
+          const message = parsed && parsed.message ? parsed.message : `HTTP ${res.statusCode}`;
+          return reject(new Error(`GitHub release upload failed: ${message}`));
+        }
+        resolve(parsed);
+      });
+    });
+    req.setTimeout(120000, () => req.destroy(new Error('GitHub release upload timed out')));
+    req.on('error', reject);
+    req.end(buffer);
   });
-  const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
-  if (!response.ok || !body || !body.id) {
-    const message = body && body.message ? body.message : `HTTP ${response.status}`;
-    throw new Error(`GitHub release upload failed: ${message}`);
-  }
+
   return {
     assetId: String(body.id),
     browserDownloadUrl: body.browser_download_url,
