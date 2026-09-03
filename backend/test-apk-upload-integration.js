@@ -177,14 +177,10 @@ async function upload(baseUrl, cookie, opts) {
     await test('package name is auto-detected from AndroidManifest.xml', async () => {
       const apk = buildTestApk('org.yehudikasher.browser', 4096);
       const res = await upload(mainBase, cookie, { buffer: apk, name: 'Browser' });
-      assert.strictEqual(res.status, 200, await res.text().catch(() => ''));
-      const body = await res.clone().json().catch(() => null);
-      // clone may be unavailable after text in some runtimes; fetch again if needed
-      if (body) assert.strictEqual(body.packageName, 'org.yehudikasher.browser');
-      else {
-        const row = (await db.listAppsCatalog()).find(x => x.packageName === 'org.yehudikasher.browser');
-        assert.ok(row);
-      }
+      const text = await res.text();
+      assert.strictEqual(res.status, 200, text);
+      const body = JSON.parse(text);
+      assert.strictEqual(body.packageName, 'org.yehudikasher.browser');
     });
 
     await test('a supplied package name that disagrees with the APK is rejected', async () => {
@@ -232,7 +228,8 @@ async function upload(baseUrl, cookie, opts) {
       assert.strictEqual(body.packageName, 'com.example.good');
       assert.strictEqual(body.sha256, sha256(apk));
       assert.strictEqual(body.sizeBytes, apk.length);
-      assert.match(body.apkUrl, new RegExp(`^${mainBase.replace(/[.*+?^$()|[\\]{}]/g, '\\$&')}/api/apps/apk/\\d+$`));
+      assert.ok(body.apkUrl.startsWith(`${mainBase}/api/apps/apk/`));
+      assert.match(body.apkUrl.split('/').pop(), /^\d+$/);
 
       assert.ok(github.release, 'release should be created');
       assert.strictEqual(github.assets.size >= 1, true);
