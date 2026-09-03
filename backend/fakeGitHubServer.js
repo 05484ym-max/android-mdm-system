@@ -71,9 +71,33 @@ function startFakeGitHubServer() {
         if (req.method === 'GET') {
           if (!asset) return sendJson(404, { message: 'Not Found' });
           if ((req.headers.accept || '').includes('application/octet-stream')) {
+            const range = req.headers.range;
+            if (range) {
+              const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+              if (!match) {
+                res.writeHead(416, { 'content-range': `bytes */${asset.body.length}` });
+                return res.end();
+              }
+              const start = Number(match[1]);
+              const requestedEnd = match[2] ? Number(match[2]) : asset.body.length - 1;
+              const end = Math.min(requestedEnd, asset.body.length - 1);
+              if (start > end || start >= asset.body.length) {
+                res.writeHead(416, { 'content-range': `bytes */${asset.body.length}` });
+                return res.end();
+              }
+              const slice = asset.body.subarray(start, end + 1);
+              res.writeHead(206, {
+                'content-type': asset.contentType || 'application/octet-stream',
+                'content-length': String(slice.length),
+                'content-range': `bytes ${start}-${end}/${asset.body.length}`,
+                'accept-ranges': 'bytes',
+              });
+              return res.end(slice);
+            }
             res.writeHead(200, {
               'content-type': asset.contentType || 'application/octet-stream',
               'content-length': String(asset.body.length),
+              'accept-ranges': 'bytes',
             });
             return res.end(asset.body);
           }
