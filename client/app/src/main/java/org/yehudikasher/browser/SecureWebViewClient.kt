@@ -14,6 +14,8 @@ import androidx.webkit.WebViewClientCompat
 
 class SecureWebViewClient(
     private val policy: UrlPolicy,
+    private val remotePolicy: RemotePolicyClient,
+    private val onNeedsClassification: (String) -> Unit,
     private val onBlocked: (String, String) -> Unit,
     private val onTechnicalError: (String, String) -> Unit
 ) : WebViewClientCompat() {
@@ -31,7 +33,11 @@ class SecureWebViewClient(
         val result = policy.evaluate(url)
         if (result.decision != LocalDecision.ALLOW) {
             view?.stopLoading()
-            onBlocked(url.orEmpty(), result.reason)
+            if (result.reason == "not_in_local_policy" && result.normalizedHost != null) {
+                onNeedsClassification(url.orEmpty())
+            } else {
+                onBlocked(url.orEmpty(), result.reason)
+            }
             return
         }
         super.onPageStarted(view, url, favicon)
@@ -41,12 +47,24 @@ class SecureWebViewClient(
         view: WebView?,
         request: WebResourceRequest?
     ): WebResourceResponse? {
-        val result = policy.evaluate(request?.url?.toString())
-        return if (result.decision == LocalDecision.ALLOW) {
-            super.shouldInterceptRequest(view, request)
-        } else {
-            BlockedResponse.empty()
+        val rawUrl = request?.url?.toString()
+        val result = policy.evaluate(rawUrl)
+        if (result.decision == LocalDecision.ALLOW) {
+            return super.shouldInterceptRequest(view, request)
         }
+
+        // shouldInterceptRequest runs off the UI thread, so it is safe to
+        // perform the remote classification here. This prevents a page that
+        // was approved for its main host from silently pulling content from
+        // an unclassified third-party host.
+        if (result.reason == "not_in_local_policy" && result.normalizedHost != null) {
+            val remote = remotePolicy.checkHost(result.normalizedHost)
+            if (remote.allowed && policy.rememberRemoteAllow(result.normalizedHost)) {
+                return super.shouldInterceptRequest(view, request)
+            }
+        }
+
+        return BlockedResponse.empty()
     }
 
     override fun onSafeBrowsingHit(
@@ -123,7 +141,11 @@ class SecureWebViewClient(
         }
 
         view?.stopLoading()
-        onBlocked(rawUrl.orEmpty(), result.reason)
+        if (result.reason == "not_in_local_policy" && result.normalizedHost != null) {
+            onNeedsClassification(rawUrl.orEmpty())
+        } else {
+            onBlocked(rawUrl.orEmpty(), result.reason)
+        }
         return true
     }
 }
