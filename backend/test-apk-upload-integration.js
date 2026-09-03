@@ -49,6 +49,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { Pool } = require('pg');
 const { startFakeS3Server } = require('./fakeS3Server');
+const { buildTestApk } = require('./testApkFixture');
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is required to run this suite - refusing to fall back to a mock.');
@@ -85,15 +86,9 @@ function sha256(v) {
  * this is not a real installable APK (no central directory/manifest), only
  * a fixture whose FIRST FOUR BYTES are genuinely what looksLikeApk checks -
  * see index.js's own comment on why full APK parsing is out of scope. */
-function fakeApkBuffer(sizeBytes = 4096, seed = 'apk-fixture') {
-  const buf = Buffer.alloc(sizeBytes);
-  buf.writeUInt8(0x50, 0); // 'P'
-  buf.writeUInt8(0x4b, 1); // 'K'
-  buf.writeUInt8(0x03, 2);
-  buf.writeUInt8(0x04, 3);
-  const filler = crypto.createHash('sha256').update(seed).digest();
-  for (let i = 4; i < sizeBytes; i++) buf[i] = filler[i % filler.length];
-  return buf;
+function fakeApkBuffer(sizeBytes = 4096, seed = 'apk-fixture', packageName = 'com.apk.fixture') {
+  void seed;
+  return buildTestApk(packageName, sizeBytes);
 }
 
 async function waitForHealth(baseUrl, timeoutMs = 25000) {
@@ -150,7 +145,13 @@ async function adminLogin(baseUrl) {
 function buildUploadForm({ apkBuffer, packageName, name, category, filename = 'app.apk' } = {}) {
   const form = new FormData();
   if (apkBuffer !== null) {
-    form.append('apk', new Blob([apkBuffer ?? fakeApkBuffer()], { type: 'application/vnd.android.package-archive' }), filename);
+    form.append(
+      'apk',
+      new Blob([apkBuffer ?? fakeApkBuffer(4096, 'default', packageName || 'com.apk.autodetected')], {
+        type: 'application/vnd.android.package-archive',
+      }),
+      filename,
+    );
   }
   if (packageName !== undefined) form.append('packageName', packageName);
   if (name !== undefined) form.append('name', name);
@@ -241,9 +242,11 @@ async function resetTestDatabase() {
       assert.strictEqual(row, undefined);
     });
 
-    await test('missing packageName is rejected with 400 (never guessed from the file)', async () => {
-      const res = await uploadApk(mainBaseUrl, mainCookie, { name: 'No Package Name' });
-      assert.strictEqual(res.status, 400);
+    await test('missing packageName is auto-detected from the APK manifest', async () => {
+      const res = await uploadApk(mainBaseUrl, mainCookie, { name: 'Auto Package Name' });
+      assert.strictEqual(res.status, 200);
+      const body = await res.json();
+      assert.strictEqual(body.packageName, 'com.apk.autodetected');
     });
 
     await test('missing name is rejected with 400', async () => {
@@ -289,7 +292,7 @@ async function resetTestDatabase() {
     let uploadedKeyPath = null;
 
     await test('a valid APK upload succeeds: correct SHA-256, randomized storage key, correct response shape, source APK in catalog', async () => {
-      const buffer = fakeApkBuffer(8192, 'happy-path');
+      const buffer = fakeApkBuffer(8192, 'happy-path', 'com.apk.happy');
       const expectedSha = sha256(buffer);
       const before = workingS3.objects.size;
 
@@ -328,10 +331,10 @@ async function resetTestDatabase() {
 
     await test('two different uploads get two different randomized storage keys', async () => {
       const res1 = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(1024, 'key-a'), packageName: 'com.apk.keya', name: 'Key A',
+        apkBuffer: fakeApkBuffer(1024, 'key-a', 'com.apk.keya'), packageName: 'com.apk.keya', name: 'Key A',
       });
       const res2 = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(1024, 'key-b'), packageName: 'com.apk.keyb', name: 'Key B',
+        apkBuffer: fakeApkBuffer(1024, 'key-b', 'com.apk.keyb'), packageName: 'com.apk.keyb', name: 'Key B',
       });
       const [body1, body2] = await Promise.all([res1.json(), res2.json()]);
       assert.notStrictEqual(body1.apkUrl, body2.apkUrl);
@@ -377,7 +380,7 @@ async function resetTestDatabase() {
 
     await test('storage failure (unreachable endpoint) => 500 and no catalog row is created', async () => {
       const res = await uploadApk(brokenStorageBaseUrl, brokenStorageCookie, {
-        apkBuffer: fakeApkBuffer(1024, 's3-fail'), packageName: 'com.apk.s3fail', name: 'S3 Fail',
+        apkBuffer: fakeApkBuffer(1024, 's3-fail', 'com.apk.s3fail'), packageName: 'com.apk.s3fail', name: 'S3 Fail',
       });
       assert.strictEqual(res.status, 500);
       const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.s3fail');
@@ -386,7 +389,7 @@ async function resetTestDatabase() {
 
     await test('missing APK_STORAGE_* configuration fails closed with 500 and no catalog row', async () => {
       const res = await uploadApk(noStorageConfigBaseUrl, noStorageConfigCookie, {
-        apkBuffer: fakeApkBuffer(1024, 'no-config'), packageName: 'com.apk.noconfig', name: 'No Config',
+        apkBuffer: fakeApkBuffer(1024, 'no-config', 'com.apk.noconfig'), packageName: 'com.apk.noconfig', name: 'No Config',
       });
       assert.strictEqual(res.status, 500);
       const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.noconfig');
@@ -406,7 +409,7 @@ async function resetTestDatabase() {
       let res;
       try {
         res = await uploadApk(mainBaseUrl, mainCookie, {
-          apkBuffer: fakeApkBuffer(1024, 'db-fail'), packageName: 'com.apk.dbfail', name: 'DB Fail',
+          apkBuffer: fakeApkBuffer(1024, 'db-fail', 'com.apk.dbfail'), packageName: 'com.apk.dbfail', name: 'DB Fail',
         });
       } finally {
         await rawPool.query('ALTER TABLE apps_catalog_test_renamed RENAME TO apps_catalog');
@@ -424,11 +427,11 @@ async function resetTestDatabase() {
 
     await test('re-uploading the same packageName updates the existing row rather than duplicating it', async () => {
       const first = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(512, 'v1'), packageName: 'com.apk.reupload', name: 'Reupload V1',
+        apkBuffer: fakeApkBuffer(512, 'v1', 'com.apk.reupload'), packageName: 'com.apk.reupload', name: 'Reupload V1',
       });
       const firstBody = await first.json();
       const second = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(512, 'v2'), packageName: 'com.apk.reupload', name: 'Reupload V2',
+        apkBuffer: fakeApkBuffer(512, 'v2', 'com.apk.reupload'), packageName: 'com.apk.reupload', name: 'Reupload V2',
       });
       const secondBody = await second.json();
       assert.notStrictEqual(firstBody.sha256, secondBody.sha256);
