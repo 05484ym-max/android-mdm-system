@@ -19,6 +19,7 @@ const alerts = require('./alerts');
 const playStoreSearch = require('./playStoreSearch');
 const appCategories = require('./appCategories');
 const apkStorage = require('./apkStorage');
+const apkManifest = require('./apkManifest');
 
 const app = express();
 app.use(express.json());
@@ -62,8 +63,8 @@ const APK_UPLOAD_MAX_BYTES = 150 * 1024 * 1024;
 function looksLikeApk(buffer) {
   return buffer.length >= 4 &&
     buffer[0] === 0x50 && buffer[1] === 0x4b &&
-    (buffer[2] === 0x03 || buffer[2] === 0x05) &&
-    (buffer[3] === 0x04 || buffer[3] === 0x06);
+    ((buffer[2] === 0x03 && buffer[3] === 0x04) ||
+     (buffer[2] === 0x05 && buffer[3] === 0x06));
 }
 
 const uploadApkField = multer({
@@ -819,10 +820,21 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
     return res.status(400).json({ error: 'uploaded file is not a valid APK (not a ZIP archive)' });
   }
 
-  const packageName = typeof req.body.packageName === 'string' ? req.body.packageName.trim() : '';
-  if (!PACKAGE_NAME_REGEX.test(packageName)) {
-    return res.status(400).json({ error: 'packageName is required and must be a valid Android package name' });
+  let packageName;
+  try {
+    packageName = apkManifest.extractPackageName(file.buffer);
+  } catch (e) {
+    return res.status(400).json({ error: `לא ניתן לזהות את שם החבילה מתוך ה-APK: ${e.message}` });
   }
+
+  const suppliedPackageName =
+    typeof req.body.packageName === 'string' ? req.body.packageName.trim() : '';
+  if (suppliedPackageName && suppliedPackageName !== packageName) {
+    return res.status(400).json({
+      error: `שם החבילה שסופק אינו תואם לקובץ. זוהה: ${packageName}`,
+    });
+  }
+
   const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
   if (!name) return res.status(400).json({ error: 'name is required' });
 
