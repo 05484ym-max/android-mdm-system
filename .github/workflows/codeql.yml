@@ -1,5 +1,7 @@
 name: CodeQL Security Scan
 
+# Rebuild filtered browser launcher icon
+
 on:
   push:
     paths:
