@@ -1861,7 +1861,7 @@ app.get('/api/browser/check', wrap(async (req, res) => {
 
 // ---------- filtered browser image moderation proxy ----------
 
-const IMAGE_FILTER_POLICY_VERSION = 'HAREDI_STRICT_V1';
+const IMAGE_FILTER_POLICY_VERSION = imageModerator.POLICY_VERSION;
 const imageProxyRate = new Map();
 const IMAGE_PROXY_WINDOW_MS = 60 * 1000;
 const IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW = 240;
