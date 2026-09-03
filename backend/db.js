@@ -229,6 +229,25 @@ CREATE TABLE IF NOT EXISTS browser_domain_classifications (
 
 CREATE INDEX IF NOT EXISTS browser_domain_classifications_expires_idx
   ON browser_domain_classifications (expires_at);
+
+-- Image moderation is cached by the image bytes (SHA-256), not by URL:
+-- the same bytes reused across multiple sites are moderated once, while a
+-- changed image at the same URL cannot inherit a stale allow decision.
+CREATE TABLE IF NOT EXISTS browser_image_moderation_cache (
+  sha256         TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  allowed        BOOLEAN NOT NULL,
+  reason         TEXT NOT NULL,
+  details        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source         TEXT NOT NULL,
+  mime_type      TEXT NOT NULL,
+  size_bytes     BIGINT NOT NULL,
+  checked_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (sha256, policy_version)
+);
+
+CREATE INDEX IF NOT EXISTS browser_image_moderation_checked_idx
+  ON browser_image_moderation_cache (checked_at);
 `;
 
 async function init() {
@@ -1301,6 +1320,68 @@ async function deleteExpiredBrowserDomainClassifications() {
   return rowCount;
 }
 
+
+// ---------- filtered browser image moderation cache ----------
+
+async function getBrowserImageModeration(sha256, policyVersion) {
+  const { rows } = await pool.query(
+    `SELECT sha256, policy_version, allowed, reason, details, source,
+            mime_type, size_bytes, checked_at
+       FROM browser_image_moderation_cache
+      WHERE sha256 = $1 AND policy_version = $2`,
+    [sha256, policyVersion],
+  );
+  if (!rows[0]) return null;
+  const row = rows[0];
+  return {
+    sha256: row.sha256,
+    policyVersion: row.policy_version,
+    allowed: row.allowed,
+    reason: row.reason,
+    details: row.details || {},
+    source: row.source,
+    mimeType: row.mime_type,
+    sizeBytes: Number(row.size_bytes),
+    checkedAt: row.checked_at.toISOString(),
+  };
+}
+
+async function saveBrowserImageModeration({
+  sha256, policyVersion, allowed, reason, details, source, mimeType, sizeBytes,
+}) {
+  const { rows } = await pool.query(
+    `INSERT INTO browser_image_moderation_cache
+       (sha256, policy_version, allowed, reason, details, source, mime_type, size_bytes, checked_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, now())
+     ON CONFLICT (sha256, policy_version) DO UPDATE SET
+       allowed = EXCLUDED.allowed,
+       reason = EXCLUDED.reason,
+       details = EXCLUDED.details,
+       source = EXCLUDED.source,
+       mime_type = EXCLUDED.mime_type,
+       size_bytes = EXCLUDED.size_bytes,
+       checked_at = now()
+     RETURNING sha256, policy_version, allowed, reason, details, source,
+               mime_type, size_bytes, checked_at`,
+    [
+      sha256, policyVersion, allowed, reason, JSON.stringify(details || {}),
+      source, mimeType, sizeBytes,
+    ],
+  );
+  const row = rows[0];
+  return {
+    sha256: row.sha256,
+    policyVersion: row.policy_version,
+    allowed: row.allowed,
+    reason: row.reason,
+    details: row.details || {},
+    source: row.source,
+    mimeType: row.mime_type,
+    sizeBytes: Number(row.size_bytes),
+    checkedAt: row.checked_at.toISOString(),
+  };
+}
+
 module.exports = {
   init,
   getDevice,
@@ -1351,4 +1432,6 @@ module.exports = {
   getBrowserDomainClassification,
   saveBrowserDomainClassification,
   deleteExpiredBrowserDomainClassifications,
+  getBrowserImageModeration,
+  saveBrowserImageModeration,
 };
