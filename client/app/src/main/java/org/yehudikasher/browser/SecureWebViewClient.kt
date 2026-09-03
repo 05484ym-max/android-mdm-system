@@ -138,16 +138,15 @@ class SecureWebViewClient(
         }
     }
 
-    /** Best-effort only - WebView gives no direct "this is an &lt;img&gt;
-     * fetch" signal. A real image fetch's Accept header is led by image
-     * types (e.g. "image/avif,image/webp,image/apng,image/svg+xml,
-     * image/*,*/*;q=0.8"); requiring it to *start* with "image/" (not
-     * merely contain it) is what keeps this from also matching the main
-     * page's own navigation request, whose Accept header commonly lists
-     * "image/webp" too, just not first (e.g. "text/html,...,image/webp,
-     * .../*;q=0.8") - already additionally excluded by the isForMainFrame
-     * check at this function's one call site, kept here too as a second,
-     * independent safeguard against ever hiding real page content. */
+    // Best-effort only - WebView gives no direct "this is an image tag
+    // fetch" signal. A real image fetch's Accept header is led by image
+    // MIME types; requiring it to start with "image/" (not merely contain
+    // it) is what keeps this from also matching the main page's own
+    // navigation request, whose Accept header commonly lists an image
+    // type too, just never first - already additionally excluded by the
+    // isForMainFrame check at this function's one call site, kept here
+    // too as a second, independent safeguard against ever hiding real
+    // page content.
     private fun isLikelyImageRequest(request: WebResourceRequest?): Boolean {
         val accept = request?.requestHeaders?.entries
             ?.firstOrNull { it.key.equals("Accept", ignoreCase = true) }

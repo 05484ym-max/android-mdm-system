@@ -570,12 +570,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun spacedParams(topMargin: Int): LinearLayout.LayoutParams {
+    private fun spacedParams(topMarginPx: Int): LinearLayout.LayoutParams {
         return LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            topMargin = topMargin
+            topMargin = topMarginPx
         }
     }
 

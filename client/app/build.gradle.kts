@@ -34,6 +34,13 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    // AGP 8+ no longer generates BuildConfig (including the built-in DEBUG
+    // field) by default - required for LocalPolicyStore's existing
+    // BuildConfig.DEBUG check, which predates this change.
+    buildFeatures {
+        buildConfig = true
+    }
 }
 
 dependencies {
