@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
 
     private val policy by lazy { LocalPolicyStore.createPolicy() }
     private val remotePolicy by lazy { RemotePolicyClient() }
+    private val imageProxy by lazy { FilteredImageProxy() }
     private val classificationInFlight = ConcurrentHashMap.newKeySet<String>()
 
     private val bgColor = Color.parseColor("#F2F1E6")
@@ -287,6 +288,7 @@ class MainActivity : AppCompatActivity() {
         view.webViewClient = SecureWebViewClient(
             policy,
             remotePolicy,
+            imageProxy,
             ::classifyAndNavigate,
             ::showBlocked,
             { _, reason -> showTechnicalError(reason) }
