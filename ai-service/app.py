@@ -1,15 +1,19 @@
+import hmac
 import io
 import os
-import hmac
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from PIL import Image
 from nudenet import NudeDetector
 from transformers import pipeline
+
 from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="1.0.0")
+MAX_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_PIXELS = 25_000_000
+
+app = FastAPI(title="Yehudi Kasher Local Image AI", version="1.0.1")
 
 _nudenet: NudeDetector | None = None
 _siglip: Any = None
@@ -52,6 +56,49 @@ def _load_siglip():
     return _siglip
 
 
+def _siglip_scores(image: Image.Image) -> dict[str, float]:
+    """Run the fixed prompt set and return a validated prompt->score map."""
+    raw = _load_siglip()(image, candidate_labels=SIGLIP_PROMPTS)
+    if not isinstance(raw, list):
+        raise RuntimeError("siglip_invalid_result")
+
+    scores: dict[str, float] = {}
+    allowed_prompts = set(SIGLIP_PROMPTS)
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", ""))
+        if label not in allowed_prompts:
+            continue
+        try:
+            score = float(item.get("score", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= score <= 1.0:
+            scores[label] = score
+
+    # A partial/malformed response must never silently turn into an allow.
+    if set(scores) != allowed_prompts:
+        raise RuntimeError("siglip_incomplete_result")
+    return scores
+
+
+def _decode_image(body: bytes) -> Image.Image:
+    if not body or len(body) > MAX_BYTES:
+        raise ValueError("invalid_image_size")
+
+    probe = Image.open(io.BytesIO(body))
+    width, height = probe.size
+    if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+        raise ValueError("image_dimensions_rejected")
+    probe.verify()
+
+    image = Image.open(io.BytesIO(body)).convert("RGB")
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        raise ValueError("image_dimensions_rejected")
+    return image
+
+
 @app.get("/health")
 def health():
     model_path = os.environ.get("NUDENET_MODEL_PATH")
@@ -77,16 +124,8 @@ async def moderate(
         raise HTTPException(status_code=401, detail="unauthorized")
 
     body = await request.body()
-    if not body or len(body) > MAX_BYTES:
-        raise HTTPException(status_code=413, detail="invalid_image_size")
-
     try:
-        probe = Image.open(io.BytesIO(body))
-        width, height = probe.size
-        if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
-            raise ValueError("image_dimensions_rejected")
-        probe.verify()
-        image = Image.open(io.BytesIO(body)).convert("RGB")
+        image = _decode_image(body)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid_image") from exc
 
