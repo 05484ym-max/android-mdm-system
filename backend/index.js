@@ -1434,13 +1434,22 @@ app.post('/api/devices/:deviceId/browser/check', requireDevice, wrap(async (req,
 // error handler below, which always responds 500 with no envelope body.
 // There is no code path in this route that can return an object shaped
 // like a signed snapshot without it actually having been signed.
+//
+// Phase 2.4 correction: the snapshot must reproduce the FULL effective
+// offline policy for THIS device, not just the global rule set - so its
+// own device overrides are fetched too, strictly scoped to
+// `req.params.deviceId` (the same id `requireDevice` above already
+// verified the bearer token belongs to). Never take a device id from
+// anywhere else (body/query) for this lookup - that is what guarantees
+// one device can never retrieve another device's override policy.
 app.get('/api/devices/:deviceId/browser/policy-snapshot', requireDevice, wrap(async (req, res) => {
   const { privateKey, keyId } = policySigning.loadSigningConfig();
-  const [policyVersion, domains] = await Promise.all([
+  const [policyVersion, globalDomains, deviceOverrides] = await Promise.all([
     db.getBrowserPolicyVersion(),
     db.listBrowserDomainsForSnapshot(),
+    db.getBrowserDeviceOverridesForSnapshot(req.params.deviceId),
   ]);
-  const payload = policySigning.buildBrowserPolicySnapshot({ policyVersion, domains });
+  const payload = policySigning.buildBrowserPolicySnapshot({ policyVersion, globalDomains, deviceOverrides });
   const envelope = policySigning.signSnapshot(payload, { privateKey, keyId });
   res.json(envelope);
 }));

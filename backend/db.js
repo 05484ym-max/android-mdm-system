@@ -1549,6 +1549,33 @@ async function listBrowserDomainsForSnapshot() {
   }));
 }
 
+/**
+ * Phase 2.4 correction - the signed snapshot must reproduce the FULL
+ * effective offline policy for the specific device it's issued to, not
+ * just the global rule set: `browser_device_overrides` can change the
+ * effective decision for that one device (see evaluateDomain's
+ * precedence - override checked before the global table). Scoped
+ * strictly to `deviceId` - the caller (index.js) must only ever pass
+ * `req.params.deviceId` from an already-`requireDevice`-authenticated
+ * request, never a value from the request body/query, so one device can
+ * never retrieve another device's overrides.
+ *
+ * No `allowSubdomains` field: `browser_device_overrides` has no such
+ * column (see its CREATE TABLE above) - a device override is always an
+ * exact-domain match only, by schema, and the snapshot must not invent a
+ * field the underlying data can never actually support.
+ */
+async function getBrowserDeviceOverridesForSnapshot(deviceId) {
+  const { rows } = await pool.query(
+    `SELECT domain, decision
+       FROM browser_device_overrides
+      WHERE device_id = $1
+      ORDER BY domain ASC`,
+    [deviceId],
+  );
+  return rows.map(row => ({ domain: row.domain, decision: row.decision }));
+}
+
 /** Append-only audit trail of every /browser/check outcome. Best-effort from
  * the caller's point of view (see index.js) - a logging failure must never
  * fail the decision the device is waiting on. */
@@ -1606,6 +1633,7 @@ module.exports = {
   resolveBrowserRequest,
   getBrowserPolicyVersion,
   listBrowserDomainsForSnapshot,
+  getBrowserDeviceOverridesForSnapshot,
   logBrowserDecision,
   getPendingBrowserRequestDomain,
   listBrowserRequestDevices,

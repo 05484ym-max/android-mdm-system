@@ -5,6 +5,66 @@ Owner: Claude
 
 ## DONE
 
+**Phase 2.4 correction (device-complete signed snapshot + rollback contract fix), this update:**
+- **Synced `filtered-browser-server` with `origin/main` first** (61 commits
+  behind before merging) — brought in the app-store-categories work
+  (`backend/appCategories.js`, catalog fields/endpoints,
+  `admin-panel/index.html` search/filter/recommended UI, its 3 test
+  files), the CodeQL GitHub Actions workflow, and substantial Android-side
+  work (`AppStoreActivity.kt`, `CustomerActivity.kt`, `PolicyEnforcer.kt`,
+  `PolicySync.kt`, `WallpaperBranding.kt`, `AdBlockDns.kt`,
+  `DnsFailSafeScheduler.kt`, the latest MDM APK). Merge conflicts were
+  narrow and resolved conservatively: `backend/index.js` (both sides
+  independently added a `require` on the same line — kept both),
+  `backend/package.json`/`package-lock.json` (this branch's `tldts`
+  dependency alongside everything main already had — regenerated the
+  lockfile via `npm install` rather than hand-editing it).
+  `backend/db.js` and `admin-panel/index.html` auto-merged with no
+  conflicts at all. **Confirmed 0 commits behind `origin/main` after the
+  merge.** Nothing from main's newer MDM/App Store/CodeQL/Android work was
+  overwritten — verified by re-running the app-store-categories test
+  suites (now present on this branch via the merge) immediately after.
+- **Fixed the anti-rollback contract** (a real correctness bug in the
+  documentation, not in `policySigning.js`'s actual code — its
+  `assertMonotonicPolicyVersion` already only ever rejected a *strictly
+  lower* `policyVersion`, verified by re-reading it before changing
+  anything): `docs/server-api-contract.md` previously said a client must
+  reject a snapshot "at or below" its highest accepted `policyVersion`.
+  That's wrong and would have broken normal operation: this endpoint
+  signs a brand-new envelope on every single request (no caching), so a
+  device re-fetching with no policy change in between legitimately
+  receives the *same* `policyVersion` every time, just with renewed
+  `generatedAt`/`expiresAt`. Corrected to: reject only *strictly lower*;
+  accept *equal* whenever signature/keyId/expiry/format are otherwise
+  valid. All "at or below" (and equivalent) wording removed.
+- **Made the signed snapshot device-complete.** The previous version only
+  signed `globalDomains` — incomplete, since `browser_device_overrides`
+  can change the effective decision for the specific device the snapshot
+  was requested for (see `evaluateDomain`'s real precedence: override
+  checked *before* the global table). Fixed:
+  - New `db.getBrowserDeviceOverridesForSnapshot(deviceId)` — `domain`,
+    `decision` only (no `allowSubdomains` column exists on
+    `browser_device_overrides`, so none is invented here - a device
+    override is always an exact-domain match, by schema).
+  - `policySigning.buildBrowserPolicySnapshot` now takes `globalDomains`
+    AND `deviceOverrides`, sorts **both** independently by domain before
+    signing, and places them in **separate arrays** in the payload
+    (`globalDomains`, `deviceOverrides`) rather than flattening them into
+    one pre-resolved list — a verifier must apply the same
+    override-then-global precedence `evaluateDomain` uses, and flattening
+    would silently bake that precedence in server-side where a verifier
+    could no longer tell the two apart.
+  - The route now fetches the requesting device's own overrides strictly
+    via `req.params.deviceId` (the id `requireDevice` already verified the
+    bearer token belongs to) — never any other source — which is what
+    structurally guarantees one device can never receive another device's
+    override policy.
+- Re-verified after both fixes: zero changes to `browserPolicy.js`, the
+  `/browser/check` route, or `ALLOW`/`BLOCK`/`REVIEW` semantics (`git diff`
+  confirms `browserPolicy.js` untouched again this update). No HMAC
+  introduced. No private key material anywhere in the diff (grepped
+  again).
+
 **Phase 2.4 (asymmetric signed browser-policy snapshot foundation), this update:**
 - Read GPT's docs fresh from `filtered-browser-client` (still Phase 0A,
   unverified on a physical device — client's own `NEXT` item 5 explicitly
@@ -404,6 +464,48 @@ Owner: Claude
 
 ## TESTED
 
+**Phase 2.4 correction — device-complete snapshot + rollback fix, this update.**
+
+Exact environment: same real local PostgreSQL 16 (`browser_test` database)
+and real spawned/killed server processes as the original Phase 2.4 work,
+now running on top of the just-merged `origin/main` state.
+
+- **`backend/test-policy-signing.js`: 25/25 passed** (was 21 — 4 net new:
+  a tampered-`deviceOverrides` test, a `deviceOverrides`-ordering-
+  independence test, a "no `allowSubdomains` on overrides" test, and an
+  explicit "signs the SAME `policyVersion` again without error" test).
+  Every pre-existing test updated for the `globalDomains`/`deviceOverrides`
+  shape and re-verified passing.
+- **`backend/test-policy-signing-integration.js`: 19/19 passed** (was 11 —
+  8 net new, all against real Postgres + real HTTP): `deviceOverrides`
+  present-and-empty for a device with none; a device override `ALLOW`
+  appearing alongside a global `BLOCK` for the same domain (and vice
+  versa) — proving the data needed for correct precedence is present,
+  without the server resolving it itself; **device A never receiving
+  device B's overrides** (two real devices, cross-checked both ways); a
+  global `allowSubdomains` rule and an exact device override on one of its
+  subdomains both appearing in their own correct arrays, never flattened
+  or duplicated into the other's; deterministic `deviceOverrides` ordering
+  across two real fetches; tampering with `deviceOverrides` on a real
+  server-issued envelope invalidating its signature; and an explicit,
+  dedicated real-HTTP test that a freshly-generated snapshot with the
+  *same* `policyVersion` as a prior real fetch is accepted (200, valid
+  signature) — equal is not a rollback.
+- **Full regression after the main-merge and both corrections — every
+  suite now on this branch, all clean:** `test-browser-policy.js` 55/55,
+  `test-app-categories.js` 11/11 (from the merge), `test-db-integration.js`
+  46/46, `test-browser-load.js` 28/28, `test-admin-ui-e2e.js` 38/38,
+  `test-app-catalog-integration.js` 20/20 (from the merge),
+  `test-app-catalog-ui-smoke.js` 13/13 (from the merge), `test-db.js`
+  clean. **255 tests total across 9 suites, zero failures, zero
+  regressions from the merge or the corrections.**
+- **CodeQL**: the workflow (`.github/workflows/codeql.yml`) is now present
+  on this branch via the merge, and this update's commit was pushed to
+  trigger it. **This session cannot observe the GitHub Actions run result
+  directly** (no API/UI access to Actions from this sandbox) — reported
+  honestly rather than assumed clean. See KNOWN LIMITATIONS below for
+  exactly what that means and how to actually check it.
+
 **Phase 2.4 — signed offline policy snapshot, this update.**
 
 Exact environment: real local PostgreSQL 16 (`browser_test` database, same
@@ -730,6 +832,19 @@ contract to implement whenever that work is greenlit (it names the
 becomes relevant — i.e. after physical-device Phase 0A verification, not
 before).
 
+**Phase 2.4 correction**: the snapshot payload shape changed from the
+original Phase 2.4 report — `payload.domains` is now
+`payload.globalDomains` + a new `payload.deviceOverrides` array (see
+docs/server-api-contract.md's "Device overrides in the snapshot"). This
+is a contract correction caught before any client code was ever written
+against it (`/client/**` still has zero lines related to this endpoint) -
+good timing, not a breaking change to anything real. The anti-rollback
+wording was also corrected (equal `policyVersion` must be accepted, not
+rejected) - same situation, corrected before any client implemented the
+wrong version. `/browser/check` and `/sync` remain completely untouched.
+**GPT still does not need to change anything in `/client/**` for this
+update.**
+
 ## KNOWN LIMITATIONS
 
 - No Redis, queue, analyzer worker, AI, Safe Browsing integration, domain-age/
@@ -800,6 +915,16 @@ before).
   CLI available in this sandbox and the CodeQL workflow (added on `main`)
   has not been merged into this branch; a manual review for logged/
   hardcoded secrets was done in its place (see TESTED above).
+- **Phase 2.4 correction**: the CodeQL workflow is now on this branch (via
+  the main-merge) and this update's commit was pushed to trigger it, but
+  **this session has no visibility into GitHub Actions run results** - no
+  API or web access to Actions from this sandbox. The push happened; the
+  actual scan result (pass/fail/findings) has not been observed or
+  reported here as clean, and must not be assumed clean just because the
+  workflow exists and local tests pass. Check
+  `https://github.com/05484ym-max/android-mdm-system/actions` (or the
+  "Security" → "Code scanning" tab) after this push to see the real
+  result.
 
 ## NEXT
 

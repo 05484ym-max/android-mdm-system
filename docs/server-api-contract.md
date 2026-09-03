@@ -425,9 +425,12 @@ authentication was weakened or bypassed to add this endpoint.**
     "policyVersion": 42,
     "generatedAt": "2026-09-03T12:00:00.000Z",
     "expiresAt": "2026-09-04T12:00:00.000Z",
-    "domains": [
+    "globalDomains": [
       { "domain": "example.com", "decision": "ALLOW", "allowSubdomains": true },
       { "domain": "evil.example.com", "decision": "BLOCK", "allowSubdomains": false }
+    ],
+    "deviceOverrides": [
+      { "domain": "special-case-for-this-device.com", "decision": "ALLOW" }
     ]
   },
   "keyId": "browser-policy-2026-09",
@@ -435,6 +438,16 @@ authentication was weakened or bypassed to add this endpoint.**
   "signature": "<base64, 64 bytes decoded>"
 }
 ```
+
+**Two clearly separate rule sets, on purpose — see "Device overrides in
+the snapshot" below.** This corrects an earlier version of this endpoint
+that only included `globalDomains` — incomplete, since
+`browser_device_overrides` can change the effective decision for the
+specific device the snapshot was requested for (see `evaluateDomain`'s
+real precedence: override checked *before* the global table). Both arrays
+are always present (empty array, never omitted, when there's nothing to
+report) and are part of the same signed payload — tampering with either
+invalidates the signature exactly the same way.
 
 ### Response — 401/404, device auth failure
 
@@ -465,6 +478,37 @@ other endpoint in this API already uses (see "Fail-closed decision logic"
 above) — there is no code path in the route handler that can construct an
 envelope-shaped response without a real signature actually having
 succeeded first.
+
+### Device overrides in the snapshot
+
+The snapshot reproduces the **full effective offline policy for the
+specific device it was requested for** — not just the global rule set.
+`browser_device_overrides` rows for `req.params.deviceId` (the device the
+already-verified bearer token belongs to — never any other id) are
+included in `payload.deviceOverrides`, kept in a **separate array from**
+`payload.globalDomains`, never merged/flattened into one pre-resolved
+list. A verifier must apply the same precedence `evaluateDomain` already
+uses at request time:
+
+1. Check `deviceOverrides` for an **exact** match on the host (device
+   overrides are exact-domain-only — `browser_device_overrides` has no
+   `allowSubdomains` column, so a `deviceOverrides` entry never carries
+   that field; a verifier must never invent subdomain matching for one).
+   If found, that decision wins — full stop.
+2. Otherwise check `globalDomains`: exact match, or an ancestor domain
+   whose `allowSubdomains` is `true`.
+3. Otherwise: unknown → treat exactly like `REVIEW`/fail-closed (stays
+   blocked; there is no offline path to "ask an admin" the way
+   `/browser/check`'s request queue provides online).
+
+**Isolation**: one device can never receive another device's overrides —
+enforced by construction, not by a filter that could be gotten wrong
+later: the query backing `deviceOverrides` (`db.
+getBrowserDeviceOverridesForSnapshot`) is called with only the
+`requireDevice`-authenticated `req.params.deviceId`, never a value from
+the request body/query/anywhere else a client could influence. Verified
+for real (`test-policy-signing-integration.js`): two real devices, each
+with its own override, each only ever seeing its own.
 
 ### The exact Android verification contract
 
@@ -499,9 +543,11 @@ server's source:
   tied to the exact (message, signature, public key) triple). Canonical
   form: object keys sorted recursively (lexicographic, by UTF-16 code
   unit — i.e. plain JavaScript/most languages' default string sort), no
-  whitespace, no trailing commas, `domains` always already sorted by
-  `domain` ascending by the server before signing (never re-sorted or
-  otherwise reordered by a verifier). A verifying client must reproduce
+  whitespace, no trailing commas, `globalDomains` and `deviceOverrides`
+  each always already sorted by `domain` ascending by the server before
+  signing (never re-sorted or otherwise reordered by a verifier, and never
+  merged into one list — see "Device overrides in the snapshot" above for
+  why they must stay separate). A verifying client must reproduce
   **exactly** this serialization before checking the signature — schemas
   such as protobuf/CBOR were deliberately not used so both sides can
   implement this from a plain description without a shared codegen step;
@@ -517,14 +563,24 @@ server's source:
   from `browser_policy_meta.policy_version` (the same counter
   `/browser/check` responses already expose) — never a separate counter
   that could drift from it. **The client must reject (never apply) any
-  signed snapshot whose `policyVersion` is lower than the highest one it
-  has already durably accepted** — this is the actual anti-rollback
-  enforcement point; the server-side guard (see below) only protects
-  against a narrower, server-local anomaly, not against an attacker
-  replaying an old, validly-signed-at-the-time snapshot to a device later.
-  Persist the accepted `policyVersion` in the same trusted local store the
-  cached policy itself lives in once that's implemented (a future phase);
-  a store an attacker could reset without also being able to reset the
+  signed snapshot whose `policyVersion` is strictly lower than the
+  highest one it has already durably accepted — and must accept one that
+  is equal**, provided the signature/keyId/expiry/format are otherwise
+  valid. This distinction matters: the server signs a brand-new envelope
+  on every single request (see "Endpoint" above — no caching), so a
+  device that re-fetches its snapshot without any policy change in
+  between will legitimately receive the *same* `policyVersion` with a
+  *renewed* `generatedAt`/`expiresAt` every time. Rejecting an equal
+  version would make ordinary periodic renewal impossible without an
+  actual policy mutation, which is never the intent — only a version
+  strictly *behind* what was already accepted indicates a rollback/replay
+  attempt. This is the actual anti-rollback enforcement point; the
+  server-side guard (see below) only protects against a narrower,
+  server-local anomaly, not against an attacker replaying an old,
+  validly-signed-at-the-time snapshot to a device later. Persist the
+  accepted `policyVersion` in the same trusted local store the cached
+  policy itself lives in once that's implemented (a future phase); a
+  store an attacker could reset without also being able to reset the
   device's own tamper-evident state would defeat this.
 - **Expiry handling**: `expiresAt` is `generatedAt` + 24h
   (`policySigning.SNAPSHOT_TTL_MS`). **A client must treat an expired
@@ -533,11 +589,16 @@ server's source:
   signature validity proves authenticity and integrity, not freshness.
   Re-fetch a new snapshot before/upon expiry whenever network is available.
 - **Failure behavior a client must implement**: signature doesn't verify →
-  reject. Unrecognized `keyId` → reject. `policyVersion` at or below
-  already-accepted → reject (even if it verifies — see anti-rollback).
-  Expired → reject for enforcement purposes (may still be shown as "last
-  known state" in a UI, clearly marked stale, at the client's discretion —
-  never silently treated as current). Any parse/format error → reject.
+  reject. Unrecognized `keyId` → reject. `policyVersion` **strictly lower**
+  than already-accepted → reject (even if it verifies — see anti-rollback).
+  An **equal** `policyVersion` must be **accepted** if the signature/keyId/
+  expiry/format are otherwise valid — a fresh snapshot legitimately renews
+  `generatedAt`/`expiresAt` without any policy content changing, and a
+  client that rejected same-version renewals would make normal periodic
+  re-fetching indistinguishable from an attack. Expired → reject for
+  enforcement purposes (may still be shown as "last known state" in a UI,
+  clearly marked stale, at the client's discretion — never silently
+  treated as current). Any parse/format error → reject.
   **A rejected snapshot must never be treated as "no policy" (open) — it
   must fail exactly like `/browser/check` failing: the affected
   navigation stays blocked**, consistent with the fail-closed contract
@@ -592,7 +653,10 @@ handles rollback safety.
   `approval_method`, `reason`, `last_checked_at`, `approved_at`,
   `decision_version`, timestamps.
 - `browser_device_overrides` — `(device_id, domain)` PK, `decision`,
-  `reason`, `created_at`.
+  `reason`, `created_at`. No `allowSubdomains` column — a device override
+  is always an exact-domain match. **Phase 2.4**: also consumed (domain +
+  decision only, never `reason`) by the signed offline snapshot's
+  `deviceOverrides` array, scoped to the requesting device only.
 - `browser_requests` — pending/resolved review queue, one PENDING row per
   domain at a time (`status`, `resolution_scope`, `resolution_decision` —
   the latter two are only meaningful for a `GLOBAL` resolution; a request
@@ -667,6 +731,17 @@ ahead of real traffic:
   locally-run backend process with ephemeral test keys; no real deployed
   signing key, no real Android verifier, and no production Render
   deployment of this endpoint have been exercised.
+- **Phase 2.4 correction, same update as above**: an earlier version of
+  this endpoint only signed `globalDomains`, which was incomplete (device
+  overrides could silently change the effective offline decision for a
+  device without the snapshot ever reflecting it) — corrected to include
+  `deviceOverrides`, kept in its own array, never merged with
+  `globalDomains`. Also corrected: this document previously said a client
+  must reject a `policyVersion` "at or below" its highest accepted one,
+  which was wrong — equal must be **accepted** (a renewed snapshot with no
+  policy change legitimately repeats the same `policyVersion`); only a
+  **strictly lower** version indicates rollback/replay. See "policyVersion
+  handling" and "Failure behavior" above, both corrected.
 
 None of the above blocks the Android client's Phase 0A (WebView security
 PoC using local mocks). They matter starting whenever the client is ready

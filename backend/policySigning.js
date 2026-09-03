@@ -106,10 +106,11 @@ function derivePublicKeyInfo(privateKey, keyId) {
  * to build the object in. Array order is preserved as given - it is NOT
  * re-sorted here, because array order can be semantically meaningful in
  * general; buildBrowserPolicySnapshot (below) is what guarantees the
- * *domains* array specifically is always constructed in a fixed order
- * (sorted by domain) before it ever reaches this function, which is what
- * actually makes "the same policy state always signs identically" true
- * end to end - see that function's own doc.
+ * `globalDomains`/`deviceOverrides` arrays specifically are always
+ * constructed in a fixed order (each sorted by domain) before either ever
+ * reaches this function, which is what actually makes "the same policy
+ * state always signs identically" true end to end - see that function's
+ * own doc.
  *
  * No whitespace, no trailing commas, no undefined (throws instead of
  * silently emitting the literal `undefined` into the byte stream, which
@@ -138,42 +139,73 @@ function canonicalPayloadBytes(payload) {
   return Buffer.from(canonicalize(payload), 'utf8');
 }
 
+function sortByDomain(a, b) {
+  return a.domain < b.domain ? -1 : a.domain > b.domain ? 1 : 0;
+}
+
 /**
  * Builds the canonical snapshot payload from already-fetched inputs - pure
  * and DB-free on purpose, so "does this always serialize/sign identically
- * regardless of incidental input order" is testable with a plain array,
- * no database involved (see test-policy-signing.js's domain-ordering
- * tests). `domains` may be given in ANY order (e.g. whatever order a
- * database happened to return rows in) - they are always re-sorted by
- * `domain` here before being placed in the payload, which is what makes
- * the resulting signature independent of read order.
+ * regardless of incidental input order" is testable with plain arrays, no
+ * database involved (see test-policy-signing.js's ordering tests).
+ * `globalDomains`/`deviceOverrides` may each be given in ANY order (e.g.
+ * whatever order a database happened to return rows in) - both are always
+ * re-sorted by `domain` here before being placed in the payload, which is
+ * what makes the resulting signature independent of read order.
  *
- * Only the fields genuinely needed to reproduce browserPolicy.js's
- * `domainCovers` matching offline are included per domain (domain,
- * decision, allowSubdomains) - admin-only metadata (category, riskScore,
- * reason, decisionVersion, ...) is deliberately left out of the signed
- * surface, per "no unsigned fields that affect policy behavior" read the
- * other way around too: no signed fields that DON'T affect policy
- * behavior either, keeping the payload minimal and its meaning
- * unambiguous.
+ * Phase 2.4 correction: a signed snapshot must reproduce the FULL
+ * effective offline policy for the specific device it was requested for,
+ * not just the global rule set - `browser_device_overrides` can change
+ * the effective decision for that one device (see browserPolicy.js's
+ * evaluateDomain: override checked BEFORE the global table). The two rule
+ * sets are kept in clearly separate arrays, `globalDomains` and
+ * `deviceOverrides`, rather than flattened into one list - a verifier
+ * MUST check `deviceOverrides` first (exact match only - see below) and
+ * only fall through to `globalDomains` (exact match, or an ancestor with
+ * `allowSubdomains`) if nothing matched there, exactly mirroring
+ * evaluateDomain's real precedence. Flattening these into a single
+ * pre-resolved list would silently bake in that precedence server-side
+ * where a verifier could no longer tell an override from a global rule,
+ * which is exactly the "silently flatten rules in a way that can change
+ * precedence" this design deliberately avoids.
+ *
+ * Only the fields genuinely needed to reproduce matching offline are
+ * included - `globalDomains` entries: `domain`, `decision`,
+ * `allowSubdomains`; `deviceOverrides` entries: `domain`, `decision` only
+ * (no `allowSubdomains` - `browser_device_overrides` has no such column,
+ * so a device override is always an exact-domain match, by schema, and
+ * this payload must not invent a field the underlying data can never
+ * actually support). Admin-only metadata (category, riskScore, reason,
+ * decisionVersion, override `reason`, ...) is deliberately left out of
+ * the signed surface either way, per "no unsigned fields that affect
+ * policy behavior" read the other way around too: no signed fields that
+ * DON'T affect policy behavior either, keeping the payload minimal and
+ * its meaning unambiguous.
  */
-function buildBrowserPolicySnapshot({ policyVersion, domains, now = Date.now() }) {
+function buildBrowserPolicySnapshot({ policyVersion, globalDomains, deviceOverrides, now = Date.now() }) {
   if (!Number.isInteger(policyVersion) || policyVersion < 0) {
     throw new Error('policyVersion must be a non-negative integer');
   }
-  const sortedDomains = [...domains]
+  const sortedGlobalDomains = [...globalDomains]
     .map(d => ({
       domain: String(d.domain),
       decision: d.decision,
       allowSubdomains: Boolean(d.allowSubdomains),
     }))
-    .sort((a, b) => (a.domain < b.domain ? -1 : a.domain > b.domain ? 1 : 0));
+    .sort(sortByDomain);
+  const sortedDeviceOverrides = [...deviceOverrides]
+    .map(d => ({
+      domain: String(d.domain),
+      decision: d.decision,
+    }))
+    .sort(sortByDomain);
 
   return {
     policyVersion,
     generatedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + SNAPSHOT_TTL_MS).toISOString(),
-    domains: sortedDomains,
+    globalDomains: sortedGlobalDomains,
+    deviceOverrides: sortedDeviceOverrides,
   };
 }
 

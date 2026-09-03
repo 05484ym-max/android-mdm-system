@@ -150,6 +150,15 @@ async function resetTestDatabase() {
   await rawPool.query(`UPDATE browser_policy_meta SET value = 1 WHERE key = 'policy_version'`);
 }
 
+async function setDeviceOverride(deviceId, domain, decision) {
+  await rawPool.query(
+    `INSERT INTO browser_device_overrides (device_id, domain, decision)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (device_id, domain) DO UPDATE SET decision = EXCLUDED.decision`,
+    [deviceId, domain, decision],
+  );
+}
+
 (async () => {
   await db.init();
   await resetTestDatabase();
@@ -222,11 +231,110 @@ async function resetTestDatabase() {
 
       const dev = await createTestDevice('content');
       const envelope = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
-      const byDomain = Object.fromEntries(envelope.payload.domains.map(d => [d.domain, d]));
+      const byDomain = Object.fromEntries(envelope.payload.globalDomains.map(d => [d.domain, d]));
       assert.deepStrictEqual(byDomain['pks-allow.com'], { domain: 'pks-allow.com', decision: 'ALLOW', allowSubdomains: true });
       assert.deepStrictEqual(byDomain['pks-block.com'], { domain: 'pks-block.com', decision: 'BLOCK', allowSubdomains: false });
       assert.strictEqual('pks-review.com' in byDomain, false, 'a REVIEW row must never appear in the offline snapshot');
       assert.strictEqual(ps.verifySnapshot(envelope, publicKey), true);
+    });
+
+    // ================= device overrides: separation, precedence data, isolation =================
+
+    await test('deviceOverrides is present and empty for a device with no overrides', async () => {
+      const dev = await createTestDevice('no-overrides');
+      const envelope = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
+      assert.deepStrictEqual(envelope.payload.deviceOverrides, []);
+    });
+
+    await test('device override ALLOW is present in deviceOverrides even though the global rule for the same domain is BLOCK (precedence data available, not resolved server-side)', async () => {
+      await db.upsertBrowserDomain({ domain: 'pks-override-allow.com', decision: 'BLOCK', allowSubdomains: false, approvalMethod: 'admin_manual', actor: 'itest' });
+      const dev = await createTestDevice('override-allow');
+      await setDeviceOverride(dev.deviceId, 'pks-override-allow.com', 'ALLOW');
+
+      const envelope = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
+      const globalEntry = envelope.payload.globalDomains.find(d => d.domain === 'pks-override-allow.com');
+      const overrideEntry = envelope.payload.deviceOverrides.find(d => d.domain === 'pks-override-allow.com');
+      assert.strictEqual(globalEntry.decision, 'BLOCK', 'the global rule itself must still be reported as BLOCK - the snapshot never resolves precedence itself');
+      assert.deepStrictEqual(overrideEntry, { domain: 'pks-override-allow.com', decision: 'ALLOW' });
+      assert.strictEqual(ps.verifySnapshot(envelope, publicKey), true);
+    });
+
+    await test('device override BLOCK is present in deviceOverrides even though the global rule for the same domain is ALLOW', async () => {
+      await db.upsertBrowserDomain({ domain: 'pks-override-block.com', decision: 'ALLOW', allowSubdomains: false, approvalMethod: 'admin_manual', actor: 'itest' });
+      const dev = await createTestDevice('override-block');
+      await setDeviceOverride(dev.deviceId, 'pks-override-block.com', 'BLOCK');
+
+      const envelope = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
+      const globalEntry = envelope.payload.globalDomains.find(d => d.domain === 'pks-override-block.com');
+      const overrideEntry = envelope.payload.deviceOverrides.find(d => d.domain === 'pks-override-block.com');
+      assert.strictEqual(globalEntry.decision, 'ALLOW');
+      assert.deepStrictEqual(overrideEntry, { domain: 'pks-override-block.com', decision: 'BLOCK' });
+      assert.strictEqual(ps.verifySnapshot(envelope, publicKey), true);
+    });
+
+    await test('device A never receives device B\'s overrides (per-device isolation, enforced by the authenticated deviceId only)', async () => {
+      const devA = await createTestDevice('isolation-a');
+      const devB = await createTestDevice('isolation-b');
+      await setDeviceOverride(devA.deviceId, 'pks-isolation-a-only.com', 'ALLOW');
+      await setDeviceOverride(devB.deviceId, 'pks-isolation-b-only.com', 'BLOCK');
+
+      const envelopeA = await (await snapshotFetch(MAIN_URL, devA.deviceId, devA.token)).json();
+      const envelopeB = await (await snapshotFetch(MAIN_URL, devB.deviceId, devB.token)).json();
+
+      assert.ok(envelopeA.payload.deviceOverrides.some(d => d.domain === 'pks-isolation-a-only.com'));
+      assert.ok(!envelopeA.payload.deviceOverrides.some(d => d.domain === 'pks-isolation-b-only.com'), "device A's snapshot must never contain device B's override");
+      assert.ok(envelopeB.payload.deviceOverrides.some(d => d.domain === 'pks-isolation-b-only.com'));
+      assert.ok(!envelopeB.payload.deviceOverrides.some(d => d.domain === 'pks-isolation-a-only.com'), "device B's snapshot must never contain device A's override");
+    });
+
+    await test('a global allowSubdomains rule and an exact device override on a subdomain both appear, in their own correct arrays, without being flattened', async () => {
+      // Global rule: *.pks-parent.com allowed (allowSubdomains: true) -
+      // would cover pks-sub.pks-parent.com by ancestor matching alone.
+      await db.upsertBrowserDomain({ domain: 'pks-parent.com', decision: 'ALLOW', allowSubdomains: true, approvalMethod: 'admin_manual', actor: 'itest' });
+      const dev = await createTestDevice('subdomain-precedence');
+      // This device has an exact-domain override BLOCKing one specific
+      // subdomain - a verifier must check deviceOverrides FIRST (exact
+      // match on pks-sub.pks-parent.com) before ever falling through to
+      // the global ancestor-matching rule, exactly mirroring
+      // browserPolicy.evaluateDomain's real precedence.
+      await setDeviceOverride(dev.deviceId, 'pks-sub.pks-parent.com', 'BLOCK');
+
+      const envelope = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
+      const globalEntry = envelope.payload.globalDomains.find(d => d.domain === 'pks-parent.com');
+      const overrideEntry = envelope.payload.deviceOverrides.find(d => d.domain === 'pks-sub.pks-parent.com');
+      assert.deepStrictEqual(globalEntry, { domain: 'pks-parent.com', decision: 'ALLOW', allowSubdomains: true });
+      assert.deepStrictEqual(overrideEntry, { domain: 'pks-sub.pks-parent.com', decision: 'BLOCK' });
+      // The override must never appear inside globalDomains (which would
+      // silently blur which rule set it came from) and vice versa.
+      assert.strictEqual(envelope.payload.globalDomains.some(d => d.domain === 'pks-sub.pks-parent.com'), false);
+      assert.strictEqual(envelope.payload.deviceOverrides.some(d => d.domain === 'pks-parent.com'), false);
+      assert.strictEqual(ps.verifySnapshot(envelope, publicKey), true);
+    });
+
+    await test('deviceOverrides ordering is deterministic across repeated real fetches', async () => {
+      const dev = await createTestDevice('override-ordering');
+      await setDeviceOverride(dev.deviceId, 'pks-order-zzz.com', 'ALLOW');
+      await setDeviceOverride(dev.deviceId, 'pks-order-aaa.com', 'BLOCK');
+      await setDeviceOverride(dev.deviceId, 'pks-order-mmm.com', 'ALLOW');
+
+      const first = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
+      const second = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
+      const namesFirst = first.payload.deviceOverrides.filter(d => d.domain.startsWith('pks-order-')).map(d => d.domain);
+      const namesSecond = second.payload.deviceOverrides.filter(d => d.domain.startsWith('pks-order-')).map(d => d.domain);
+      assert.deepStrictEqual(namesFirst, ['pks-order-aaa.com', 'pks-order-mmm.com', 'pks-order-zzz.com']);
+      assert.deepStrictEqual(namesSecond, namesFirst);
+    });
+
+    await test('tampering with deviceOverrides on a real server-issued envelope invalidates its signature', async () => {
+      const dev = await createTestDevice('tamper-override');
+      await setDeviceOverride(dev.deviceId, 'pks-tamper-me.com', 'ALLOW');
+      const envelope = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
+      assert.strictEqual(ps.verifySnapshot(envelope, publicKey), true);
+
+      const tampered = JSON.parse(JSON.stringify(envelope));
+      const entry = tampered.payload.deviceOverrides.find(d => d.domain === 'pks-tamper-me.com');
+      entry.decision = 'BLOCK';
+      assert.strictEqual(ps.verifySnapshot(tampered, publicKey), false);
     });
 
     // ================= policyVersion reflects live state, and is monotonic =================
@@ -266,13 +374,33 @@ async function resetTestDatabase() {
       const second = await (await snapshotFetch(MAIN_URL, dev.deviceId, dev.token)).json();
 
       assert.strictEqual(first.payload.policyVersion, second.payload.policyVersion);
-      assert.deepStrictEqual(first.payload.domains, second.payload.domains);
+      assert.deepStrictEqual(first.payload.globalDomains, second.payload.globalDomains);
+      assert.deepStrictEqual(first.payload.deviceOverrides, second.payload.deviceOverrides);
       for (const envelope of [first, second]) {
         const generatedAtMs = Date.parse(envelope.payload.generatedAt);
         const expiresAtMs = Date.parse(envelope.payload.expiresAt);
         assert.strictEqual(expiresAtMs - generatedAtMs, ps.SNAPSHOT_TTL_MS, 'expiresAt must be exactly generatedAt + the documented TTL');
         assert.strictEqual(ps.verifySnapshot(envelope, publicKey), true);
       }
+    });
+
+    await test('a freshly-generated snapshot with the SAME policyVersion as a prior real fetch is accepted (200, valid signature) - equal is not a rollback', async () => {
+      // Explicit, dedicated proof (beyond the determinism test above) that
+      // the corrected anti-rollback contract holds over real HTTP: renewing
+      // a snapshot with no policy change in between must succeed cleanly,
+      // never be treated as suspicious just because the version repeats.
+      const dev = await createTestDevice('same-version-renewal');
+      const res1 = await snapshotFetch(MAIN_URL, dev.deviceId, dev.token);
+      assert.strictEqual(res1.status, 200);
+      const envelope1 = await res1.json();
+
+      const res2 = await snapshotFetch(MAIN_URL, dev.deviceId, dev.token);
+      assert.strictEqual(res2.status, 200);
+      const envelope2 = await res2.json();
+
+      assert.strictEqual(envelope1.payload.policyVersion, envelope2.payload.policyVersion);
+      assert.strictEqual(ps.verifySnapshot(envelope1, publicKey), true);
+      assert.strictEqual(ps.verifySnapshot(envelope2, publicKey), true);
     });
 
     // ================= admin public key endpoint matches what actually signed =================
