@@ -19,7 +19,7 @@ class SecureWebViewClient(
 ) : WebViewClientCompat() {
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-        return enforceNavigation(view, request?.url?.toString())
+        return enforceNavigation(view, request.url.toString())
     }
 
     @Deprecated("Deprecated in Android API, kept for defensive compatibility")
@@ -30,7 +30,7 @@ class SecureWebViewClient(
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         val result = policy.evaluate(url)
         if (result.decision != LocalDecision.ALLOW) {
-            view.stopLoading()
+            view?.stopLoading()
             onBlocked(url.orEmpty(), result.reason)
             return
         }
@@ -59,7 +59,7 @@ class SecureWebViewClient(
         // policy bypass. A Safe Browsing hit is an unconditional fail-closed
         // result for this managed browser.
         callback.backToSafety(true)
-        view?.stopLoading()
+        view.stopLoading()
         onBlocked(request.url.toString(), "safe_browsing_threat")
     }
 
@@ -93,9 +93,9 @@ class SecureWebViewClient(
         errorResponse: WebResourceResponse
     ) {
         if (request.isForMainFrame) {
-            view?.stopLoading()
+            view.stopLoading()
             onTechnicalError(
-                request.url?.toString().orEmpty(),
+                request.url.toString(),
                 "main_frame_http_${errorResponse.statusCode}"
             )
             return
@@ -108,9 +108,9 @@ class SecureWebViewClient(
         request: WebResourceRequest,
         error: WebResourceErrorCompat
     ) {
-        if (request?.isForMainFrame == true) {
-            view?.stopLoading()
-            onTechnicalError(request.url?.toString().orEmpty(), "main_frame_network_error")
+        if (request.isForMainFrame) {
+            view.stopLoading()
+            onTechnicalError(request.url.toString(), "main_frame_network_error")
             return
         }
         super.onReceivedError(view, request, error)
