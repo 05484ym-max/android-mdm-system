@@ -1395,6 +1395,35 @@ async function getBrowserPolicyVersion() {
   return rows[0] ? Number(rows[0].value) : 1;
 }
 
+/**
+ * Phase 2.4 - the exact global rules needed to reproduce browserPolicy.js's
+ * offline domain matching (domainCovers: exact match, or an ancestor domain
+ * with allow_subdomains set) inside a signed snapshot. A REVIEW-decision
+ * row is deliberately excluded: browserPolicy.evaluateDomain already
+ * treats an explicit REVIEW row identically to "no rule at all" for
+ * matching purposes (see its `globalRule.decision !== DECISIONS.REVIEW`
+ * check), so including it here would only bloat the snapshot with rows
+ * that can never change an offline decision. ORDER BY domain makes the
+ * result already deterministic before it ever reaches
+ * policySigning.buildBrowserPolicySnapshot (which re-sorts defensively
+ * anyway - see that function's own doc for why relying on this ORDER BY
+ * alone would still be safe, since `domain` is the primary key and can't
+ * tie).
+ */
+async function listBrowserDomainsForSnapshot() {
+  const { rows } = await pool.query(
+    `SELECT domain, decision, allow_subdomains
+       FROM browser_domains
+      WHERE decision != 'REVIEW'
+      ORDER BY domain ASC`,
+  );
+  return rows.map(row => ({
+    domain: row.domain,
+    decision: row.decision,
+    allowSubdomains: row.allow_subdomains,
+  }));
+}
+
 /** Append-only audit trail of every /browser/check outcome. Best-effort from
  * the caller's point of view (see index.js) - a logging failure must never
  * fail the decision the device is waiting on. */
@@ -1449,6 +1478,7 @@ module.exports = {
   listPendingBrowserRequests,
   resolveBrowserRequest,
   getBrowserPolicyVersion,
+  listBrowserDomainsForSnapshot,
   logBrowserDecision,
   getPendingBrowserRequestDomain,
   listBrowserRequestDevices,

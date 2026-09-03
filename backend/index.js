@@ -16,6 +16,7 @@ const diagnostics = require('./diagnostics');
 const alerts = require('./alerts');
 const playStoreSearch = require('./playStoreSearch');
 const browserPolicy = require('./browserPolicy');
+const policySigning = require('./policySigning');
 
 const app = express();
 app.use(express.json());
@@ -1279,6 +1280,42 @@ app.post('/api/devices/:deviceId/browser/check', requireDevice, wrap(async (req,
     decision: decision.decision, source: 'policy_engine',
   });
   res.json(decision);
+}));
+
+// ---------- Filtered Browser: signed offline policy snapshot (Phase 2.4) ----------
+// Full contract: docs/server-api-contract.md's "Signed offline policy
+// snapshot" section. Deliberately separate from /browser/check above -
+// that endpoint's ALLOW/BLOCK/REVIEW semantics and response shape are
+// completely unchanged by this addition (see docs/server-progress.md for
+// the explicit confirmation this phase never touched browserPolicy.js).
+//
+// Fail-closed by construction, not by a try/catch here: policySigning.
+// loadSigningConfig()/signSnapshot() throw on a missing/malformed key, a
+// monotonicity violation, or any other problem, and this route does not
+// catch them - they propagate to wrap()'s catch(next) and the global
+// error handler below, which always responds 500 with no envelope body.
+// There is no code path in this route that can return an object shaped
+// like a signed snapshot without it actually having been signed.
+app.get('/api/devices/:deviceId/browser/policy-snapshot', requireDevice, wrap(async (req, res) => {
+  const { privateKey, keyId } = policySigning.loadSigningConfig();
+  const [policyVersion, domains] = await Promise.all([
+    db.getBrowserPolicyVersion(),
+    db.listBrowserDomainsForSnapshot(),
+  ]);
+  const payload = policySigning.buildBrowserPolicySnapshot({ policyVersion, domains });
+  const envelope = policySigning.signSnapshot(payload, { privateKey, keyId });
+  res.json(envelope);
+}));
+
+// Admin-only for now - see docs/app-update-check.md-style honesty note in
+// policySigning.js: the public key is meant for Android eventually, but
+// "may be distributed to Android later" (per this phase's own scope) is
+// not the same as "must be a public unauthenticated endpoint today". An
+// admin can retrieve/document/pin it now; broadening this to an
+// unauthenticated device-facing endpoint is a later, separate decision.
+app.get('/api/browser/policy/signing-key', requireAdmin, wrap(async (req, res) => {
+  const { privateKey, keyId } = policySigning.loadSigningConfig();
+  res.json(policySigning.derivePublicKeyInfo(privateKey, keyId));
 }));
 
 app.get('/api/browser/domains', requireAdmin, wrap(async (req, res) => {

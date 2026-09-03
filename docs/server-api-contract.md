@@ -1,7 +1,7 @@
 # Filtered Browser — Server API Contract
 
 Owner: Claude (Backend / Admin / Worker)
-Status: Phase 1 + 1.1 (hardening) + 2 (admin workflow) + 2.3 (load/abuse/failure hardening) IMPLEMENTED — see Known Phase 1 Limitations (still current for anything not covered by Phase 2/2.3)
+Status: Phase 1 + 1.1 (hardening) + 2 (admin workflow) + 2.3 (load/abuse/failure hardening) + 2.4 (signed offline policy snapshot, server-side foundation only) IMPLEMENTED — see Known Phase 1 Limitations (still current for anything not covered by Phase 2/2.3/2.4)
 Branch: `filtered-browser-server`
 
 This document describes what the server actually guarantees to the Android
@@ -385,6 +385,206 @@ label boundary (host ends with `.example.com`), never a bare substring —
 `example.com`. See `browserPolicy.domainCovers`, used as an independent
 defense-in-depth re-check on every database read, not only relied on in SQL.
 
+## Signed offline policy snapshot (Phase 2.4)
+
+**Foundation only.** This section is the exact contract GPT's Android
+client will need once it implements offline verification and caching —
+neither is implemented here (explicitly out of scope for this phase, per
+instruction). Nothing in this section changes `/browser/check`'s
+`ALLOW`/`BLOCK`/`REVIEW` semantics or existing response fields; it is a
+completely separate, additive endpoint. No new database table or column
+was needed — the signing key lives in environment/secret configuration,
+never in Postgres or in this repo.
+
+### Why this exists
+
+`/browser/check` requires a live network round-trip. A device that's
+briefly offline (or whose network the filtering itself depends on is
+down) needs a way to enforce the *last known-good* policy without trusting
+whatever is sitting in local storage — a plain cached JSON blob could be
+tampered with, rolled back to an old (since-revoked) `ALLOW`, or forged
+outright. A cryptographic signature the device can verify **offline**,
+using a public key it already trusts, closes that gap.
+
+### Endpoint
+
+```
+GET /api/devices/:deviceId/browser/policy-snapshot
+Authorization: Bearer <deviceToken>      (identical to /browser/check and /sync)
+```
+
+Same device authentication as every other device endpoint — `404` if the
+device doesn't exist, `401` if the bearer token doesn't match. **No
+authentication was weakened or bypassed to add this endpoint.**
+
+### Response — 200, a signed envelope
+
+```json
+{
+  "payload": {
+    "policyVersion": 42,
+    "generatedAt": "2026-09-03T12:00:00.000Z",
+    "expiresAt": "2026-09-04T12:00:00.000Z",
+    "domains": [
+      { "domain": "example.com", "decision": "ALLOW", "allowSubdomains": true },
+      { "domain": "evil.example.com", "decision": "BLOCK", "allowSubdomains": false }
+    ]
+  },
+  "keyId": "browser-policy-2026-09",
+  "algorithm": "Ed25519",
+  "signature": "<base64, 64 bytes decoded>"
+}
+```
+
+### Response — 401/404, device auth failure
+
+Identical semantics to `/browser/check`. No envelope is returned either way.
+
+### Response — 5xx, internal error (fail-closed, no exceptions)
+
+```json
+{ "error": "internal error" }
+```
+
+**Every one of these returns 5xx with no envelope body — never a
+"best-effort" or unsigned snapshot, never a cached fallback:**
+- The signing key is missing from environment/secret configuration.
+- The configured key is malformed, or is a real key of the wrong type
+  (anything other than Ed25519).
+- Signing itself fails for any reason.
+- A `policyVersion` rollback is detected (see "Anti-rollback" below) —
+  this can only happen from a genuine anomaly (e.g. a database read
+  returning a value older than one this same process already issued), and
+  the server refuses to issue a signature rather than silently proceeding.
+- Any database failure while reading the current policy state.
+
+This is enforced structurally, not by a try/catch that could accidentally
+swallow the wrong thing: the route lets every one of the above propagate
+as a thrown error to the same `wrap()`/global-error-handler pattern every
+other endpoint in this API already uses (see "Fail-closed decision logic"
+above) — there is no code path in the route handler that can construct an
+envelope-shaped response without a real signature actually having
+succeeded first.
+
+### The exact Android verification contract
+
+This is the precise information a client-side verifier needs — written so
+it can be implemented later without re-deriving anything from this
+server's source:
+
+- **Algorithm**: Ed25519 (RFC 8032). Not HMAC, not RSA, not ECDSA. No
+  shared secret exists on any device — verification uses only a public
+  key.
+- **Public-key encoding**: available in two forms from
+  `GET /api/browser/policy/signing-key` (admin-authenticated today — see
+  below):
+  - `publicKeyPem` — standard SPKI PEM (`-----BEGIN PUBLIC KEY-----`),
+    parseable by any standard crypto library (`java.security.KeyFactory`
+    with `X509EncodedKeySpec`, OpenSSL, Node's `crypto`, etc.).
+  - `publicKeyBase64` — the raw 32-byte Ed25519 public key, standard
+    (not URL-safe) base64 — for a library that wants the raw key material
+    directly rather than parsing an SPKI/DER wrapper (e.g. Tink,
+    BouncyCastle's `Ed25519PublicKeyParameters`).
+- **keyId**: an opaque string (`envelope.keyId`) identifying which key
+  signed this envelope. A future key rotation adds a new keyId/key pair;
+  a client should look up the public key by `keyId` and **fail closed
+  (reject the snapshot) if it doesn't recognize the keyId** — never fall
+  back to "try whatever key I have."
+- **Canonical payload format**: the signature covers the UTF-8 bytes of a
+  deterministic ("canonical") JSON serialization of `envelope.payload`
+  only (never `keyId`/`algorithm`/`signature` themselves — those are
+  envelope metadata used only to select which public key to verify with;
+  tampering with either can only ever make verification fail, never make
+  a forged payload verify successfully, since Ed25519 verification is
+  tied to the exact (message, signature, public key) triple). Canonical
+  form: object keys sorted recursively (lexicographic, by UTF-16 code
+  unit — i.e. plain JavaScript/most languages' default string sort), no
+  whitespace, no trailing commas, `domains` always already sorted by
+  `domain` ascending by the server before signing (never re-sorted or
+  otherwise reordered by a verifier). A verifying client must reproduce
+  **exactly** this serialization before checking the signature — schemas
+  such as protobuf/CBOR were deliberately not used so both sides can
+  implement this from a plain description without a shared codegen step;
+  the reference implementation is `backend/policySigning.js`'s
+  `canonicalize()`, and `backend/test-policy-signing.js` is a runnable
+  spec of its exact behavior (byte-for-byte, run it against reference
+  values if ever reimplementing this independently).
+- **Signature encoding**: standard base64 (not URL-safe) of the raw
+  64-byte Ed25519 signature (`crypto.sign(null, canonicalBytes, privateKey)`
+  in Node terms — Ed25519 has no separate hash-algorithm parameter, unlike
+  RSA/ECDSA).
+- **policyVersion handling**: monotonically increasing, sourced directly
+  from `browser_policy_meta.policy_version` (the same counter
+  `/browser/check` responses already expose) — never a separate counter
+  that could drift from it. **The client must reject (never apply) any
+  signed snapshot whose `policyVersion` is lower than the highest one it
+  has already durably accepted** — this is the actual anti-rollback
+  enforcement point; the server-side guard (see below) only protects
+  against a narrower, server-local anomaly, not against an attacker
+  replaying an old, validly-signed-at-the-time snapshot to a device later.
+  Persist the accepted `policyVersion` in the same trusted local store the
+  cached policy itself lives in once that's implemented (a future phase);
+  a store an attacker could reset without also being able to reset the
+  device's own tamper-evident state would defeat this.
+- **Expiry handling**: `expiresAt` is `generatedAt` + 24h
+  (`policySigning.SNAPSHOT_TTL_MS`). **A client must treat an expired
+  snapshot as invalid for enforcement** (fail closed — same posture as any
+  other untrusted/stale state), even if its signature verifies correctly;
+  signature validity proves authenticity and integrity, not freshness.
+  Re-fetch a new snapshot before/upon expiry whenever network is available.
+- **Failure behavior a client must implement**: signature doesn't verify →
+  reject. Unrecognized `keyId` → reject. `policyVersion` at or below
+  already-accepted → reject (even if it verifies — see anti-rollback).
+  Expired → reject for enforcement purposes (may still be shown as "last
+  known state" in a UI, clearly marked stale, at the client's discretion —
+  never silently treated as current). Any parse/format error → reject.
+  **A rejected snapshot must never be treated as "no policy" (open) — it
+  must fail exactly like `/browser/check` failing: the affected
+  navigation stays blocked**, consistent with the fail-closed contract
+  this whole API already commits to.
+
+### Anti-rollback (server-side scope, precisely stated)
+
+`policyVersion` itself is the same durable, Postgres-persisted,
+already-proven-monotonic-across-restarts counter every other browser
+policy endpoint uses (see Phase 2.3's restart/persistence verification) —
+a freshly-generated snapshot is built by reading it live, so it can never
+itself be "behind" the true current value at the moment of signing.
+
+On top of that, this phase adds one extra, narrower safety net:
+`policySigning.js` keeps a per-process, in-memory high-water mark of every
+`policyVersion` it has ever signed, and refuses (throws → 500) to sign a
+lower one. **This catches an anomaly within one running process's
+lifetime** (e.g. a lagging database replica read) — **it does not, and
+cannot, protect against an attacker later replaying an old, validly-signed
+snapshot to a device** (a signature made for `policyVersion: 5` while `5`
+was current stays a valid signature for `policyVersion: 5` forever; the
+server has no way to "unsign" it). That protection is entirely the
+client's responsibility, per "policyVersion handling" above — this
+document states that plainly rather than implying the server alone
+handles rollback safety.
+
+### Key handling
+
+- The private key is loaded once per process from
+  `BROWSER_POLICY_SIGNING_PRIVATE_KEY` (PEM, PKCS8) — either real newlines
+  or a single-line value with literal `\n` escapes (the common shape once
+  a multi-line PEM passes through a platform limited to single-line env
+  vars), or base64-encoded PEM. `BROWSER_POLICY_SIGNING_KEY_ID` is
+  required alongside it. **Never committed to this repository, never
+  logged** (verified: no log statement anywhere references the raw env
+  var or the parsed key object).
+- `GET /api/browser/policy/signing-key` (admin-authenticated, not a public
+  endpoint yet) exposes `{ keyId, algorithm, publicKeyPem,
+  publicKeyBase64 }` — **only** the public key and identifying metadata,
+  never private material. Making this endpoint unauthenticated/public so
+  Android can fetch it directly is an explicit later decision, not made
+  here (see Known Phase 1 limitations below).
+- Key rotation: introduce a new `BROWSER_POLICY_SIGNING_PRIVATE_KEY`/
+  `_KEY_ID` pair, and a client-side trust store that can hold more than one
+  known `keyId` → public key at once during the rollover window. Nothing
+  in this design assumes exactly one key ever exists.
+
 ## Data model (Postgres)
 
 - `browser_domains` — global policy: `domain` (PK), `decision`,
@@ -453,6 +653,20 @@ ahead of real traffic:
   deployment would need a shared store (Redis, out of scope per this
   phase's instructions) for the limit to hold fleet-wide rather than
   per-instance.
+- **Phase 2.4: server-side foundation only — no Android verification, no
+  local client caching.** Both are explicitly out of scope for this phase
+  per instruction; see "The exact Android verification contract" above for
+  what a future implementation needs. The public-key endpoint
+  (`GET /api/browser/policy/signing-key`) is admin-authenticated, not yet a
+  public/device-facing endpoint — making it so is a deliberate later
+  decision, not an oversight. The server-side monotonicity guard is
+  process-local only (see "Anti-rollback" above for its precise, narrower
+  scope) — real anti-replay protection is entirely the client's
+  responsibility once it exists. Not verified in production: this was
+  developed and tested only against a real local PostgreSQL and a real
+  locally-run backend process with ephemeral test keys; no real deployed
+  signing key, no real Android verifier, and no production Render
+  deployment of this endpoint have been exercised.
 
 None of the above blocks the Android client's Phase 0A (WebView security
 PoC using local mocks). They matter starting whenever the client is ready

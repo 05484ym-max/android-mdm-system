@@ -5,6 +5,79 @@ Owner: Claude
 
 ## DONE
 
+**Phase 2.4 (asymmetric signed browser-policy snapshot foundation), this update:**
+- Read GPT's docs fresh from `filtered-browser-client` (still Phase 0A,
+  unverified on a physical device — client's own `NEXT` item 5 explicitly
+  names "signed policy" as the step after physical-device verification
+  succeeds, which is consistent with this phase being foundation-only: no
+  Android verification code or local client caching was implemented or
+  claimed here) and my own `server-progress.md`/`server-api-contract.md`
+  before starting.
+- **New `backend/policySigning.js`** — the whole cryptographic core, kept
+  deliberately separate from `browserPolicy.js` (which is completely
+  untouched this phase — confirmed via `git diff`, zero lines changed):
+  - Ed25519 only (native in Node's `crypto` module since Node 12 — this
+    deployment runs Node 22, so there was no compatibility reason to reach
+    for RSA/ECDSA or an external crypto package). No HMAC, no shared
+    secret anywhere.
+  - `loadSigningConfig()` reads `BROWSER_POLICY_SIGNING_PRIVATE_KEY`
+    (PEM/PKCS8, real or `\n`-escaped newlines, or base64) and
+    `BROWSER_POLICY_SIGNING_KEY_ID` from the environment, validates the
+    key actually is Ed25519, and throws (never falls back) on anything
+    missing or wrong — verified this never logs the key material anywhere
+    (grepped every log statement in both new files).
+  - `canonicalize()` — deterministic JSON serialization (object keys
+    sorted recursively, no whitespace, throws on `undefined` rather than
+    silently corrupting the byte stream) - this is the exact byte
+    definition a future Android verifier must reproduce.
+  - `buildBrowserPolicySnapshot()` — pure, DB-free: always re-sorts the
+    `domains` array by domain name regardless of what order it was given
+    in, which is what makes the resulting signature independent of
+    incidental database read order (proven directly in
+    `test-policy-signing.js`, not just asserted).
+  - `signSnapshot()`/`verifySnapshot()` — sign/verify over the canonical
+    bytes only; `keyId`/`algorithm` sit outside the signed bytes as
+    envelope metadata (see the contract doc for exactly why that's safe:
+    tampering with either can only break verification, never forge a
+    pass).
+  - A per-process monotonicity guard (`assertMonotonicPolicyVersion`) that
+    refuses to sign a `policyVersion` lower than one already issued this
+    process — a narrow, precisely-scoped safety net, not the actual
+    anti-rollback mechanism (that's the client's job — see the contract
+    doc's "Anti-rollback" section for the honest scope of what this can
+    and can't catch).
+- **`db.js`**: one new read-only function,
+  `listBrowserDomainsForSnapshot()` — `SELECT domain, decision,
+  allow_subdomains FROM browser_domains WHERE decision != 'REVIEW' ORDER
+  BY domain`. No schema change (no new table, no new column) - every field
+  the snapshot needs already existed. REVIEW rows are excluded because
+  `browserPolicy.evaluateDomain` already treats them identically to "no
+  rule" for matching, so including them would only bloat the snapshot.
+- **`index.js`**: two new routes, nothing else touched in this file beyond
+  adding them and the new `require`:
+  - `GET /api/devices/:deviceId/browser/policy-snapshot` (`requireDevice`
+    — identical auth to `/browser/check`/`/sync`, not weakened) — builds
+    and signs a fresh snapshot on every call (no server-side caching, so
+    staleness of the server's own output is structurally impossible).
+    Every failure mode (missing/malformed key, a monotonicity violation,
+    any DB error) is a plain thrown error left to the existing
+    `wrap()`/global-error-handler pattern — there is no code path that
+    constructs an envelope-shaped response without a real signature
+    having actually succeeded.
+  - `GET /api/browser/policy/signing-key` (`requireAdmin`) — exposes
+    `{ keyId, algorithm, publicKeyPem, publicKeyBase64 }` for an admin to
+    retrieve/document/pin today; deliberately not a public/device-facing
+    endpoint yet (see docs/server-api-contract.md's Known Limitations for
+    why that's a later decision, not an oversight).
+- **Real end-to-end smoke-tested by hand before writing the formal test
+  suites** (to catch wiring bugs fast): generated a real ephemeral Ed25519
+  key, booted a real server with it, logged in as a real admin, fetched
+  the real public key, created a real device, fetched a real signed
+  snapshot, and independently verified the real signature against the
+  derived public key with a completely separate script — all before any
+  test file existed. Also manually confirmed a real 500 (not a fabricated
+  envelope) when the signing key env vars are absent.
+
 **Phase 2.3 (load / abuse / failure hardening on `/browser/check`), this update:**
 - Read GPT's docs fresh from `filtered-browser-client` (still Phase 0A,
   unverified on a physical device — no drift affecting this phase) and my
@@ -331,6 +404,98 @@ Owner: Claude
 
 ## TESTED
 
+**Phase 2.4 — signed offline policy snapshot, this update.**
+
+Exact environment: real local PostgreSQL 16 (`browser_test` database, same
+as prior phases), real running `backend/index.js` processes (this phase's
+integration suite spawns three separate ones itself — a main fixture plus
+two deliberately-misconfigured ones for the fail-closed tests — see
+`backend/test-policy-signing-integration.js`'s header), and real,
+freshly-generated Ed25519 keypairs (`crypto.generateKeyPairSync`) held only
+in memory for the duration of each test run — **no key material is
+committed anywhere in this repo.**
+
+- **`backend/test-policy-signing.js`: 21/21 passed** (pure, no DB/network):
+  real sign+verify round-trip, verification failing against the wrong
+  public key, a tampered payload (domain, added row, expiry) failing
+  verification, a tampered `policyVersion` specifically failing
+  verification (both higher and lower), canonicalization being independent
+  of object key order (including nested), canonicalization throwing on
+  `undefined` instead of corrupting the byte stream, two independent
+  builds of the same logical snapshot producing byte-identical canonical
+  bytes, **domain input order provably not affecting the resulting
+  canonical bytes/signature** (three domains fed in two different orders,
+  byte-identical output), snapshot expiry at/after/before the exact TTL
+  boundary, `loadSigningConfig` failing closed for a missing key, a
+  missing keyId, garbage PEM content, and a real-but-wrong-algorithm key
+  (RSA) — and succeeding correctly for both an escaped-newline PEM and a
+  base64-encoded PEM, `derivePublicKeyInfo` never including any private
+  key marker in its output, the monotonicity guard allowing forward/equal
+  versions and rejecting a regression, `signSnapshot` itself refusing to
+  sign a regressed version, and `buildBrowserPolicySnapshot` rejecting a
+  negative/non-integer `policyVersion`.
+  - **One real test-isolation bug found and fixed while writing this
+    suite** (not a bug in `policySigning.js` itself): the monotonicity
+    high-water mark is deliberately process-global state, so the test
+    file's own sequence of unrelated `signSnapshot()` calls with
+    independently-chosen `policyVersion` values tripped the guard against
+    each other. Fixed by resetting the tracker at the start of every test
+    case — a test-harness fix only, confirmed by first proving each
+    individual assertion was semantically correct in isolation.
+- **`backend/test-policy-signing-integration.js`: 11/11 passed** (real
+  Postgres + real HTTP): device auth enforcement (missing/wrong
+  token/unknown device all correctly rejected, correct token succeeds with
+  a signature that verifies against the real public key), a REVIEW-decision
+  domain excluded from the snapshot while ALLOW/BLOCK rows appear with the
+  correct fields, `policyVersion` matching live `browser_policy_meta` and
+  strictly increasing after a real policy write, two consecutive fetches
+  agreeing on policy content while each independently verifies (see below
+  for what "determinism" actually means here), the admin signing-key
+  endpoint exposing exactly the public key that verifies real snapshots
+  (cross-checked two different ways) with its own auth enforced, and —
+  against two separate, genuinely misconfigured real server processes —
+  both a missing signing key and a malformed signing key producing a real
+  5xx with no envelope-shaped body.
+  - **One real test-design bug found and fixed** (not a product bug): the
+    first version of the "two consecutive fetches" test asserted
+    byte-identical envelopes, which is actually wrong given this phase's
+    own deliberate no-caching design — `generatedAt`/`expiresAt` are real
+    wall-clock timestamps computed fresh on every request, so two real
+    HTTP calls milliseconds apart legitimately produce slightly different
+    (and therefore differently-signed) envelopes. Root-caused by checking
+    the actual field values in the failure output before changing
+    anything, then rewrote the test to check what's actually invariant
+    (policy content, and each envelope's own internal consistency and
+    validity) rather than something that was never true by design.
+- **Zero changes to `browserPolicy.js`, the `/browser/check` route, or any
+  pre-existing `db.js` function** — confirmed via `git diff --stat`
+  showing no lines touched in `browserPolicy.js` at all.
+- **Full regression, re-run after this phase's changes: 55/55**
+  (`test-browser-policy.js`), **46/46** (`test-db-integration.js`),
+  **28/28** (`test-browser-load.js`), **38/38**
+  (`test-admin-ui-e2e.js`) — all unchanged from Phase 2.3, zero
+  regressions.
+- **CodeQL**: not available to run in this sandbox — no `codeql` CLI
+  installed, and the CodeQL GitHub Actions workflow that exists on `main`
+  (and on the separate `app-store-categories`/`app-update-check` branches)
+  has not been merged into `filtered-browser-server`, which this phase's
+  instructions did not ask for. In its place: a manual review pass for the
+  issue classes CodeQL's JS/TS queries typically flag (secrets in code,
+  logged sensitive material, unsafe deserialization) — confirmed no key
+  material is ever logged (grepped every `console.*` call in both new
+  files) and no key material is hardcoded anywhere in `backend/**` outside
+  test files' own ephemeral, runtime-generated keys. This is a real gap
+  relative to the instruction to "run any available CodeQL checks" — there
+  simply isn't one available on this branch, stated plainly rather than
+  glossed over.
+- **What remains unverified**: any of this against a real deployed signing
+  key or the actual Render production environment (everything here ran
+  against a disposable local Postgres and locally-spawned server
+  processes); real Android-side verification (explicitly not implemented,
+  per instruction); real key rotation (the `keyId` mechanism is designed
+  for it and unit-tested for shape, but no second real key was ever
+  actually rotated in during a test).
+
 **Phase 2.3 — load / abuse / failure hardening, this update.**
 
 Exact environment: the same real local PostgreSQL 16 `browser_test`
@@ -550,6 +715,21 @@ for this update — client-side, this only matters if it starts sending
 navigation checks fast enough to hit a rate a real user could never
 produce by clicking around.
 
+**Phase 2.4**: `/browser/check`'s `ALLOW`/`BLOCK`/`REVIEW` decision logic
+and response shape are **completely unchanged** — confirmed via
+`git diff` showing zero lines touched in `browserPolicy.js`. This phase
+only adds two brand-new, opt-in endpoints
+(`GET /api/devices/:deviceId/browser/policy-snapshot` and
+`GET /api/browser/policy/signing-key`) that nothing existing calls. **GPT
+does not need to change anything in `/client/**` for this update** — per
+the task's own explicit scope, Android-side verification and local
+caching are not implemented here; see docs/server-api-contract.md's new
+"Signed offline policy snapshot (Phase 2.4)" section for the exact
+contract to implement whenever that work is greenlit (it names the
+`filtered-browser-client` doc's own `NEXT` item 5 as the point where this
+becomes relevant — i.e. after physical-device Phase 0A verification, not
+before).
+
 ## KNOWN LIMITATIONS
 
 - No Redis, queue, analyzer worker, AI, Safe Browsing integration, domain-age/
@@ -608,6 +788,18 @@ produce by clicking around.
   hardware/network characteristics. A genuine managed-Postgres failover
   (as opposed to a local `service postgresql stop`/`start`, the closest
   real approximation available here) also remains unverified.
+- **Phase 2.4**: no Android verification code and no local client caching
+  exist yet — explicitly out of scope per instruction, not started. The
+  admin-only public-key endpoint, the exact canonical-serialization rules,
+  and every failure mode were tested against a real Ed25519 keypair
+  generated fresh for each test run, but never against a real deployed
+  production signing key, a real Android verifier, or the actual Render
+  environment. Key rotation is designed for (the `keyId` field exists
+  specifically so more than one key can be trusted at once) but was never
+  exercised with a genuine second key in a test. CodeQL was not run — no
+  CLI available in this sandbox and the CodeQL workflow (added on `main`)
+  has not been merged into this branch; a manual review for logged/
+  hardcoded secrets was done in its place (see TESTED above).
 
 ## NEXT
 
