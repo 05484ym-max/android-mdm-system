@@ -1,22 +1,35 @@
+import hashlib
 import hmac
 import io
+import math
 import os
 import threading
 from typing import Any
 
+import cv2
+import numpy as np
+import torch
 from fastapi import FastAPI, Header, HTTPException, Request
+from huggingface_hub import hf_hub_download
 from PIL import Image, UnidentifiedImageError
-from nudenet import NudeDetector
 from starlette.concurrency import run_in_threadpool
-from transformers import pipeline
+from transformers import AutoImageProcessor, AutoModel, pipeline
 
 from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="1.0.0")
+app = FastAPI(title="Yehudi Kasher Local Image AI", version="2.0.0")
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
+MAX_FACE_DETECT_SIDE = 1280
+MAX_FACES = 8
+
 DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-512"
+DEFAULT_NSFW_MODEL = "viddexa/nsfw-detection-mini"
+DEFAULT_GENDER_MODEL = "abhilash88/age-gender-prediction"
+YUNET_REPO = "opencv/opencv_zoo"
+YUNET_FILE = "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 
 # Pillow also performs its own decompression-bomb check. Keep the explicit
 # width*height check below as a second, deterministic bound.
@@ -24,7 +37,6 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
 def _configured_concurrency() -> int:
-    """Return a safe bounded inference concurrency even for malformed env."""
     try:
         requested = int(os.environ.get("AI_MAX_CONCURRENCY", "1"))
     except (TypeError, ValueError):
@@ -32,9 +44,13 @@ def _configured_concurrency() -> int:
     return max(1, min(requested, 4))
 
 
-_nudenet: NudeDetector | None = None
 _siglip: Any = None
+_nsfw: Any = None
+_gender_processor: Any = None
+_gender_model: Any = None
+_face_detector: Any = None
 _model_load_lock = threading.Lock()
+_face_detector_lock = threading.Lock()
 _inference_gate = threading.BoundedSemaphore(_configured_concurrency())
 
 
@@ -44,49 +60,80 @@ def _token_ok(value: str | None) -> bool:
     return bool(expected) and hmac.compare_digest(supplied, expected)
 
 
-def _load_nudenet() -> NudeDetector:
-    global _nudenet
-    if _nudenet is not None:
-        return _nudenet
-
-    with _model_load_lock:
-        if _nudenet is not None:
-            return _nudenet
-
-        model_path = os.environ.get("NUDENET_MODEL_PATH")
-        require_640 = os.environ.get("NUDENET_REQUIRE_640", "0") == "1"
-        if require_640 and not model_path:
-            raise RuntimeError(
-                "NUDENET_REQUIRE_640 is enabled but NUDENET_MODEL_PATH is missing"
-            )
-        if model_path:
-            if not os.path.isfile(model_path):
-                raise RuntimeError("NUDENET_MODEL_PATH does not exist")
-            _nudenet = NudeDetector(
-                model_path=model_path,
-                inference_resolution=640,
-            )
-        else:
-            _nudenet = NudeDetector()
-    return _nudenet
-
-
 def _load_siglip():
     global _siglip
     if _siglip is not None:
         return _siglip
-
     with _model_load_lock:
-        if _siglip is not None:
-            return _siglip
-
-        model_name = os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL)
-        _siglip = pipeline(
-            task="zero-shot-image-classification",
-            model=model_name,
-            device=-1,
-        )
+        if _siglip is None:
+            _siglip = pipeline(
+                task="zero-shot-image-classification",
+                model=os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
+                device=-1,
+            )
     return _siglip
+
+
+def _load_nsfw():
+    global _nsfw
+    if _nsfw is not None:
+        return _nsfw
+    with _model_load_lock:
+        if _nsfw is None:
+            _nsfw = pipeline(
+                task="image-classification",
+                model=os.environ.get("NSFW_MODEL", DEFAULT_NSFW_MODEL),
+                device=-1,
+            )
+    return _nsfw
+
+
+def _load_gender():
+    global _gender_processor, _gender_model
+    if _gender_processor is not None and _gender_model is not None:
+        return _gender_processor, _gender_model
+    with _model_load_lock:
+        if _gender_processor is None or _gender_model is None:
+            model_name = os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL)
+            _gender_processor = AutoImageProcessor.from_pretrained(
+                model_name,
+                trust_remote_code=False,
+            )
+            _gender_model = AutoModel.from_pretrained(
+                model_name,
+                trust_remote_code=False,
+            )
+            _gender_model.eval()
+    return _gender_processor, _gender_model
+
+
+def _verified_yunet_path() -> str:
+    path = hf_hub_download(repo_id=YUNET_REPO, filename=YUNET_FILE)
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != YUNET_SHA256:
+        raise RuntimeError("yunet_checksum_mismatch")
+    return path
+
+
+def _load_face_detector():
+    global _face_detector
+    if _face_detector is not None:
+        return _face_detector
+    with _model_load_lock:
+        if _face_detector is None:
+            model_path = _verified_yunet_path()
+            _face_detector = cv2.FaceDetectorYN.create(
+                model_path,
+                "",
+                (320, 320),
+                0.70,
+                0.30,
+                200,
+            )
+    return _face_detector
 
 
 def _siglip_scores(image: Image.Image) -> dict[str, float]:
@@ -104,7 +151,29 @@ def _siglip_scores(image: Image.Image) -> dict[str, float]:
             continue
         if 0.0 <= score <= 1.0:
             scores[label] = max(scores.get(label, 0.0), score)
+    if not scores:
+        raise RuntimeError("siglip_no_scores")
     return scores
+
+
+def _nsfw_score(image: Image.Image) -> float:
+    raw = _load_nsfw()(image)
+    best = None
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip().lower()
+        if not any(token in label for token in ("nsfw", "adult", "unsafe")):
+            continue
+        try:
+            score = float(item.get("score", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= score <= 1.0:
+            best = score if best is None else max(best, score)
+    if best is None:
+        raise RuntimeError("nsfw_model_missing_unsafe_label")
+    return best
 
 
 def _decode_image(body: bytes) -> Image.Image:
@@ -121,26 +190,96 @@ def _decode_image(body: bytes) -> Image.Image:
         raise ValueError("invalid_image") from exc
 
 
+def _face_crops(image: Image.Image) -> list[tuple[Image.Image, float]]:
+    width, height = image.size
+    scale = min(1.0, MAX_FACE_DETECT_SIDE / float(max(width, height)))
+    if scale < 1.0:
+        work = image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+    else:
+        work = image
+
+    rgb = np.asarray(work, dtype=np.uint8)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    detector = _load_face_detector()
+    with _face_detector_lock:
+        detector.setInputSize((bgr.shape[1], bgr.shape[0]))
+        _, faces = detector.detect(bgr)
+
+    if faces is None:
+        return []
+
+    results: list[tuple[Image.Image, float]] = []
+    for row in faces[:MAX_FACES]:
+        x, y, w, h = [float(v) for v in row[:4]]
+        detection = float(row[-1])
+        if detection < 0.60 or w <= 1 or h <= 1:
+            continue
+        margin_x = w * 0.18
+        margin_y = h * 0.18
+        left = max(0, int(math.floor(x - margin_x)))
+        top = max(0, int(math.floor(y - margin_y)))
+        right = min(work.width, int(math.ceil(x + w + margin_x)))
+        bottom = min(work.height, int(math.ceil(y + h + margin_y)))
+        if right - left < 10 or bottom - top < 10:
+            continue
+        results.append((work.crop((left, top, right, bottom)).convert("RGB"), detection))
+    return results
+
+
+def _gender_faces(image: Image.Image) -> list[dict]:
+    crops = _face_crops(image)
+    if not crops:
+        return []
+
+    processor, model = _load_gender()
+    results: list[dict] = []
+    for crop, detection in crops:
+        inputs = processor(images=crop, return_tensors="pt")
+        with torch.no_grad():
+            output = model(**inputs)
+        logits = getattr(output, "logits", None)
+        if logits is None:
+            raise RuntimeError("gender_model_missing_logits")
+        values = logits.detach().cpu().float().reshape(-1).tolist()
+        if len(values) < 2:
+            raise RuntimeError("gender_model_invalid_logits")
+        gender_value = float(values[1])
+        if not math.isfinite(gender_value):
+            raise RuntimeError("gender_model_nonfinite")
+        female = gender_value if 0.0 <= gender_value <= 1.0 else 1.0 / (1.0 + math.exp(-gender_value))
+        female = max(0.0, min(1.0, female))
+        results.append({
+            "female": female,
+            "male": 1.0 - female,
+            "detection": max(0.0, min(1.0, detection)),
+        })
+    return results
+
+
 def _run_models(body: bytes, image: Image.Image) -> dict:
-    # Limit concurrent heavyweight inference. Without this, a page containing
-    # many images can exhaust RAM/CPU even though the Node layer coalesces
-    # duplicate hashes.
+    del body  # image bytes were validated before inference; models use decoded RGB.
     with _inference_gate:
-        nude = _load_nudenet().detect(body)
+        nsfw = _nsfw_score(image)
+        faces = _gender_faces(image)
         siglip = _siglip_scores(image)
-        return evaluate(nude, siglip)
+        return evaluate(nsfw, faces, siglip)
 
 
 @app.get("/health")
 def health():
-    model_path = os.environ.get("NUDENET_MODEL_PATH")
-    require_640 = os.environ.get("NUDENET_REQUIRE_640", "0") == "1"
     return {
         "status": "ok",
         "policyVersion": POLICY_VERSION,
-        "productionReady": (not require_640) or bool(model_path),
-        "nudenetModel": model_path or "bundled-320n",
-        "siglipModel": os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
+        "productionReady": True,
+        "models": {
+            "siglip": os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
+            "nsfw": os.environ.get("NSFW_MODEL", DEFAULT_NSFW_MODEL),
+            "gender": os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL),
+            "faceDetector": "opencv/opencv_zoo:YuNet-2023mar",
+        },
         "maxImageBytes": MAX_BYTES,
         "maxImagePixels": MAX_IMAGE_PIXELS,
         "maxConcurrency": _configured_concurrency(),
@@ -167,17 +306,16 @@ async def moderate(
     try:
         decision = await run_in_threadpool(_run_models, body, image)
     except Exception as exc:
-        # Never let a model/runtime failure become an allow.
         return {
             "allowed": False,
             "reason": "local_ai_error",
             "details": {"errorType": type(exc).__name__},
-            "source": "local_siglip2_nudenet",
+            "source": "local_apache_vision_stack",
             "policyVersion": POLICY_VERSION,
         }
 
     return {
         **decision,
-        "source": "local_siglip2_nudenet",
+        "source": "local_apache_vision_stack",
         "policyVersion": POLICY_VERSION,
     }
