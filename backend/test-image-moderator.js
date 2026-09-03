@@ -3,6 +3,7 @@
 const assert = require('assert');
 const {
   POLICY_VERSION,
+  SOURCE,
   moderateImage,
   sanitizeDetails,
   normalizeReason,
@@ -14,6 +15,9 @@ const {
   const oldToken = process.env.LOCAL_AI_TOKEN;
 
   try {
+    assert.strictEqual(POLICY_VERSION, 'HAREDI_STRICT_V3_PERMISSIVE');
+    assert.strictEqual(SOURCE, 'local_apache_vision_stack');
+
     delete process.env.LOCAL_AI_URL;
     delete process.env.LOCAL_AI_TOKEN;
 
@@ -44,7 +48,7 @@ const {
             reason: 'female_detected',
             policyVersion: POLICY_VERSION,
             details: {
-              nudenetFemale: 0.97,
+              maxFemaleFace: 0.97,
               nested: { must: 'be dropped' },
             },
           };
@@ -54,8 +58,8 @@ const {
 
     assert.strictEqual(result.allowed, false);
     assert.strictEqual(result.reason, 'female_detected');
-    assert.strictEqual(result.source, 'local_siglip2_nudenet');
-    assert.strictEqual(result.details.nudenetFemale, 0.97);
+    assert.strictEqual(result.source, SOURCE);
+    assert.strictEqual(result.details.maxFemaleFace, 0.97);
     assert.strictEqual(result.details.nested, undefined);
     assert.strictEqual(captured.url, 'http://local-ai.internal:8080/moderate');
     assert.strictEqual(captured.options.headers['X-Local-AI-Token'], 'test-secret');
@@ -70,7 +74,7 @@ const {
           allowed: false,
           reason: 'revealing_content',
           policyVersion: POLICY_VERSION,
-          details: { nudenetRevealing: 0.88 },
+          details: { siglipRevealing: 0.88 },
         };
       },
     }));
@@ -87,7 +91,7 @@ const {
           allowed: true,
           reason: 'image_safe_haredi_strict',
           policyVersion: POLICY_VERSION,
-          details: { siglipMale: 0.91 },
+          details: { maleFaceCount: 1 },
         };
       },
     }));
