@@ -221,7 +221,8 @@ async function upload(baseUrl, cookie, opts) {
     });
 
     await test('valid upload creates a GitHub release asset and catalog row with exact SHA/size', async () => {
-      const apk = buildTestApk('com.example.good', 8192);
+      const iconBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 11, 22, 33, 44]);
+      const apk = buildTestApk('com.example.good', 8192, { buffer: iconBytes });
       const res = await upload(mainBase, cookie, {
         buffer: apk,
         name: 'Good App',
@@ -240,6 +241,8 @@ async function upload(baseUrl, cookie, opts) {
       assert.strictEqual(body.sizeBytes, apk.length);
       assert.ok(body.apkUrl.startsWith(`${mainBase}/api/apps/apk/`));
       assert.match(body.apkUrl.split('/').pop(), /^\d+$/);
+      assert.ok(body.iconUrl.startsWith(`${mainBase}/api/apps/icon/`));
+      assert.match(body.iconUrl.split('/').pop(), /^\d+$/);
 
       assert.ok(github.release, 'release should be created');
       assert.strictEqual(github.assets.size >= 1, true);
@@ -249,6 +252,13 @@ async function upload(baseUrl, cookie, opts) {
       assert.strictEqual(row.appSource, 'APK');
       assert.strictEqual(row.apkSha256, sha256(apk));
       assert.strictEqual(row.apkSizeBytes, apk.length);
+      assert.strictEqual(row.iconUrl, body.iconUrl);
+      assert.ok(row.apkIconStorageKey);
+
+      const iconProxy = await fetch(body.iconUrl);
+      assert.strictEqual(iconProxy.status, 200);
+      assert.strictEqual(iconProxy.headers.get('content-type'), 'image/png');
+      assert.deepStrictEqual(Buffer.from(await iconProxy.arrayBuffer()), iconBytes);
 
       const proxy = await fetch(body.apkUrl);
       assert.strictEqual(proxy.status, 200);
@@ -276,24 +286,34 @@ async function upload(baseUrl, cookie, opts) {
 
     await test('re-uploading the same package replaces catalog asset and removes the old asset', async () => {
       const first = await upload(mainBase, cookie, {
-        buffer: buildTestApk('com.example.replace', 4096),
+        buffer: buildTestApk('com.example.replace', 4096, {
+          buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 1, 1]),
+        }),
         name: 'Replace v1',
       });
       assert.strictEqual(first.status, 200);
       const firstJson = await first.json();
       const oldId = firstJson.apkUrl.split('/').pop();
+      const oldIconId = firstJson.iconUrl.split('/').pop();
       assert.ok(github.assets.has(oldId));
+      assert.ok(github.assets.has(oldIconId));
 
       const second = await upload(mainBase, cookie, {
-        buffer: buildTestApk('com.example.replace', 5000),
+        buffer: buildTestApk('com.example.replace', 5000, {
+          buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 2, 2, 2]),
+        }),
         name: 'Replace v2',
       });
       assert.strictEqual(second.status, 200);
       const secondJson = await second.json();
       const newId = secondJson.apkUrl.split('/').pop();
+      const newIconId = secondJson.iconUrl.split('/').pop();
       assert.notStrictEqual(oldId, newId);
+      assert.notStrictEqual(oldIconId, newIconId);
       assert.strictEqual(github.assets.has(oldId), false);
+      assert.strictEqual(github.assets.has(oldIconId), false);
       assert.strictEqual(github.assets.has(newId), true);
+      assert.strictEqual(github.assets.has(newIconId), true);
 
       const matches = (await db.listAppsCatalog()).filter(x => x.packageName === 'com.example.replace');
       assert.strictEqual(matches.length, 1);
