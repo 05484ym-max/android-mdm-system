@@ -25,7 +25,7 @@ MAX_FACES = 8
 
 DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-512"
 DEFAULT_NSFW_MODEL = "viddexa/nsfw-detection-mini"
-DEFAULT_GENDER_MODEL = "dima806/fairface_gender_image_detection"
+DEFAULT_GENDER_MODEL = "dima806/man_woman_face_image_detection"
 YUNET_REPO = "opencv/opencv_zoo"
 YUNET_FILE = "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
@@ -241,9 +241,9 @@ def _gender_faces(image: Image.Image) -> list[dict]:
                 continue
             if not 0.0 <= score <= 1.0:
                 continue
-            if label == "female":
+            if label in {"female", "woman"}:
                 female = score
-            elif label == "male":
+            elif label in {"male", "man"}:
                 male = score
 
         if female is None or male is None:
