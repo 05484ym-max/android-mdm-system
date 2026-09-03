@@ -6,6 +6,7 @@ on:
       - filtered-browser-client
       - fix/filtered-browser-raster-icon
       - feature/automatic-browser-filtering-client
+      - feature/haredi-image-filter-client
     paths:
       - 'client/**'
       - '.github/workflows/filtered-browser-apk.yml'
