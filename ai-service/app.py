@@ -157,6 +157,10 @@ async def moderate(
     body = await request.body()
     try:
         image = _decode_image(body)
+    except ValueError as exc:
+        if str(exc) == "invalid_image_size":
+            raise HTTPException(status_code=413, detail="invalid_image_size") from exc
+        raise HTTPException(status_code=400, detail="invalid_image") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid_image") from exc
 
