@@ -15,6 +15,7 @@ import androidx.webkit.WebViewClientCompat
 class SecureWebViewClient(
     private val policy: UrlPolicy,
     private val remotePolicy: RemotePolicyClient,
+    private val imageProxy: FilteredImageProxy,
     private val onNeedsClassification: (String) -> Unit,
     private val onBlocked: (String, String) -> Unit,
     private val onTechnicalError: (String, String) -> Unit
@@ -49,22 +50,35 @@ class SecureWebViewClient(
     ): WebResourceResponse? {
         val rawUrl = request?.url?.toString()
         val result = policy.evaluate(rawUrl)
-        if (result.decision == LocalDecision.ALLOW) {
-            return super.shouldInterceptRequest(view, request)
+
+        var hostAllowed = result.decision == LocalDecision.ALLOW
+        if (!hostAllowed &&
+            result.reason == "not_in_local_policy" &&
+            result.normalizedHost != null
+        ) {
+            // shouldInterceptRequest runs off the UI thread, so it is safe to
+            // perform the remote host classification here.
+            val remote = remotePolicy.checkHost(result.normalizedHost)
+            hostAllowed = remote.allowed && policy.rememberRemoteAllow(result.normalizedHost)
         }
 
-        // shouldInterceptRequest runs off the UI thread, so it is safe to
-        // perform the remote classification here. This prevents a page that
-        // was approved for its main host from silently pulling content from
-        // an unclassified third-party host.
-        if (result.reason == "not_in_local_policy" && result.normalizedHost != null) {
-            val remote = remotePolicy.checkHost(result.normalizedHost)
-            if (remote.allowed && policy.rememberRemoteAllow(result.normalizedHost)) {
-                return super.shouldInterceptRequest(view, request)
+        if (!hostAllowed) {
+            return if (imageProxy.shouldProxy(request)) {
+                BlockedResponse.imagePlaceholder()
+            } else {
+                BlockedResponse.empty()
             }
         }
 
-        return BlockedResponse.empty()
+        // Images never go directly to their origin once the resource is
+        // recognized as an image request. The server fetches and moderates
+        // the bytes first; BLOCK/ERROR both come back as a harmless SVG
+        // placeholder, so the WebView never sees the original unsafe image.
+        if (imageProxy.shouldProxy(request) && !rawUrl.isNullOrBlank()) {
+            return imageProxy.fetch(rawUrl)
+        }
+
+        return super.shouldInterceptRequest(view, request)
     }
 
     override fun onSafeBrowsingHit(

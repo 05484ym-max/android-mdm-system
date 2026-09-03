@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
 
     private val policy by lazy { LocalPolicyStore.createPolicy() }
     private val remotePolicy by lazy { RemotePolicyClient() }
+    private val imageProxy by lazy { FilteredImageProxy() }
     private val classificationInFlight = ConcurrentHashMap.newKeySet<String>()
 
     private val bgColor = Color.parseColor("#F2F1E6")
@@ -222,8 +223,14 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView(view: WebView, serviceWorkerSafe: Boolean) {
+        // Install document-start hardening before JavaScript is enabled and
+        // before any page is loaded. If this WebView cannot guarantee the
+        // pre-page hook, keep JavaScript disabled rather than allowing blob:
+        // image creation to bypass native request interception.
+        val documentStartImageSafe = StrictImageHardening.install(view)
+
         val settings = view.settings
-        settings.javaScriptEnabled = serviceWorkerSafe
+        settings.javaScriptEnabled = serviceWorkerSafe && documentStartImageSafe
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
         settings.allowFileAccess = false
@@ -287,6 +294,7 @@ class MainActivity : AppCompatActivity() {
         view.webViewClient = SecureWebViewClient(
             policy,
             remotePolicy,
+            imageProxy,
             ::classifyAndNavigate,
             ::showBlocked,
             { _, reason -> showTechnicalError(reason) }
