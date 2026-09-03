@@ -40,3 +40,11 @@ jobs:
       - name: Compile service sources
         working-directory: ai-service
         run: python -m py_compile app.py policy.py test_runtime_smoke.py
+      - name: Verify Docker deployment contract
+        working-directory: ai-service
+        run: |
+          set -euo pipefail
+          grep -q '^USER appuser$' Dockerfile
+          grep -q 'HF_HOME=/models/huggingface' Dockerfile
+          grep -Fq '${PORT:-8080}' Dockerfile
+          grep -q 'uvicorn app:app' Dockerfile
