@@ -64,19 +64,23 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
     def setUp(self):
         self.old_token = os.environ.get("LOCAL_AI_TOKEN")
         os.environ["LOCAL_AI_TOKEN"] = "ci-secret-token"
+        ai_app._set_model_state("cold")
         self.client = TestClient(ai_app.app)
 
     def tearDown(self):
+        ai_app._set_model_state("cold")
         if self.old_token is None:
             os.environ.pop("LOCAL_AI_TOKEN", None)
         else:
             os.environ["LOCAL_AI_TOKEN"] = self.old_token
 
-    def test_health_exposes_policy_version_and_stack(self):
+    def test_health_exposes_policy_version_stack_and_readiness(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["policyVersion"], "HAREDI_STRICT_V3_PERMISSIVE")
+        self.assertEqual(body["status"], "cold")
+        self.assertFalse(body["productionReady"])
         self.assertIn("siglip", body["models"])
         self.assertIn("nsfw", body["models"])
         self.assertIn("gender", body["models"])
@@ -98,6 +102,40 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
             headers={"Content-Type": "application/octet-stream"},
         )
         self.assertEqual(response.status_code, 401)
+
+    def test_warming_state_fails_closed_without_running_models(self):
+        ai_app._set_model_state("warming")
+        with mock.patch.object(ai_app, "_run_models") as run_models:
+            response = self.client.post(
+                "/moderate",
+                content=png_bytes(),
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Local-AI-Token": "ci-secret-token",
+                },
+            )
+        run_models.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["allowed"])
+        self.assertEqual(body["reason"], "local_ai_warming")
+
+    def test_model_load_error_fails_closed_without_running_models(self):
+        ai_app._set_model_state("error", "RuntimeError")
+        with mock.patch.object(ai_app, "_run_models") as run_models:
+            response = self.client.post(
+                "/moderate",
+                content=png_bytes(),
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Local-AI-Token": "ci-secret-token",
+                },
+            )
+        run_models.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["allowed"])
+        self.assertEqual(body["reason"], "local_ai_unavailable")
 
     def test_invalid_image_is_rejected_before_models(self):
         response = self.client.post(
