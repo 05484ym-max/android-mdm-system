@@ -3,6 +3,7 @@ package org.yehudikasher.browser
 import java.net.IDN
 import java.net.URI
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 enum class LocalDecision {
     ALLOW,
@@ -21,6 +22,8 @@ data class UrlDecision(
 )
 
 class UrlPolicy(rules: Collection<LocalPolicyRule>) {
+    private val dynamicAllowedHosts = ConcurrentHashMap.newKeySet<String>()
+
     private val normalizedRules = rules.mapNotNull { rule ->
         normalizeHost(rule.host)?.let { normalized ->
             rule.copy(host = normalized)
@@ -84,16 +87,32 @@ class UrlPolicy(rules: Collection<LocalPolicyRule>) {
                     host.length > rule.host.length + 1 &&
                     host.endsWith("." + rule.host))
         }
+        val dynamicallyAllowed = host in dynamicAllowedHosts
 
-        return if (matchingRule != null) {
+        return if (matchingRule != null || dynamicallyAllowed) {
             UrlDecision(
                 LocalDecision.ALLOW,
                 normalizedHost = host,
-                reason = if (host == matchingRule.host) "exact_allow" else "subdomain_allow"
+                reason = when {
+                    dynamicallyAllowed -> "remote_allow"
+                    host == matchingRule?.host -> "exact_allow"
+                    else -> "subdomain_allow"
+                }
             )
         } else {
             blocked("not_in_local_policy", host)
         }
+    }
+
+    fun rememberRemoteAllow(rawHost: String): Boolean {
+        val host = normalizeHost(rawHost) ?: return false
+        if (isIpLiteral(host)) return false
+        dynamicAllowedHosts.add(host)
+        return true
+    }
+
+    fun forgetRemoteAllow(rawHost: String) {
+        normalizeHost(rawHost)?.let { dynamicAllowedHosts.remove(it) }
     }
 
     private fun blocked(reason: String, host: String? = null) =
