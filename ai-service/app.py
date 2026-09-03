@@ -16,7 +16,7 @@ from transformers import pipeline
 
 from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="3.0.0")
+app = FastAPI(title="Yehudi Kasher Local Image AI", version="3.1.0")
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
@@ -51,6 +51,8 @@ _face_detector: Any = None
 _model_load_lock = threading.Lock()
 _face_detector_lock = threading.Lock()
 _inference_gate = threading.BoundedSemaphore(_configured_concurrency())
+_model_state_lock = threading.Lock()
+_model_state = {"status": "cold", "errorType": None}
 
 
 def _token_ok(value: str | None) -> bool:
@@ -137,6 +139,49 @@ def _load_face_detector():
                 200,
             )
     return _face_detector
+
+
+def _set_model_state(status: str, error_type: str | None = None) -> None:
+    with _model_state_lock:
+        _model_state["status"] = status
+        _model_state["errorType"] = error_type
+
+
+def _get_model_state() -> dict:
+    with _model_state_lock:
+        return dict(_model_state)
+
+
+def _warm_models() -> None:
+    """Load and verify every production model without blocking the web server.
+
+    The service binds its port first, but moderation stays fail-closed while
+    warming. This avoids making the first browser image pay multi-model cold
+    start time or exceed the Node caller's timeout.
+    """
+    _set_model_state("warming")
+    try:
+        _load_face_detector()
+        _load_gender()
+        _load_nsfw()
+        _load_siglip()
+    except Exception as exc:
+        _set_model_state("error", type(exc).__name__)
+        return
+    _set_model_state("ready")
+
+
+@app.on_event("startup")
+def start_model_warmup() -> None:
+    state = _get_model_state()["status"]
+    if state != "cold":
+        return
+    _set_model_state("warming")
+    threading.Thread(
+        target=_warm_models,
+        name="local-ai-model-warmup",
+        daemon=True,
+    ).start()
 
 
 def _siglip_scores(image: Image.Image) -> dict[str, float]:
@@ -284,10 +329,12 @@ def _run_models(body: bytes, image: Image.Image) -> dict:
 
 @app.get("/health")
 def health():
+    state = _get_model_state()
     return {
-        "status": "ok",
+        "status": state["status"],
         "policyVersion": POLICY_VERSION,
-        "productionReady": True,
+        "productionReady": state["status"] == "ready",
+        "modelErrorType": state["errorType"],
         "models": {
             "siglip": os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
             "siglipRevision": os.environ.get("SIGLIP_REVISION", DEFAULT_SIGLIP_REVISION),
@@ -310,6 +357,24 @@ async def moderate(
 ):
     if not _token_ok(x_local_ai_token):
         raise HTTPException(status_code=401, detail="unauthorized")
+
+    state = _get_model_state()["status"]
+    if state == "warming":
+        return {
+            "allowed": False,
+            "reason": "local_ai_warming",
+            "details": {},
+            "source": "local_apache_vision_stack",
+            "policyVersion": POLICY_VERSION,
+        }
+    if state == "error":
+        return {
+            "allowed": False,
+            "reason": "local_ai_unavailable",
+            "details": {},
+            "source": "local_apache_vision_stack",
+            "policyVersion": POLICY_VERSION,
+        }
 
     body = await request.body()
     if not body or len(body) > MAX_BYTES:
