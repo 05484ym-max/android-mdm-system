@@ -388,7 +388,7 @@ class AppStoreActivity : Activity() {
             text = when {
                 !installed -> "התקנה"
                 updateAvailable -> "עדכן"
-                else -> "מותקן"
+                else -> "בדוק עדכון"
             }
             textSize = 10.5f
             typeface = mediumFont
@@ -397,19 +397,32 @@ class AppStoreActivity : Activity() {
                     when {
                         !installed -> ACCENT
                         updateAvailable -> ACCENT
-                        else -> OK
+                        else -> ACCENT
                     }
                 )
             )
             gravity = Gravity.CENTER
             setPadding(0, dp(2), 0, 0)
 
-            // Only actionable states open Play Store. "מותקן" is a status,
-            // not a disguised "check for update" button.
-            if (!installed || updateAvailable) {
-                isClickable = true
-                isFocusable = true
-                setOnClickListener { openPlayStoreForInstall(app.packageName) }
+            // Installation/update eligibility must be decided by Play Store
+            // for this exact device. Do not infer it from public metadata.
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { openPlayStoreForInstall(app.packageName) }
+        }
+
+        val open = TextView(this).apply {
+            text = "פתח"
+            textSize = 10.5f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(ACCENT))
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            visibility = if (installed) View.VISIBLE else View.GONE
+            isClickable = installed
+            isFocusable = installed
+            if (installed) {
+                setOnClickListener { openInstalledApp(app.packageName) }
             }
         }
 
@@ -437,10 +450,14 @@ class AppStoreActivity : Activity() {
             addView(icon)
             addView(name)
             addView(status)
+            addView(open)
             addView(remove)
             setOnClickListener {
-                if (installed) openInstalledApp(app.packageName)
-                else openPlayStoreForInstall(app.packageName)
+                // For an installed app, tapping the tile checks the app's
+                // real Google Play page. Play Store itself decides whether
+                // this exact device is eligible for "עדכון" or only "פתח".
+                // This avoids our previous false-update heuristics.
+                openPlayStoreForInstall(app.packageName)
             }
         }
     }
