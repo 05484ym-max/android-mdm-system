@@ -12,6 +12,7 @@ function isPrivateIpv4(ip) {
   const p = ip.split('.').map(Number);
   if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return true;
   return (
+    p[0] === 0 ||
     p[0] === 10 ||
     p[0] === 127 ||
     (p[0] === 169 && p[1] === 254) ||
@@ -39,7 +40,9 @@ function isPrivateIpv6(ip) {
     normalized.startsWith('fe9') ||
     normalized.startsWith('fea') ||
     normalized.startsWith('feb') ||
-    normalized.startsWith('2001:db8:')
+    normalized.startsWith('2001:db8:') ||
+    normalized.startsWith('ff') ||
+    normalized.startsWith('::ffff:')
   );
 }
 
@@ -59,6 +62,8 @@ function validateImageUrl(rawUrl) {
   }
   if (url.protocol !== 'https:') throw new Error('image_https_required');
   if (!url.hostname || url.username || url.password) throw new Error('invalid_image_url');
+  const hostForIpCheck = url.hostname.replace(/^\[/, '').replace(/\]$/, '');
+  if (net.isIP(hostForIpCheck)) throw new Error('image_ip_literal_blocked');
   if (url.port && url.port !== '443') throw new Error('image_non_default_port');
   if (url.hash) url.hash = '';
   return url;
