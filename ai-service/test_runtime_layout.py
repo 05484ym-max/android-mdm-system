@@ -34,6 +34,7 @@ class LocalAiRuntimeLayoutTests(unittest.TestCase):
     def test_siglip_prompt_contract_is_wired(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
         self.assertIn("candidate_labels=SIGLIP_PROMPTS", source)
+        self.assertIn('hypothesis_template="{}"', source)
         self.assertIn("siglip_incomplete_result", source)
 
 
