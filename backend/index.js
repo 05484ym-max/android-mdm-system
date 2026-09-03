@@ -1830,12 +1830,70 @@ function browserClassifierRateAllowed(ip) {
   return true;
 }
 
+function manualOverrideDecision(override) {
+  if (!override) return null;
+  const allowed = override.decision === 'ALLOW';
+  return {
+    host: override.host,
+    allowed,
+    reason: allowed ? 'manual_allow' : 'manual_block',
+    categories: [],
+    source: 'manual_override',
+    checkedAt: override.updatedAt,
+    // Keep client-side cache short so an admin flip takes effect quickly.
+    expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    override: true,
+  };
+}
+
+async function getEffectiveBrowserHostDecision(host) {
+  const override = await db.getBrowserDomainOverride(host);
+  const manual = manualOverrideDecision(override);
+  if (manual) return manual;
+  return db.getBrowserDomainClassification(host);
+}
+
+// Admin management of the small exception list. AUTO is represented by
+// deleting the override row, so the automatic classifier immediately becomes
+// authoritative again.
+app.get('/api/browser/overrides', requireAdmin, wrap(async (_req, res) => {
+  res.json(await db.listBrowserDomainOverrides());
+}));
+
+app.put('/api/browser/overrides/:host', requireAdmin, wrap(async (req, res) => {
+  const host = browserClassifier.normalizeHost(req.params.host);
+  if (!host) return res.status(400).json({ error: 'invalid host' });
+
+  const decision = typeof req.body?.decision === 'string'
+    ? req.body.decision.trim().toUpperCase()
+    : '';
+  if (!['ALLOW', 'BLOCK'].includes(decision)) {
+    return res.status(400).json({ error: 'decision must be ALLOW or BLOCK' });
+  }
+
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 300) : '';
+  res.json(await db.setBrowserDomainOverride(host, decision, note));
+}));
+
+app.delete('/api/browser/overrides/:host', requireAdmin, wrap(async (req, res) => {
+  const host = browserClassifier.normalizeHost(req.params.host);
+  if (!host) return res.status(400).json({ error: 'invalid host' });
+  const deleted = await db.deleteBrowserDomainOverride(host);
+  res.json({ status: deleted ? 'deleted' : 'already_auto', host });
+}));
+
 app.get('/api/browser/check', wrap(async (req, res) => {
   const host = browserClassifier.normalizeHost(
     typeof req.query.host === 'string' ? req.query.host : '',
   );
   if (!host) {
     return res.status(400).json({ allowed: false, reason: 'invalid_host' });
+  }
+
+  const override = manualOverrideDecision(await db.getBrowserDomainOverride(host));
+  if (override) {
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    return res.json({ ...override, cached: true });
   }
 
   const cached = await db.getBrowserDomainClassification(host);
@@ -1943,7 +2001,7 @@ app.post('/api/browser/image', wrap(async (req, res) => {
   // decision. This prevents the public proxy from becoming a generic fetcher
   // for arbitrary internet hosts and keeps image delivery inside the same
   // fail-closed trust model as normal browser subresources.
-  const hostDecision = await db.getBrowserDomainClassification(host);
+  const hostDecision = await getEffectiveBrowserHostDecision(host);
   if (!hostDecision || hostDecision.allowed !== true) {
     return sendBlockedImage(res, 'image_host_not_approved');
   }
