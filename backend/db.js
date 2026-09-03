@@ -1132,7 +1132,7 @@ async function updateCustomerUpdate(id, patch) {
   }
   if (patch.pinned !== undefined) {
     params.push(patch.pinned);
-    sets.push('pinned = 
+    sets.push('pinned = ' + String.fromCharCode(36) + params.length);
   }
   for (const [field, column] of [
     ['mediaType', 'media_type'],
@@ -1143,7 +1143,7 @@ async function updateCustomerUpdate(id, patch) {
   ]) {
     if (Object.prototype.hasOwnProperty.call(patch, field)) {
       params.push(patch[field]);
-      sets.push(column + ' = 
+      sets.push(column + ' = ' + String.fromCharCode(36) + params.length);
     }
   }
   const { rows } = await pool.query(
