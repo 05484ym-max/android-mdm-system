@@ -255,6 +255,14 @@ async function upload(baseUrl, cookie, opts) {
       assert.strictEqual(row.iconUrl, body.iconUrl);
       assert.ok(row.apkIconStorageKey);
 
+      const iconAssetId = body.iconUrl.split('/').pop();
+      const storedIcon = github.assets.get(iconAssetId);
+      assert.ok(storedIcon, 'icon asset should exist in fake GitHub storage');
+
+      // Reproduce GitHub's generic release-asset transport behavior: the bytes
+      // are a real PNG, but the upstream Content-Type is octet-stream.
+      storedIcon.contentType = 'application/octet-stream';
+
       const iconProxy = await fetch(body.iconUrl);
       assert.strictEqual(iconProxy.status, 200);
       assert.strictEqual(iconProxy.headers.get('content-type'), 'image/png');
