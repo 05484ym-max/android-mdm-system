@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const http = require('http');
 const https = require('https');
 
 const APK_CONTENT_TYPE = 'application/vnd.android.package-archive';
@@ -14,7 +15,24 @@ function loadStorageConfig() {
   if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) {
     throw new Error('GITHUB_APK_REPOSITORY must be owner/repo');
   }
-  return { token, repository, releaseTag };
+
+  // Test-only local transport override. Production can never redirect APK
+  // storage away from GitHub: the override is accepted only under
+  // NODE_ENV=test and only for loopback HTTP.
+  let apiBase = 'https://api.github.com';
+  let uploadBase = 'https://uploads.github.com';
+  const testBase = process.env.NODE_ENV === 'test'
+    ? process.env.APK_STORAGE_TEST_BASE_URL
+    : null;
+  if (testBase) {
+    if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(testBase)) {
+      throw new Error('APK_STORAGE_TEST_BASE_URL must be loopback HTTP in test mode');
+    }
+    apiBase = `${testBase}/api`;
+    uploadBase = `${testBase}/uploads`;
+  }
+
+  return { token, repository, releaseTag, apiBase, uploadBase };
 }
 
 function headers(config, accept = 'application/vnd.github+json') {
@@ -43,7 +61,7 @@ async function githubJson(config, url, options = {}) {
 }
 
 async function ensureRelease(config) {
-  const base = `https://api.github.com/repos/${config.repository}`;
+  const base = `${config.apiBase}/repos/${config.repository}`;
   try {
     return await githubJson(
       config,
@@ -72,14 +90,13 @@ function generateApkStorageKey() {
 
 async function uploadApk(config, key, buffer) {
   const release = await ensureRelease(config);
-  const path =
-    `/repos/${config.repository}/releases/${release.id}/assets?name=${encodeURIComponent(key)}`;
+  const uploadUrl = new URL(
+    `${config.uploadBase}/repos/${config.repository}/releases/${release.id}/assets?name=${encodeURIComponent(key)}`
+  );
 
   const body = await new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'uploads.github.com',
-      port: 443,
-      path,
+    const transport = uploadUrl.protocol === 'http:' ? http : https;
+    const req = transport.request(uploadUrl, {
       method: 'POST',
       headers: {
         ...headers(config),
@@ -119,7 +136,7 @@ async function uploadApk(config, key, buffer) {
 async function deleteApk(config, assetId) {
   try {
     const response = await fetch(
-      `https://api.github.com/repos/${config.repository}/releases/assets/${encodeURIComponent(assetId)}`,
+      `${config.apiBase}/repos/${config.repository}/releases/assets/${encodeURIComponent(assetId)}`,
       { method: 'DELETE', headers: headers(config) }
     );
     if (response.status === 204 || response.status === 404) return true;
