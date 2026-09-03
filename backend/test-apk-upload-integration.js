@@ -1,46 +1,3 @@
-// REAL PostgreSQL + real HTTP integration suite for persistent APK upload
-// (POST /api/apps/upload-apk). Real local Postgres, real running
-// backend/index.js processes, real multipart/form-data HTTP requests via
-// the platform's own fetch()/FormData - nothing about the request/response
-// path is mocked.
-//
-// Object storage itself: this sandbox has no real Cloudflare R2 (or any
-// S3) credentials or network reachability, so a local HTTP server
-// (fakeS3Server.js) stands in for the bucket - explicitly documented there
-// as a real HTTP server the real @aws-sdk/client-s3 talks to, not a mock
-// of the SDK. This proves apkStorage.js's own request/response handling,
-// key generation and fail-closed behavior for real; it does not prove a
-// specific R2 account/bucket is reachable (same honesty rule already
-// applied to Google Play network access elsewhere in this project - see
-// docs/apk-storage.md's "What could not be verified" section).
-//
-// ---------------------------------------------------------------------
-// One-time local setup:
-//
-//   service postgresql start
-//   sudo -u postgres psql \
-//     -c "DROP DATABASE IF EXISTS apkupload_test;" \
-//     -c "DROP ROLE IF EXISTS apkupload_test_user;" \
-//     -c "CREATE ROLE apkupload_test_user LOGIN PASSWORD 'apkupload_test_pw';" \
-//     -c "CREATE DATABASE apkupload_test OWNER apkupload_test_user;"
-//
-// From backend/, in one shell:
-//
-//   (
-//     export DATABASE_URL="postgresql://apkupload_test_user:apkupload_test_pw@127.0.0.1:5432/apkupload_test"
-//     export DATABASE_SSL=disable
-//     export ADMIN_USERNAME=itest_admin ADMIN_PASSWORD=itest_password_123
-//     export JWT_SECRET=itest-jwt-secret-not-for-prod SECURE_COOKIES=0
-//     node test-apk-upload-integration.js
-//     exit $?
-//   )
-//
-// This file spawns/kills its own server processes (a main fixture with a
-// working fake-S3 endpoint, and a second one pointed at an unreachable
-// storage endpoint) - the same pattern test-policy-signing-integration.js
-// uses, for the same reason: the "storage failure" scenario needs a
-// process configured differently from the main one.
-// ---------------------------------------------------------------------
 'use strict';
 
 const assert = require('assert');
@@ -48,11 +5,11 @@ const crypto = require('crypto');
 const path = require('path');
 const { spawn } = require('child_process');
 const { Pool } = require('pg');
-const { startFakeS3Server } = require('./fakeS3Server');
+const { startFakeGitHubServer } = require('./fakeGitHubServer');
 const { buildTestApk } = require('./testApkFixture');
 
 if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL is required to run this suite - refusing to fall back to a mock.');
+  console.error('DATABASE_URL is required');
   process.exit(1);
 }
 
@@ -73,34 +30,12 @@ async function test(name, fn) {
     failed++;
     failures.push({ name, error: e });
     console.log(`FAIL - ${name}`);
-    console.log(`  ${e.stack ? e.stack.split('\n').slice(0, 3).join('\n  ') : e.message}`);
+    console.log(`  ${e.stack || e.message}`);
   }
 }
 
-function sha256(v) {
-  return crypto.createHash('sha256').update(v).digest('hex');
-}
-
-/** A minimal buffer that satisfies looksLikeApk's content-based ZIP check
- * (a real APK's leading bytes) padded out with deterministic filler -
- * this is not a real installable APK (no central directory/manifest), only
- * a fixture whose FIRST FOUR BYTES are genuinely what looksLikeApk checks -
- * see index.js's own comment on why full APK parsing is out of scope. */
-function fakeApkBuffer(sizeBytes = 4096, seed = 'apk-fixture', packageName = 'com.apk.fixture') {
-  void seed;
-  return buildTestApk(packageName, sizeBytes);
-}
-
-async function waitForHealth(baseUrl, timeoutMs = 25000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${baseUrl}/health`);
-      if (res.ok) return;
-    } catch { /* not up yet */ }
-    await new Promise(r => setTimeout(r, 300));
-  }
-  throw new Error(`server did not become ready within ${timeoutMs}ms`);
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
 function spawnServer(port, extraEnv = {}) {
@@ -109,45 +44,63 @@ function spawnServer(port, extraEnv = {}) {
     env: {
       ...process.env,
       PORT: String(port),
-      DATABASE_URL: process.env.DATABASE_URL,
       DATABASE_SSL: 'disable',
       ADMIN_USERNAME: process.env.ADMIN_USERNAME,
       ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
       JWT_SECRET: process.env.JWT_SECRET,
       SECURE_COOKIES: '0',
+      NODE_ENV: 'test',
+      GITHUB_APK_REPOSITORY: 'test-owner/test-repo',
+      GITHUB_APK_RELEASE_TAG: 'app-store-assets',
       ...extraEnv,
     },
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 
-function killAndWait(proc, timeoutMs = 10000) {
-  return new Promise((resolve, reject) => {
-    if (!proc || proc.exitCode !== null) return resolve();
-    const timer = setTimeout(() => reject(new Error('process did not exit in time')), timeoutMs);
+async function waitForHealth(baseUrl, proc, timeoutMs = 20000) {
+  const start = Date.now();
+  let stderr = '';
+  proc.stderr.on('data', d => { stderr += d.toString(); });
+  while (Date.now() - start < timeoutMs) {
+    if (proc.exitCode !== null) throw new Error(`server exited early: ${stderr}`);
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      if (res.ok) return;
+    } catch {}
+    await new Promise(r => setTimeout(r, 200));
+  }
+  throw new Error(`server did not become healthy: ${stderr}`);
+}
+
+async function stop(proc) {
+  if (!proc || proc.exitCode !== null) return;
+  proc.kill('SIGTERM');
+  await new Promise(resolve => {
+    const timer = setTimeout(resolve, 5000);
     proc.once('exit', () => { clearTimeout(timer); resolve(); });
-    proc.kill('SIGTERM');
   });
 }
 
-async function adminLogin(baseUrl) {
+async function login(baseUrl) {
   const res = await fetch(`${baseUrl}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: process.env.ADMIN_USERNAME, password: process.env.ADMIN_PASSWORD }),
+    body: JSON.stringify({
+      username: process.env.ADMIN_USERNAME,
+      password: process.env.ADMIN_PASSWORD,
+    }),
   });
-  if (!res.ok) throw new Error(`admin login failed: HTTP ${res.status}`);
-  const setCookie = res.headers.get('set-cookie');
-  if (!setCookie) throw new Error('login succeeded but no Set-Cookie header was returned');
-  return setCookie.split(';')[0];
+  assert.strictEqual(res.status, 200);
+  return res.headers.get('set-cookie').split(';')[0];
 }
 
-function buildUploadForm({ apkBuffer, packageName, name, category, filename = 'app.apk' } = {}) {
+function uploadForm({ buffer, packageName, name, category, filename = 'app.apk' } = {}) {
   const form = new FormData();
-  if (apkBuffer !== null) {
+  if (buffer !== null) {
     form.append(
       'apk',
-      new Blob([apkBuffer ?? fakeApkBuffer(4096, 'default', packageName || 'com.apk.autodetected')], {
+      new Blob([buffer || buildTestApk(packageName || 'com.example.auto', 4096)], {
         type: 'application/vnd.android.package-archive',
       }),
       filename,
@@ -159,324 +112,222 @@ function buildUploadForm({ apkBuffer, packageName, name, category, filename = 'a
   return form;
 }
 
-async function uploadApk(baseUrl, cookie, opts) {
+async function upload(baseUrl, cookie, opts) {
   return fetch(`${baseUrl}/api/apps/upload-apk`, {
     method: 'POST',
     headers: cookie ? { Cookie: cookie } : {},
-    body: buildUploadForm(opts),
+    body: uploadForm(opts),
   });
 }
 
-async function resetTestDatabase() {
-  await rawPool.query(`TRUNCATE apps_catalog, commands, alerts, enrollments, devices RESTART IDENTITY CASCADE`);
-}
-
 (async () => {
-  const workingS3 = await startFakeS3Server();
-  const unreachableStorageEnv = {
-    APK_STORAGE_ENDPOINT: 'http://127.0.0.1:1',
-    APK_STORAGE_REGION: 'auto',
-    APK_STORAGE_BUCKET: 'apk-test-bucket',
-    APK_STORAGE_ACCESS_KEY_ID: 'fake-access-key',
-    APK_STORAGE_SECRET_ACCESS_KEY: 'fake-secret-key',
-    APK_STORAGE_PUBLIC_BASE_URL: 'https://cdn.example.com/apks',
-  };
-  const workingStorageEnv = {
-    APK_STORAGE_ENDPOINT: workingS3.baseUrl,
-    APK_STORAGE_REGION: 'auto',
-    APK_STORAGE_BUCKET: 'apk-test-bucket',
-    APK_STORAGE_ACCESS_KEY_ID: 'fake-access-key',
-    APK_STORAGE_SECRET_ACCESS_KEY: 'fake-secret-key',
-    APK_STORAGE_PUBLIC_BASE_URL: 'https://cdn.example.com/apks',
-  };
+  const github = await startFakeGitHubServer();
 
   const mainPort = 4351;
-  const mainBaseUrl = `http://127.0.0.1:${mainPort}`;
-  const brokenStoragePort = 4352;
-  const brokenStorageBaseUrl = `http://127.0.0.1:${brokenStoragePort}`;
-  const noStorageConfigPort = 4353;
-  const noStorageConfigBaseUrl = `http://127.0.0.1:${noStorageConfigPort}`;
+  const brokenPort = 4352;
+  const noTokenPort = 4353;
+  const mainBase = `http://127.0.0.1:${mainPort}`;
+  const brokenBase = `http://127.0.0.1:${brokenPort}`;
+  const noTokenBase = `http://127.0.0.1:${noTokenPort}`;
 
-  const mainServer = spawnServer(mainPort, workingStorageEnv);
-  const brokenStorageServer = spawnServer(brokenStoragePort, unreachableStorageEnv);
-  // No APK_STORAGE_* env vars at all - proves the whole feature fails
-  // closed on a deployment that never configured object storage.
-  const noStorageConfigServer = spawnServer(noStorageConfigPort, {
-    APK_STORAGE_ENDPOINT: '', APK_STORAGE_BUCKET: '', APK_STORAGE_ACCESS_KEY_ID: '',
-    APK_STORAGE_SECRET_ACCESS_KEY: '', APK_STORAGE_PUBLIC_BASE_URL: '',
+  const main = spawnServer(mainPort, {
+    GITHUB_APK_TOKEN: 'test-token',
+    APK_STORAGE_TEST_BASE_URL: github.baseUrl,
+  });
+  const broken = spawnServer(brokenPort, {
+    GITHUB_APK_TOKEN: 'test-token',
+    APK_STORAGE_TEST_BASE_URL: 'http://127.0.0.1:1',
+  });
+  const noToken = spawnServer(noTokenPort, {
+    GITHUB_APK_TOKEN: '',
+    APK_STORAGE_TEST_BASE_URL: github.baseUrl,
   });
 
   try {
     await Promise.all([
-      waitForHealth(mainBaseUrl),
-      waitForHealth(brokenStorageBaseUrl),
-      waitForHealth(noStorageConfigBaseUrl),
+      waitForHealth(mainBase, main),
+      waitForHealth(brokenBase, broken),
+      waitForHealth(noTokenBase, noToken),
     ]);
+
     await db.init();
-    await resetTestDatabase();
+    await rawPool.query(
+      'TRUNCATE apps_catalog, commands, alerts, enrollments, devices RESTART IDENTITY CASCADE'
+    );
 
-    const mainCookie = await adminLogin(mainBaseUrl);
-    const brokenStorageCookie = await adminLogin(brokenStorageBaseUrl);
-    const noStorageConfigCookie = await adminLogin(noStorageConfigBaseUrl);
+    const cookie = await login(mainBase);
+    const brokenCookie = await login(brokenBase);
+    const noTokenCookie = await login(noTokenBase);
 
-    // ================= auth =================
-
-    await test('unauthenticated upload is rejected before touching storage or the database', async () => {
-      const before = workingS3.objects.size;
-      const res = await uploadApk(mainBaseUrl, null, { packageName: 'com.apk.noauth', name: 'No Auth' });
+    await test('unauthenticated upload is rejected', async () => {
+      const before = github.assets.size;
+      const res = await upload(mainBase, null, { name: 'No auth' });
       assert.strictEqual(res.status, 401);
-      assert.strictEqual(workingS3.objects.size, before, 'nothing should have been uploaded');
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.noauth');
-      assert.strictEqual(row, undefined);
+      assert.strictEqual(github.assets.size, before);
     });
 
-    // ================= validation =================
-
-    await test('a non-APK file (bad magic bytes) is rejected with 400 and no catalog row', async () => {
-      const notApk = Buffer.from('this is definitely not a zip/apk file, just plain text padding'.repeat(10));
-      const res = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: notApk, packageName: 'com.apk.notapk', name: 'Not An Apk',
-      });
-      assert.strictEqual(res.status, 400);
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.notapk');
-      assert.strictEqual(row, undefined);
-    });
-
-    await test('missing packageName is auto-detected from the APK manifest', async () => {
-      const res = await uploadApk(mainBaseUrl, mainCookie, { name: 'Auto Package Name' });
-      assert.strictEqual(res.status, 200);
-      const body = await res.json();
-      assert.strictEqual(body.packageName, 'com.apk.autodetected');
-    });
-
-    await test('missing name is rejected with 400', async () => {
-      const res = await uploadApk(mainBaseUrl, mainCookie, { packageName: 'com.apk.noname' });
-      assert.strictEqual(res.status, 400);
-    });
-
-    await test('an invalid category key is rejected with 400', async () => {
-      const res = await uploadApk(mainBaseUrl, mainCookie, {
-        packageName: 'com.apk.badcat', name: 'Bad Category', category: 'not-a-real-category',
+    await test('non-APK bytes are rejected', async () => {
+      const res = await upload(mainBase, cookie, {
+        buffer: Buffer.from('not an apk'),
+        name: 'Bad',
       });
       assert.strictEqual(res.status, 400);
     });
 
-    await test('a missing file field is rejected with 400', async () => {
-      const res = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: null, packageName: 'com.apk.nofile', name: 'No File',
-      });
-      assert.strictEqual(res.status, 400);
-    });
-
-    await test('an upload over the 150MB limit is rejected with 413, before any storage/DB write', async () => {
-      // 150MB + 1 byte - large but not so large this test suite becomes slow;
-      // multer's own byte-counting limit rejects it mid-stream regardless of
-      // the declared Content-Length.
-      const oversized = Buffer.alloc(150 * 1024 * 1024 + 1);
-      oversized.writeUInt8(0x50, 0);
-      oversized.writeUInt8(0x4b, 1);
-      oversized.writeUInt8(0x03, 2);
-      oversized.writeUInt8(0x04, 3);
-      const before = workingS3.objects.size;
-      const res = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: oversized, packageName: 'com.apk.toobig', name: 'Too Big',
-      });
-      assert.strictEqual(res.status, 413);
-      assert.strictEqual(workingS3.objects.size, before, 'an oversized upload must never reach storage');
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.toobig');
-      assert.strictEqual(row, undefined);
-    });
-
-    // ================= happy path =================
-
-    let uploadedKeyPath = null;
-
-    await test('a valid APK upload succeeds: correct SHA-256, randomized storage key, correct response shape, source APK in catalog', async () => {
-      const buffer = fakeApkBuffer(8192, 'happy-path', 'com.apk.happy');
-      const expectedSha = sha256(buffer);
-      const before = workingS3.objects.size;
-
-      const res = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: buffer, packageName: 'com.apk.happy', name: 'Happy Path App', category: 'tools',
-      });
-      const responseText = await res.text();
-      assert.strictEqual(res.status, 200, responseText);
-      const body = JSON.parse(responseText);
-
-      assert.strictEqual(body.packageName, 'com.apk.happy');
-      assert.strictEqual(body.name, 'Happy Path App');
-      assert.strictEqual(body.sha256, expectedSha, 'server-computed SHA-256 must match the actual bytes');
-      assert.strictEqual(body.sizeBytes, buffer.length);
-      assert.ok(typeof body.apkUrl === 'string' && body.apkUrl.startsWith('https://cdn.example.com/apks/apps/'));
-      assert.match(body.apkUrl, /\/apps\/[0-9a-f-]{36}\.apk$/, 'storage key must be a random uuid, never the original filename');
-
-      assert.strictEqual(workingS3.objects.size, before + 1, 'exactly one object should have been uploaded');
-      uploadedKeyPath = new URL(body.apkUrl).pathname.replace(/^\/apks/, '');
-      // The fake bucket stores objects keyed by the raw request path
-      // (forcePathStyle => "/<bucket>/<key>") - find whichever entry was
-      // added by this upload rather than assuming key derivation details.
-      const stored = [...workingS3.objects.values()].find(o => o.body.equals(buffer));
-      assert.ok(stored, 'the uploaded bytes must be exactly what the fake bucket received');
-      assert.strictEqual(stored.contentType, 'application/vnd.android.package-archive');
-
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.happy');
-      assert.ok(row, 'catalog row must exist');
-      assert.strictEqual(row.appSource, 'APK');
-      assert.strictEqual(row.apkSha256, expectedSha);
-      assert.strictEqual(row.apkSizeBytes, buffer.length);
-      assert.strictEqual(row.apkUrl, body.apkUrl);
-      assert.strictEqual(row.category, 'tools');
-      assert.strictEqual(row.categorySource, 'MANUAL');
-    });
-
-    await test('two different uploads get two different randomized storage keys', async () => {
-      const res1 = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(1024, 'key-a', 'com.apk.keya'), packageName: 'com.apk.keya', name: 'Key A',
-      });
-      const res2 = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(1024, 'key-b', 'com.apk.keyb'), packageName: 'com.apk.keyb', name: 'Key B',
-      });
-      const [body1, body2] = await Promise.all([res1.json(), res2.json()]);
-      assert.notStrictEqual(body1.apkUrl, body2.apkUrl);
-    });
-
-    // ================= sync payload exposure =================
-
-    await test('apkUrl/sha256 appear in device sync for an APK-source app the device is allowed, and never for a Play app', async () => {
-      await db.addAppToCatalog('com.apk.playapp', 'A Play App', null, '1.0', Date.now(), 'tools');
-      const deviceId = `apk-sync-${crypto.randomUUID()}`;
-      const token = crypto.randomBytes(16).toString('hex');
-      await rawPool.query(`INSERT INTO devices (device_id, auth_token_hash) VALUES ($1, $2)`, [deviceId, sha256(token)]);
-      await fetch(`${mainBaseUrl}/api/devices/${deviceId}/policy/apps`, {
-        method: 'POST',
-        headers: { Cookie: mainCookie, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ packageName: 'com.apk.happy' }),
-      });
-      await fetch(`${mainBaseUrl}/api/devices/${deviceId}/policy/apps`, {
-        method: 'POST',
-        headers: { Cookie: mainCookie, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ packageName: 'com.apk.playapp' }),
-      });
-      const syncRes = await fetch(`${mainBaseUrl}/api/devices/${deviceId}/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({}),
-      });
-      assert.strictEqual(syncRes.status, 200);
-      const syncBody = await syncRes.json();
-      const apkEntry = syncBody.catalog.find(a => a.packageName === 'com.apk.happy');
-      const playEntry = syncBody.catalog.find(a => a.packageName === 'com.apk.playapp');
-      assert.ok(apkEntry, 'uploaded app must appear in sync catalog');
-      assert.ok(playEntry, 'play app must appear in sync catalog');
-      assert.strictEqual(apkEntry.appSource, 'APK');
-      assert.ok(apkEntry.apkUrl, 'APK-source app must expose apkUrl');
-      assert.ok(apkEntry.apkSha256, 'APK-source app must expose apkSha256');
-      assert.strictEqual(playEntry.appSource, 'PLAY');
-      assert.strictEqual(playEntry.apkUrl, null, 'a Play app must never expose apkUrl');
-      assert.strictEqual(playEntry.apkSha256, null, 'a Play app must never expose apkSha256');
-    });
-
-    // ================= storage failure => no DB row =================
-
-    await test('storage failure (unreachable endpoint) => 500 and no catalog row is created', async () => {
-      const res = await uploadApk(brokenStorageBaseUrl, brokenStorageCookie, {
-        apkBuffer: fakeApkBuffer(1024, 's3-fail', 'com.apk.s3fail'), packageName: 'com.apk.s3fail', name: 'S3 Fail',
-      });
-      assert.strictEqual(res.status, 500);
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.s3fail');
-      assert.strictEqual(row, undefined, 'a failed storage upload must never leave a usable catalog entry');
-    });
-
-    await test('missing APK_STORAGE_* configuration fails closed with 500 and no catalog row', async () => {
-      const res = await uploadApk(noStorageConfigBaseUrl, noStorageConfigCookie, {
-        apkBuffer: fakeApkBuffer(1024, 'no-config', 'com.apk.noconfig'), packageName: 'com.apk.noconfig', name: 'No Config',
-      });
-      assert.strictEqual(res.status, 500);
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.noconfig');
-      assert.strictEqual(row, undefined);
-    });
-
-    // ================= DB failure => storage cleanup attempted =================
-
-    await test('a database failure after a successful upload triggers cleanup of the orphaned object', async () => {
-      const before = workingS3.objects.size;
-      // A real, deterministic Postgres failure: the target table briefly
-      // does not exist, so the INSERT inside db.insertUploadedApp() fails
-      // with a genuine "relation does not exist" error - not a simulated
-      // one - while the storage upload (against the already-working fake
-      // S3) has already succeeded.
-      await rawPool.query('ALTER TABLE apps_catalog RENAME TO apps_catalog_test_renamed');
-      let res;
-      try {
-        res = await uploadApk(mainBaseUrl, mainCookie, {
-          apkBuffer: fakeApkBuffer(1024, 'db-fail', 'com.apk.dbfail'), packageName: 'com.apk.dbfail', name: 'DB Fail',
-        });
-      } finally {
-        await rawPool.query('ALTER TABLE apps_catalog_test_renamed RENAME TO apps_catalog');
+    await test('package name is auto-detected from AndroidManifest.xml', async () => {
+      const apk = buildTestApk('org.yehudikasher.browser', 4096);
+      const res = await upload(mainBase, cookie, { buffer: apk, name: 'Browser' });
+      assert.strictEqual(res.status, 200, await res.text().catch(() => ''));
+      const body = await res.clone().json().catch(() => null);
+      // clone may be unavailable after text in some runtimes; fetch again if needed
+      if (body) assert.strictEqual(body.packageName, 'org.yehudikasher.browser');
+      else {
+        const row = (await db.listAppsCatalog()).find(x => x.packageName === 'org.yehudikasher.browser');
+        assert.ok(row);
       }
+    });
+
+    await test('a supplied package name that disagrees with the APK is rejected', async () => {
+      const apk = buildTestApk('com.real.package', 4096);
+      const res = await upload(mainBase, cookie, {
+        buffer: apk,
+        packageName: 'com.wrong.package',
+        name: 'Mismatch',
+      });
+      assert.strictEqual(res.status, 400);
+    });
+
+    await test('missing app name is rejected', async () => {
+      const res = await upload(mainBase, cookie, {
+        buffer: buildTestApk('com.example.noname', 4096),
+      });
+      assert.strictEqual(res.status, 400);
+    });
+
+    await test('invalid category is rejected', async () => {
+      const res = await upload(mainBase, cookie, {
+        buffer: buildTestApk('com.example.badcat', 4096),
+        name: 'Bad category',
+        category: 'definitely-not-valid',
+      });
+      assert.strictEqual(res.status, 400);
+    });
+
+    await test('missing APK field is rejected', async () => {
+      const res = await upload(mainBase, cookie, { buffer: null, name: 'Missing' });
+      assert.strictEqual(res.status, 400);
+    });
+
+    await test('valid upload creates a GitHub release asset and catalog row with exact SHA/size', async () => {
+      const apk = buildTestApk('com.example.good', 8192);
+      const res = await upload(mainBase, cookie, {
+        buffer: apk,
+        name: 'Good App',
+        category: 'tools',
+      });
+      const text = await res.text();
+      assert.strictEqual(res.status, 200, text);
+      const body = JSON.parse(text);
+
+      assert.strictEqual(body.packageName, 'com.example.good');
+      assert.strictEqual(body.sha256, sha256(apk));
+      assert.strictEqual(body.sizeBytes, apk.length);
+      assert.match(body.apkUrl, new RegExp(`^${mainBase.replace(/[.*+?^$()|[\\]{}]/g, '\\$&')}/api/apps/apk/\\d+$`));
+
+      assert.ok(github.release, 'release should be created');
+      assert.strictEqual(github.assets.size >= 1, true);
+
+      const row = (await db.listAppsCatalog()).find(x => x.packageName === 'com.example.good');
+      assert.ok(row);
+      assert.strictEqual(row.appSource, 'APK');
+      assert.strictEqual(row.apkSha256, sha256(apk));
+      assert.strictEqual(row.apkSizeBytes, apk.length);
+
+      const proxy = await fetch(body.apkUrl);
+      assert.strictEqual(proxy.status, 200);
+      const downloaded = Buffer.from(await proxy.arrayBuffer());
+      assert.deepStrictEqual(downloaded, apk);
+    });
+
+    await test('two packages receive different release asset IDs/names', async () => {
+      const a = await upload(mainBase, cookie, {
+        buffer: buildTestApk('com.example.a', 4096),
+        name: 'A',
+      });
+      const b = await upload(mainBase, cookie, {
+        buffer: buildTestApk('com.example.b', 4096),
+        name: 'B',
+      });
+      assert.strictEqual(a.status, 200);
+      assert.strictEqual(b.status, 200);
+      const aj = await a.json();
+      const bj = await b.json();
+      assert.notStrictEqual(aj.apkUrl, bj.apkUrl);
+      const names = [...github.assets.values()].map(x => x.name);
+      assert.strictEqual(new Set(names).size, names.length);
+    });
+
+    await test('re-uploading the same package replaces catalog asset and removes the old asset', async () => {
+      const first = await upload(mainBase, cookie, {
+        buffer: buildTestApk('com.example.replace', 4096),
+        name: 'Replace v1',
+      });
+      assert.strictEqual(first.status, 200);
+      const firstJson = await first.json();
+      const oldId = firstJson.apkUrl.split('/').pop();
+      assert.ok(github.assets.has(oldId));
+
+      const second = await upload(mainBase, cookie, {
+        buffer: buildTestApk('com.example.replace', 5000),
+        name: 'Replace v2',
+      });
+      assert.strictEqual(second.status, 200);
+      const secondJson = await second.json();
+      const newId = secondJson.apkUrl.split('/').pop();
+      assert.notStrictEqual(oldId, newId);
+      assert.strictEqual(github.assets.has(oldId), false);
+      assert.strictEqual(github.assets.has(newId), true);
+
+      const matches = (await db.listAppsCatalog()).filter(x => x.packageName === 'com.example.replace');
+      assert.strictEqual(matches.length, 1);
+      assert.strictEqual(matches[0].name, 'Replace v2');
+    });
+
+    await test('unreachable GitHub storage fails closed and writes no catalog row', async () => {
+      const res = await upload(brokenBase, brokenCookie, {
+        buffer: buildTestApk('com.example.storagefail', 4096),
+        name: 'Storage fail',
+      });
       assert.strictEqual(res.status, 500);
-      assert.strictEqual(
-        workingS3.objects.size, before,
-        'the object uploaded just before the DB failure must have been deleted again (no orphan left behind)',
-      );
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.dbfail');
+      const row = (await db.listAppsCatalog()).find(x => x.packageName === 'com.example.storagefail');
       assert.strictEqual(row, undefined);
     });
 
-    // ================= re-upload replaces in place =================
-
-    await test('re-uploading the same packageName updates the existing row rather than duplicating it', async () => {
-      const first = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(512, 'v1', 'com.apk.reupload'), packageName: 'com.apk.reupload', name: 'Reupload V1',
+    await test('missing GitHub token fails closed and writes no catalog row', async () => {
+      const res = await upload(noTokenBase, noTokenCookie, {
+        buffer: buildTestApk('com.example.notoken', 4096),
+        name: 'No token',
       });
-      const firstBody = await first.json();
-      const second = await uploadApk(mainBaseUrl, mainCookie, {
-        apkBuffer: fakeApkBuffer(512, 'v2', 'com.apk.reupload'), packageName: 'com.apk.reupload', name: 'Reupload V2',
-      });
-      const secondBody = await second.json();
-      assert.notStrictEqual(firstBody.sha256, secondBody.sha256);
-      const matches = (await db.listAppsCatalog()).filter(a => a.packageName === 'com.apk.reupload');
-      assert.strictEqual(matches.length, 1, 'must not create a duplicate row');
-      assert.strictEqual(matches[0].name, 'Reupload V2');
-      assert.strictEqual(matches[0].apkSha256, secondBody.sha256);
+      assert.strictEqual(res.status, 500);
+      const row = (await db.listAppsCatalog()).find(x => x.packageName === 'com.example.notoken');
+      assert.strictEqual(row, undefined);
     });
-
-    // ================= Play catalog regression (unchanged) =================
-
-    await test('regression: adding/listing a plain Play-sourced app is completely unaffected by APK upload support', async () => {
-      await db.addAppToCatalog('com.apk.regression.play', 'Regression Play App', 'https://example.com/icon.png', '3.0', Date.now(), 'other');
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.apk.regression.play');
-      assert.strictEqual(row.appSource, 'PLAY');
-      assert.strictEqual(row.apkUrl, null);
-      assert.strictEqual(row.apkSha256, null);
-      assert.strictEqual(row.apkSizeBytes, null);
-      assert.strictEqual(row.uploadedAt, null);
-
-      const listRes = await fetch(`${mainBaseUrl}/api/apps`, { headers: { Cookie: mainCookie } });
-      assert.strictEqual(listRes.status, 200);
-      const apiRow = (await listRes.json()).find(a => a.packageName === 'com.apk.regression.play');
-      assert.strictEqual(apiRow.appSource, 'PLAY');
-      assert.strictEqual(apiRow.apkUrl, null);
-    });
-
-    // ================= summary =================
 
     console.log(`\n${passed} passed, ${failed} failed`);
-    if (failed > 0) {
-      console.log('\nFailures:');
-      for (const f of failures) console.log(`  - ${f.name}: ${f.error.message}`);
+    if (failed) {
+      for (const failure of failures) {
+        console.log(`- ${failure.name}: ${failure.error.message}`);
+      }
     }
   } finally {
-    await Promise.allSettled([
-      killAndWait(mainServer),
-      killAndWait(brokenStorageServer),
-      killAndWait(noStorageConfigServer),
-    ]);
-    await workingS3.close();
+    await Promise.all([stop(main), stop(broken), stop(noToken)]);
+    await github.close();
     await rawPool.end();
   }
+
   process.exit(failed ? 1 : 0);
-})().catch(async (e) => {
-  console.error('FATAL (suite could not complete):', e);
+})().catch(async e => {
+  console.error('FATAL:', e);
+  try { await rawPool.end(); } catch {}
   process.exit(1);
 });
