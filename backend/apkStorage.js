@@ -88,7 +88,12 @@ function generateApkStorageKey() {
   return `${crypto.randomUUID()}.apk`;
 }
 
-async function uploadApk(config, key, buffer) {
+function generateIconStorageKey(extension = 'png') {
+  const safe = ['png', 'webp', 'jpg'].includes(extension) ? extension : 'png';
+  return `${crypto.randomUUID()}.${safe}`;
+}
+
+async function uploadAsset(config, key, buffer, contentType) {
   const release = await ensureRelease(config);
   const uploadUrl = new URL(
     `${config.uploadBase}/repos/${config.repository}/releases/${release.id}/assets?name=${encodeURIComponent(key)}`
@@ -100,7 +105,7 @@ async function uploadApk(config, key, buffer) {
       method: 'POST',
       headers: {
         ...headers(config),
-        'Content-Type': APK_CONTENT_TYPE,
+        'Content-Type': contentType,
         'Content-Length': buffer.length,
       },
     }, res => {
@@ -131,6 +136,15 @@ async function uploadApk(config, key, buffer) {
     browserDownloadUrl: body.browser_download_url,
     name: body.name,
   };
+}
+
+async function uploadApk(config, key, buffer) {
+  return uploadAsset(config, key, buffer, APK_CONTENT_TYPE);
+}
+
+async function uploadIcon(config, key, buffer, contentType) {
+  if (!/^image\/(png|webp|jpeg)$/.test(contentType)) throw new Error('unsupported icon content type');
+  return uploadAsset(config, key, buffer, contentType);
 }
 
 async function deleteApk(config, assetId) {
@@ -166,7 +180,9 @@ module.exports = {
   APK_CONTENT_TYPE,
   loadStorageConfig,
   generateApkStorageKey,
+  generateIconStorageKey,
   uploadApk,
+  uploadIcon,
   deleteApk,
   downloadApk,
 };

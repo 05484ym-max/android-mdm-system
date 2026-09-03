@@ -55,6 +55,7 @@ ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_url TEXT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_sha256 TEXT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_size_bytes BIGINT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_storage_key TEXT;
+ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_icon_storage_key TEXT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS app_source TEXT NOT NULL DEFAULT 'PLAY'
   CHECK (app_source IN ('PLAY', 'APK'));
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ;
@@ -553,6 +554,7 @@ function mapCatalogRow(row) {
     apkSha256: row.apk_sha256,
     apkSizeBytes: row.apk_size_bytes != null ? Number(row.apk_size_bytes) : null,
     apkStorageKey: row.apk_storage_key,
+    apkIconStorageKey: row.apk_icon_storage_key,
     uploadedAt: row.uploaded_at ? row.uploaded_at.toISOString() : null,
   };
 }
@@ -561,7 +563,7 @@ async function listAppsCatalog() {
   const { rows } = await pool.query(
     `SELECT package_name, name, icon_url, play_version, play_updated_at, added_at,
             category, category_source, is_recommended, sort_order,
-            app_source, apk_url, apk_sha256, apk_size_bytes, apk_storage_key, uploaded_at
+            app_source, apk_url, apk_sha256, apk_size_bytes, apk_storage_key, apk_icon_storage_key, uploaded_at
        FROM apps_catalog
       ORDER BY sort_order ASC, name ASC`,
   );
@@ -611,25 +613,33 @@ async function addAppToCatalog(packageName, name, iconUrl, playVersion = null, p
   );
 }
 
-async function insertUploadedApp({ packageName, name, category, apkUrl, apkSha256, apkSizeBytes, apkStorageKey }) {
+async function insertUploadedApp({
+  packageName, name, category, iconUrl, apkUrl, apkSha256, apkSizeBytes,
+  apkStorageKey, apkIconStorageKey,
+}) {
   const { rows } = await pool.query(
     `INSERT INTO apps_catalog
-       (package_name, name, category, category_source, app_source,
-        apk_url, apk_sha256, apk_size_bytes, apk_storage_key, uploaded_at)
-     VALUES ($1, $2, COALESCE($3, 'other'), CASE WHEN $3 IS NOT NULL THEN 'MANUAL' ELSE 'DEFAULT' END,
-             'APK', $4, $5, $6, $7, now())
+       (package_name, name, icon_url, category, category_source, app_source,
+        apk_url, apk_sha256, apk_size_bytes, apk_storage_key, apk_icon_storage_key, uploaded_at)
+     VALUES ($1, $2, $3, COALESCE($4, 'other'), CASE WHEN $4 IS NOT NULL THEN 'MANUAL' ELSE 'DEFAULT' END,
+             'APK', $5, $6, $7, $8, $9, now())
      ON CONFLICT (package_name) DO UPDATE SET
        name = $2,
-       category = CASE WHEN $3 IS NOT NULL THEN $3 ELSE apps_catalog.category END,
-       category_source = CASE WHEN $3 IS NOT NULL THEN 'MANUAL' ELSE apps_catalog.category_source END,
+       icon_url = COALESCE($3, apps_catalog.icon_url),
+       category = CASE WHEN $4 IS NOT NULL THEN $4 ELSE apps_catalog.category END,
+       category_source = CASE WHEN $4 IS NOT NULL THEN 'MANUAL' ELSE apps_catalog.category_source END,
        app_source = 'APK',
-       apk_url = $4,
-       apk_sha256 = $5,
-       apk_size_bytes = $6,
-       apk_storage_key = $7,
+       apk_url = $5,
+       apk_sha256 = $6,
+       apk_size_bytes = $7,
+       apk_storage_key = $8,
+       apk_icon_storage_key = COALESCE($9, apps_catalog.apk_icon_storage_key),
        uploaded_at = now()
      RETURNING *`,
-    [packageName, name, category || null, apkUrl, apkSha256, apkSizeBytes, apkStorageKey],
+    [
+      packageName, name, iconUrl || null, category || null, apkUrl, apkSha256,
+      apkSizeBytes, apkStorageKey, apkIconStorageKey || null,
+    ],
   );
   return mapCatalogRow(rows[0]);
 }

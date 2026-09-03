@@ -850,10 +850,29 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
   const existingApp = (await db.listAppsCatalog()).find(app => app.packageName === packageName) || null;
   const sha256Hex = crypto.createHash('sha256').update(file.buffer).digest('hex');
   const storageName = apkStorage.generateApkStorageKey();
+  const extractedIcon = apkManifest.extractAppIcon(file.buffer);
 
   const uploaded = await apkStorage.uploadApk(storageConfig, storageName, file.buffer);
+  let uploadedIcon = null;
+  try {
+    if (extractedIcon) {
+      uploadedIcon = await apkStorage.uploadIcon(
+        storageConfig,
+        apkStorage.generateIconStorageKey(extractedIcon.extension),
+        extractedIcon.buffer,
+        extractedIcon.contentType,
+      );
+    }
+  } catch (e) {
+    await apkStorage.deleteApk(storageConfig, uploaded.assetId);
+    throw e;
+  }
+
   const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   const apkUrl = `${publicBaseUrl}/api/apps/apk/${encodeURIComponent(uploaded.assetId)}`;
+  const iconUrl = uploadedIcon
+    ? `${publicBaseUrl}/api/apps/icon/${encodeURIComponent(uploadedIcon.assetId)}`
+    : null;
 
   let row;
   try {
@@ -861,13 +880,16 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
       packageName,
       name: name.slice(0, 100),
       category,
+      iconUrl,
       apkUrl,
       apkSha256: sha256Hex,
       apkSizeBytes: file.buffer.length,
       apkStorageKey: uploaded.assetId,
+      apkIconStorageKey: uploadedIcon ? uploadedIcon.assetId : null,
     });
   } catch (e) {
     await apkStorage.deleteApk(storageConfig, uploaded.assetId);
+    if (uploadedIcon) await apkStorage.deleteApk(storageConfig, uploadedIcon.assetId);
     throw e;
   }
 
@@ -875,14 +897,37 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
       existingApp.apkStorageKey && existingApp.apkStorageKey !== uploaded.assetId) {
     await apkStorage.deleteApk(storageConfig, existingApp.apkStorageKey);
   }
+  if (uploadedIcon && existingApp && existingApp.apkIconStorageKey &&
+      existingApp.apkIconStorageKey !== uploadedIcon.assetId) {
+    await apkStorage.deleteApk(storageConfig, existingApp.apkIconStorageKey);
+  }
 
   res.json({
     packageName: row.packageName,
     name: row.name,
+    iconUrl: row.iconUrl,
     apkUrl: row.apkUrl,
     sha256: row.apkSha256,
     sizeBytes: row.apkSizeBytes,
   });
+}));
+
+app.get('/api/apps/icon/:assetId', wrap(async (req, res) => {
+  if (!/^\d+$/.test(req.params.assetId)) {
+    return res.status(400).json({ error: 'invalid icon asset id' });
+  }
+  const storageConfig = apkStorage.loadStorageConfig();
+  const upstream = await apkStorage.downloadApk(storageConfig, req.params.assetId);
+  const contentType = upstream.headers.get('content-type') || '';
+  if (!/^image\/(png|webp|jpeg)(?:;|$)/i.test(contentType)) {
+    throw new Error('GitHub icon asset returned an invalid content type');
+  }
+  res.setHeader('Content-Type', contentType);
+  const length = upstream.headers.get('content-length');
+  if (length) res.setHeader('Content-Length', length);
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  if (!upstream.body) throw new Error('GitHub icon download returned an empty body');
+  Readable.fromWeb(upstream.body).pipe(res);
 }));
 
 app.get('/api/apps/apk/:assetId', wrap(async (req, res) => {
