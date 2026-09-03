@@ -213,6 +213,22 @@ ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_size_bytes BIGINT;
 CREATE INDEX IF NOT EXISTS customer_updates_published_idx
   ON customer_updates (pinned DESC, published_at DESC, created_at DESC)
   WHERE published = true;
+
+-- Automatic browser-domain classification cache. Decisions are server-side
+-- and shared by the whole fleet so a domain is classified once, not once per
+-- device. expires_at makes stale vendor classifications self-invalidating.
+CREATE TABLE IF NOT EXISTS browser_domain_classifications (
+  host        TEXT PRIMARY KEY,
+  allowed     BOOLEAN NOT NULL,
+  reason      TEXT NOT NULL,
+  categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source      TEXT NOT NULL,
+  checked_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS browser_domain_classifications_expires_idx
+  ON browser_domain_classifications (expires_at);
 `;
 
 async function init() {
@@ -1225,6 +1241,66 @@ async function listPublishedCustomerUpdatesForDevice(limit) {
   }));
 }
 
+
+// ---------- filtered browser automatic domain classification ----------
+
+async function getBrowserDomainClassification(host) {
+  const { rows } = await pool.query(
+    `SELECT host, allowed, reason, categories, source, checked_at, expires_at
+       FROM browser_domain_classifications
+      WHERE host = $1 AND expires_at > now()`,
+    [host],
+  );
+  if (!rows[0]) return null;
+  const row = rows[0];
+  return {
+    host: row.host,
+    allowed: row.allowed,
+    reason: row.reason,
+    categories: row.categories || [],
+    source: row.source,
+    checkedAt: row.checked_at.toISOString(),
+    expiresAt: row.expires_at.toISOString(),
+  };
+}
+
+async function saveBrowserDomainClassification({
+  host, allowed, reason, categories, source, ttlMs,
+}) {
+  const safeTtl = Math.max(60_000, Math.min(Number(ttlMs) || 600_000, 30 * 24 * 60 * 60 * 1000));
+  const { rows } = await pool.query(
+    `INSERT INTO browser_domain_classifications
+       (host, allowed, reason, categories, source, checked_at, expires_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5, now(), now() + ($6::bigint * interval '1 millisecond'))
+     ON CONFLICT (host) DO UPDATE SET
+       allowed = EXCLUDED.allowed,
+       reason = EXCLUDED.reason,
+       categories = EXCLUDED.categories,
+       source = EXCLUDED.source,
+       checked_at = now(),
+       expires_at = EXCLUDED.expires_at
+     RETURNING host, allowed, reason, categories, source, checked_at, expires_at`,
+    [host, allowed, reason, JSON.stringify(categories || []), source, safeTtl],
+  );
+  const row = rows[0];
+  return {
+    host: row.host,
+    allowed: row.allowed,
+    reason: row.reason,
+    categories: row.categories || [],
+    source: row.source,
+    checkedAt: row.checked_at.toISOString(),
+    expiresAt: row.expires_at.toISOString(),
+  };
+}
+
+async function deleteExpiredBrowserDomainClassifications() {
+  const { rowCount } = await pool.query(
+    `DELETE FROM browser_domain_classifications WHERE expires_at <= now()`,
+  );
+  return rowCount;
+}
+
 module.exports = {
   init,
   getDevice,
@@ -1272,4 +1348,7 @@ module.exports = {
   setCustomerUpdatePublished,
   deleteCustomerUpdate,
   listPublishedCustomerUpdatesForDevice,
+  getBrowserDomainClassification,
+  saveBrowserDomainClassification,
+  deleteExpiredBrowserDomainClassifications,
 };

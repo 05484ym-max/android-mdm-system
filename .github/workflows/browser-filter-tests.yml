@@ -1,0 +1,121 @@
+name: Browser Filtering Tests
+
+on:
+  push:
+    branches:
+      - feature/automatic-browser-filtering
+      - main
+    paths:
+      - 'backend/browserClassifier.js'
+      - 'backend/publicUrl.js'
+      - 'backend/db.js'
+      - 'backend/index.js'
+      - 'backend/test-browser-classifier.js'
+      - 'backend/test-public-url.js'
+      - '.github/workflows/browser-filter-tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'backend/browserClassifier.js'
+      - 'backend/publicUrl.js'
+      - 'backend/db.js'
+      - 'backend/index.js'
+      - 'backend/test-browser-classifier.js'
+      - 'backend/test-public-url.js'
+      - '.github/workflows/browser-filter-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Browser classifier unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Test category policy
+        working-directory: backend
+        run: node test-browser-classifier.js
+      - name: Test public URL construction
+        working-directory: backend
+        run: node test-public-url.js
+
+  fail-closed-http:
+    name: Browser classifier fail-closed HTTP (real PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: browser_test
+          POSTGRES_PASSWORD: browser_test_pw
+          POSTGRES_DB: browser_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U browser_test -d browser_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ADMIN_USERNAME: browser_admin
+      ADMIN_PASSWORD: browser_admin_password
+      JWT_SECRET: browser-test-jwt
+      DATABASE_SSL: disable
+      SECURE_COOKIES: '0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Start backend
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://browser_test:browser_test_pw@127.0.0.1:5432/browser_test
+          PORT: '4555'
+        run: |
+          node index.js > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4555/health >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat server.log
+          exit 1
+      - name: Prove missing classifier credentials fail closed
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/result.json -w '%{http_code}'             'http://127.0.0.1:4555/api/browser/check?host=example.com')
+          cat /tmp/result.json
+          test "$code" = "503"
+          node -e "const j=require('/tmp/result.json'); if(j.allowed!==false||j.reason!=='classifier_not_configured') process.exit(1)"
+      - name: Show log on failure
+        if: failure()
+        working-directory: backend
+        run: cat server.log || true
+      - name: Stop backend
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f server.pid ]; then kill "$(cat server.pid)" 2>/dev/null || true; fi
