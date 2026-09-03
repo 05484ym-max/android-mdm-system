@@ -255,6 +255,15 @@ async function upload(baseUrl, cookie, opts) {
       assert.strictEqual(row.iconUrl, body.iconUrl);
       assert.ok(row.apkIconStorageKey);
 
+      const iconAssetId = body.iconUrl.split('/').pop();
+      const storedIconAsset = github.assets.get(iconAssetId);
+      assert.ok(storedIconAsset, 'uploaded icon asset should exist');
+      // GitHub Release downloads can arrive as application/octet-stream even
+      // when the asset was uploaded as image/png. The public icon proxy must
+      // identify the image from its bytes instead of trusting that transport
+      // header, otherwise the admin panel falls back to the app's first letter.
+      storedIconAsset.contentType = 'application/octet-stream';
+
       const iconProxy = await fetch(body.iconUrl);
       assert.strictEqual(iconProxy.status, 200);
       assert.strictEqual(iconProxy.headers.get('content-type'), 'image/png');
