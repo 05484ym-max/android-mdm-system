@@ -4,8 +4,8 @@ from policy import POLICY_VERSION, evaluate
 
 
 class HarediStrictPolicyTests(unittest.TestCase):
-    def test_policy_version_is_permissive_v3(self):
-        self.assertEqual(POLICY_VERSION, "HAREDI_STRICT_V3_PERMISSIVE")
+    def test_policy_version_is_group_safe_v4(self):
+        self.assertEqual(POLICY_VERSION, "HAREDI_STRICT_V4_GROUP_SAFE")
 
     def test_nsfw_blocks(self):
         result = evaluate(0.91, [], {"a photograph with no person": 0.9})
@@ -38,6 +38,32 @@ class HarediStrictPolicyTests(unittest.TestCase):
         self.assertEqual(result["reason"], "female_detected")
         self.assertEqual(result["details"]["femaleFaceCount"], 1)
 
+    def test_visible_male_face_cannot_cancel_siglip_woman_signal(self):
+        result = evaluate(
+            0.02,
+            [{"female": 0.02, "male": 0.98, "detection": 0.98}],
+            {
+                "a photograph of a woman": 0.57,
+                "a photograph of a man": 0.91,
+                "a photograph with no person": 0.01,
+            },
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "female_detected")
+
+    def test_high_male_score_cannot_cancel_ambiguous_female_signal(self):
+        result = evaluate(
+            0.02,
+            [],
+            {
+                "a photograph of a woman": 0.46,
+                "a photograph of a man": 0.88,
+                "a photograph with no person": 0.04,
+            },
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "ambiguous_person")
+
     def test_ambiguous_face_blocks(self):
         result = evaluate(
             0.02,
@@ -60,7 +86,7 @@ class HarediStrictPolicyTests(unittest.TestCase):
         self.assertFalse(result["allowed"])
         self.assertEqual(result["reason"], "female_detected")
 
-    def test_confident_male_face_can_pass(self):
+    def test_confident_male_face_can_pass_when_female_signal_is_low(self):
         result = evaluate(
             0.02,
             [{"female": 0.03, "male": 0.97, "detection": 0.96}],
