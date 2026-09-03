@@ -1891,6 +1891,12 @@ function blockedImageSvg() {
   );
 }
 
+function safeFilterReasonHeader(reason) {
+  return String(reason || 'blocked')
+    .replace(/[^a-zA-Z0-9_.:-]/g, '_')
+    .slice(0, 80);
+}
+
 function sendBlockedImage(res, reason) {
   const svg = blockedImageSvg();
   res.status(200);
@@ -1901,7 +1907,7 @@ function sendBlockedImage(res, reason) {
   // Stable machine-readable reason is useful for diagnostics/tests without
   // exposing vendor details inside the visible placeholder.
   res.setHeader('X-Filter-Decision', 'block');
-  res.setHeader('X-Filter-Reason', String(reason || 'blocked').slice(0, 80));
+  res.setHeader('X-Filter-Reason', safeFilterReasonHeader(reason));
   res.end(svg);
 }
 
