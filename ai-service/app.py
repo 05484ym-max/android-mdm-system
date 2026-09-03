@@ -24,8 +24,11 @@ MAX_FACE_DETECT_SIDE = 1280
 MAX_FACES = 8
 
 DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-512"
+DEFAULT_SIGLIP_REVISION = "a89f5c5093f902bf39d3cd4d81d2c09867f0724b"
 DEFAULT_NSFW_MODEL = "viddexa/nsfw-detection-mini"
+DEFAULT_NSFW_REVISION = "008722e6cd8dff64efa75fb2a8482c80e41434ca"
 DEFAULT_GENDER_MODEL = "dima806/man_woman_face_image_detection"
+DEFAULT_GENDER_REVISION = "ecab7935ec1df4243f7832b87df94b4cd1530502"
 YUNET_REPO = "opencv/opencv_zoo"
 YUNET_FILE = "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
@@ -65,7 +68,10 @@ def _load_siglip():
             _siglip = pipeline(
                 task="zero-shot-image-classification",
                 model=os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
+                revision=os.environ.get("SIGLIP_REVISION", DEFAULT_SIGLIP_REVISION),
                 device=-1,
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
             )
     return _siglip
 
@@ -79,7 +85,10 @@ def _load_nsfw():
             _nsfw = pipeline(
                 task="image-classification",
                 model=os.environ.get("NSFW_MODEL", DEFAULT_NSFW_MODEL),
+                revision=os.environ.get("NSFW_REVISION", DEFAULT_NSFW_REVISION),
                 device=-1,
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
             )
     return _nsfw
 
@@ -93,7 +102,10 @@ def _load_gender():
             _gender = pipeline(
                 task="image-classification",
                 model=os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL),
+                revision=os.environ.get("GENDER_REVISION", DEFAULT_GENDER_REVISION),
                 device=-1,
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
             )
     return _gender
 
@@ -278,8 +290,11 @@ def health():
         "productionReady": True,
         "models": {
             "siglip": os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
+            "siglipRevision": os.environ.get("SIGLIP_REVISION", DEFAULT_SIGLIP_REVISION),
             "nsfw": os.environ.get("NSFW_MODEL", DEFAULT_NSFW_MODEL),
+            "nsfwRevision": os.environ.get("NSFW_REVISION", DEFAULT_NSFW_REVISION),
             "gender": os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL),
+            "genderRevision": os.environ.get("GENDER_REVISION", DEFAULT_GENDER_REVISION),
             "faceDetector": "opencv/opencv_zoo:YuNet-2023mar",
         },
         "maxImageBytes": MAX_BYTES,
