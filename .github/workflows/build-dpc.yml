@@ -2,7 +2,7 @@ name: Build DPC APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, validation/premerge-dpc-8b464cf2 ]
     paths:
       - 'dpc-app/**'
       - '.github/workflows/build-dpc.yml'
