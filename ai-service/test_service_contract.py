@@ -11,6 +11,7 @@ class LocalAiServiceContractTests(unittest.TestCase):
         cls.app_source = (ROOT / "app.py").read_text(encoding="utf-8")
         cls.app_tree = ast.parse(cls.app_source)
         cls.dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        cls.requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 
     def _top_level_names(self):
         names = set()
@@ -29,16 +30,41 @@ class LocalAiServiceContractTests(unittest.TestCase):
             "MAX_BYTES",
             "MAX_IMAGE_PIXELS",
             "DEFAULT_SIGLIP_MODEL",
+            "DEFAULT_NSFW_MODEL",
+            "DEFAULT_GENDER_MODEL",
+            "YUNET_SHA256",
             "_siglip_scores",
+            "_nsfw_score",
+            "_gender_faces",
+            "_verified_yunet_path",
             "_decode_image",
             "_run_models",
             "moderate",
         }:
             self.assertIn(required, names)
 
-    def test_default_siglip_is_512_model(self):
+    def test_models_are_the_reviewed_permissive_stack(self):
         self.assertIn(
             'DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-512"',
+            self.app_source,
+        )
+        self.assertIn(
+            'DEFAULT_NSFW_MODEL = "viddexa/nsfw-detection-mini"',
+            self.app_source,
+        )
+        self.assertIn(
+            'DEFAULT_GENDER_MODEL = "abhilash88/age-gender-prediction"',
+            self.app_source,
+        )
+        self.assertIn('YUNET_REPO = "opencv/opencv_zoo"', self.app_source)
+        self.assertNotIn("nudenet", self.requirements.lower())
+        self.assertNotIn("NudeDetector", self.app_source)
+
+    def test_yunet_download_is_checksum_pinned(self):
+        self.assertIn("hashlib.sha256", self.app_source)
+        self.assertIn("yunet_checksum_mismatch", self.app_source)
+        self.assertIn(
+            'YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"',
             self.app_source,
         )
 
