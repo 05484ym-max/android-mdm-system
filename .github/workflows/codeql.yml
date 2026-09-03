@@ -1,0 +1,98 @@
+name: CodeQL Security Scan
+
+on:
+  push:
+    branches:
+      - main
+      - filtered-browser-client
+      - filtered-browser-server
+      - filtered-browser-integration
+    paths:
+      - 'dpc-app/**'
+      - 'backend/**'
+      - 'admin-panel/**'
+      - 'client/**'
+      - 'browser-worker/**'
+      - '!admin-panel/downloads/**'
+      - '.github/workflows/codeql.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'dpc-app/**'
+      - 'backend/**'
+      - 'admin-panel/**'
+      - 'client/**'
+      - 'browser-worker/**'
+      - '!admin-panel/downloads/**'
+      - '.github/workflows/codeql.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 3'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  javascript:
+    name: CodeQL JavaScript/TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+
+      - name: Analyze JavaScript/TypeScript
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:javascript-typescript
+
+  android:
+    name: CodeQL Java/Kotlin Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: 8.9
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build Android sources for CodeQL
+        working-directory: dpc-app
+        run: gradle assembleDebug
+
+      - name: Analyze Java/Kotlin
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
