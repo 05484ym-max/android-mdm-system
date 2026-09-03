@@ -102,6 +102,21 @@ def evaluate(nude: list[dict], siglip: dict[str, float]) -> dict:
             },
         }
 
+    # HAREDI_STRICT never interprets "nothing bad detected" as an allow.
+    # We need affirmative evidence: either no person with useful confidence,
+    # or a confidently male image. Otherwise the image remains ambiguous and
+    # is blocked.
+    if no_person < 0.55 and man < 0.62:
+        return {
+            "allowed": False,
+            "reason": "ambiguous_image",
+            "details": {
+                "siglipFemale": woman,
+                "siglipMale": man,
+                "siglipNoPerson": no_person,
+            },
+        }
+
     return {
         "allowed": True,
         "reason": "image_safe_haredi_strict",
