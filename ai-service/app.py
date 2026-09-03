@@ -1,5 +1,6 @@
 import io
 import os
+import hmac
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -16,7 +17,8 @@ _siglip: Any = None
 
 def _token_ok(value: str | None) -> bool:
     expected = os.environ.get("LOCAL_AI_TOKEN", "")
-    return bool(expected) and value == expected
+    supplied = value or ""
+    return bool(expected) and hmac.compare_digest(supplied, expected)
 
 
 def _load_nudenet() -> NudeDetector:
