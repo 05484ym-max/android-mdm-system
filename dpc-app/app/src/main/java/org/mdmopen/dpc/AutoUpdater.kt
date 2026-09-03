@@ -23,17 +23,26 @@ object AutoUpdater {
     private val running = AtomicBoolean(false)
 
     fun check(context: Context) {
+        Thread {
+            checkBlocking(context.applicationContext)
+        }.start()
+    }
+
+    /**
+     * Blocking variant for JobService. The shared atomic guard prevents a
+     * scheduled check, manual check and push-triggered retry from downloading
+     * the same update in parallel.
+     */
+    fun checkBlocking(context: Context) {
         if (!running.compareAndSet(false, true)) return
 
-        Thread {
-            try {
-                checkInternal(context.applicationContext)
-            } catch (e: Exception) {
-                Log.e(TAG, "Update check failed", e)
-            } finally {
-                running.set(false)
-            }
-        }.start()
+        try {
+            checkInternal(context.applicationContext)
+        } catch (e: Exception) {
+            Log.e(TAG, "Update check failed", e)
+        } finally {
+            running.set(false)
+        }
     }
 
     private fun checkInternal(context: Context) {
