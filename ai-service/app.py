@@ -71,8 +71,12 @@ async def moderate(
         raise HTTPException(status_code=413, detail="invalid_image_size")
 
     try:
+        probe = Image.open(io.BytesIO(body))
+        width, height = probe.size
+        if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+            raise ValueError("image_dimensions_rejected")
+        probe.verify()
         image = Image.open(io.BytesIO(body)).convert("RGB")
-        image.verify if False else None
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid_image") from exc
 
