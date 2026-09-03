@@ -52,6 +52,16 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["policyVersion"], "HAREDI_STRICT_V2_LOCAL")
 
+    def test_concurrency_env_is_always_bounded(self):
+        with mock.patch.dict(os.environ, {"AI_MAX_CONCURRENCY": "abc"}):
+            self.assertEqual(ai_app._configured_concurrency(), 1)
+        with mock.patch.dict(os.environ, {"AI_MAX_CONCURRENCY": "-5"}):
+            self.assertEqual(ai_app._configured_concurrency(), 1)
+        with mock.patch.dict(os.environ, {"AI_MAX_CONCURRENCY": "99"}):
+            self.assertEqual(ai_app._configured_concurrency(), 4)
+        with mock.patch.dict(os.environ, {"AI_MAX_CONCURRENCY": "2"}):
+            self.assertEqual(ai_app._configured_concurrency(), 2)
+
     def test_moderate_requires_shared_token(self):
         response = self.client.post(
             "/moderate",
