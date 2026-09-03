@@ -55,6 +55,10 @@ object PolicySync {
         // recordUpdateResult() - see DeviceHealth.recordNoLauncherDryRun().
         DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
         SyncScheduler.schedule(context)
+        // MDM self-update checks are intentionally independent of policy sync:
+        // every ~6h with fresh 0-60m jitter, so a large fleet cannot stampede
+        // version.json / APK downloads at the same moment.
+        UpdateCheckScheduler.scheduleIfNeeded(context)
         // Independent of the sync interval on purpose - see
         // DnsFailSafeScheduler's own doc for cadence/battery reasoning.
         DnsFailSafeScheduler.scheduleIfNeeded(context)
