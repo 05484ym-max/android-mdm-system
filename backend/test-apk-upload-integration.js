@@ -39,7 +39,7 @@ function sha256(buffer) {
 }
 
 function spawnServer(port, extraEnv = {}) {
-  return spawn(process.execPath, [path.join(__dirname, 'index.js')], {
+  const proc = spawn(process.execPath, [path.join(__dirname, 'index.js')], {
     cwd: __dirname,
     env: {
       ...process.env,
@@ -56,21 +56,22 @@ function spawnServer(port, extraEnv = {}) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  proc.testStderr = '';
+  proc.stderr.on('data', d => { proc.testStderr += d.toString(); });
+  return proc;
 }
 
 async function waitForHealth(baseUrl, proc, timeoutMs = 20000) {
   const start = Date.now();
-  let stderr = '';
-  proc.stderr.on('data', d => { stderr += d.toString(); });
   while (Date.now() - start < timeoutMs) {
-    if (proc.exitCode !== null) throw new Error(`server exited early: ${stderr}`);
+    if (proc.exitCode !== null) throw new Error(`server exited early: ${proc.testStderr}`);
     try {
       const res = await fetch(`${baseUrl}/health`);
       if (res.ok) return;
     } catch {}
     await new Promise(r => setTimeout(r, 200));
   }
-  throw new Error(`server did not become healthy: ${stderr}`);
+  throw new Error(`server did not become healthy: ${proc.testStderr}`);
 }
 
 async function stop(proc) {
@@ -227,7 +228,7 @@ async function upload(baseUrl, cookie, opts) {
         category: 'tools',
       });
       const text = await res.text();
-      assert.strictEqual(res.status, 200, text);
+      assert.strictEqual(res.status, 200, `${text}\nserver stderr:\n${main.testStderr}`);
       const body = JSON.parse(text);
 
       assert.strictEqual(body.packageName, 'com.example.good');
