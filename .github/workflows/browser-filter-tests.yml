@@ -19,6 +19,8 @@ on:
       - 'backend/test-safe-remote-image.js'
       - 'backend/imageModerator.js'
       - 'backend/safeRemoteImage.js'
+      - 'backend/singleFlight.js'
+      - 'backend/test-single-flight.js'
       - 'backend/db.js'
       - 'backend/index.js'
       - 'backend/test-browser-classifier.js'
@@ -77,6 +79,9 @@ jobs:
       - name: Test SSRF-safe image validation
         working-directory: backend
         run: node test-safe-remote-image.js
+      - name: Test moderation single-flight coalescing
+        working-directory: backend
+        run: node test-single-flight.js
 
   fail-closed-http:
     name: Browser classifier fail-closed HTTP (real PostgreSQL)
