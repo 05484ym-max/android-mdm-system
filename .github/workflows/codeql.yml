@@ -83,8 +83,12 @@ jobs:
           build-mode: manual
           queries: security-extended
 
-      - name: Build Android sources for CodeQL
+      - name: Build MDM Android sources for CodeQL
         working-directory: dpc-app
+        run: gradle assembleDebug
+
+      - name: Build filtered browser Android sources for CodeQL
+        working-directory: client
         run: gradle assembleDebug
 
       - name: Analyze Java/Kotlin
