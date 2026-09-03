@@ -32,6 +32,13 @@ function sanitizeDetails(value) {
   return out;
 }
 
+function normalizeReason(reason) {
+  // Keep backend/cache reason names stable even if the local provider uses a
+  // slightly different label for the same durable policy outcome.
+  if (reason === 'revealing_content') return 'revealing_clothing';
+  return String(reason || 'local_ai_invalid_response').slice(0, 80);
+}
+
 async function moderateImage(buffer, fetchImpl = fetch) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     return {
@@ -128,7 +135,7 @@ async function moderateImage(buffer, fetchImpl = fetch) {
 
   return {
     allowed: payload.allowed === true,
-    reason: payload.reason.slice(0, 80),
+    reason: normalizeReason(payload.reason),
     details: sanitizeDetails(payload.details),
     source: 'local_siglip2_nudenet',
     policyVersion: POLICY_VERSION,
@@ -140,5 +147,6 @@ module.exports = {
   localAiEndpoint,
   configured,
   sanitizeDetails,
+  normalizeReason,
   moderateImage,
 };
