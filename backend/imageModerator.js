@@ -1,170 +1,89 @@
 'use strict';
 
-const FEMALE_LABELS = [
-  'woman', 'women', 'girl', 'girls', 'female', 'lady', 'ladies', 'bride',
-  'bikini', 'swimwear', 'swimsuit', 'lingerie', 'underwear', 'bra',
-];
-
-const MALE_LABELS = [
-  'man', 'men', 'boy', 'boys', 'male', 'gentleman',
-];
-
-const PERSON_LABELS = [
-  'person', 'people', 'human', 'crowd', 'portrait', 'face',
-];
-
-const RISKY_CLOTHING_LABELS = [
-  'bikini', 'swimwear', 'swimsuit', 'lingerie', 'underwear', 'bra',
-];
-
-const LIKELIHOOD_RANK = {
-  UNKNOWN: 0,
-  VERY_UNLIKELY: 1,
-  UNLIKELY: 2,
-  POSSIBLE: 3,
-  LIKELY: 4,
-  VERY_LIKELY: 5,
-};
-
-const FEMALE_SCORE_THRESHOLD = 0.60;
-const PERSON_SCORE_THRESHOLD = 0.70;
-const MALE_SCORE_THRESHOLD = 0.80;
-
-function labelScore(labels, terms) {
-  let best = 0;
-  for (const label of labels || []) {
-    const description = String(label.description || '').trim().toLowerCase();
-    const score = Number(label.score || 0);
-    if (!Number.isFinite(score)) continue;
-    if (terms.some(term => description === term || description.includes(term))) {
-      best = Math.max(best, score);
-    }
-  }
-  return best;
-}
-
-function evaluateVisionResponse(payload) {
-  const response = payload && Array.isArray(payload.responses) ? payload.responses[0] : null;
-  if (!response) {
-    return { allowed: false, reason: 'vision_missing_response', details: {} };
-  }
-  if (response.error) {
-    return { allowed: false, reason: 'vision_error', details: { error: response.error.message || 'unknown' } };
-  }
-
-  const safe = response.safeSearchAnnotation || {};
-  const labels = Array.isArray(response.labelAnnotations) ? response.labelAnnotations : [];
-  const faces = Array.isArray(response.faceAnnotations) ? response.faceAnnotations : [];
-
-  const adultRank = LIKELIHOOD_RANK[safe.adult] || 0;
-  const racyRank = LIKELIHOOD_RANK[safe.racy] || 0;
-  if (adultRank >= LIKELIHOOD_RANK.POSSIBLE) {
-    return { allowed: false, reason: 'adult_content', details: { safe } };
-  }
-  if (racyRank >= LIKELIHOOD_RANK.POSSIBLE) {
-    return { allowed: false, reason: 'racy_content', details: { safe } };
-  }
-
-  const riskyClothing = labelScore(labels, RISKY_CLOTHING_LABELS);
-  if (riskyClothing >= FEMALE_SCORE_THRESHOLD) {
-    return { allowed: false, reason: 'revealing_clothing', details: { riskyClothing } };
-  }
-
-  const femaleScore = labelScore(labels, FEMALE_LABELS);
-  if (femaleScore >= FEMALE_SCORE_THRESHOLD) {
-    return { allowed: false, reason: 'female_detected', details: { femaleScore } };
-  }
-
-  const personScore = labelScore(labels, PERSON_LABELS);
-  const maleScore = labelScore(labels, MALE_LABELS);
-
-  // Vision face detection does not provide gender. In HAREDI_STRICT, a face
-  // without a separate high-confidence male label is therefore ambiguous and
-  // blocked. This catches portraits where generic label detection failed to
-  // emit "woman"/"person" at all.
-  if (faces.length > 0 && maleScore < MALE_SCORE_THRESHOLD) {
-    return {
-      allowed: false,
-      reason: 'ambiguous_face',
-      details: { faceCount: faces.length, maleScore },
-    };
-  }
-
-  // HAREDI_STRICT: a person-like image that is not confidently identified as
-  // male is blocked. This deliberately prefers false positives to exposing a
-  // potentially unsuitable person image.
-  if (personScore >= PERSON_SCORE_THRESHOLD && maleScore < MALE_SCORE_THRESHOLD) {
-    return {
-      allowed: false,
-      reason: 'ambiguous_person',
-      details: { personScore, maleScore },
-    };
-  }
-
-  return {
-    allowed: true,
-    reason: 'image_safe_haredi_strict',
-    details: {
-      femaleScore,
-      personScore,
-      maleScore,
-      safe,
-    },
-  };
-}
+const POLICY_VERSION = 'HAREDI_STRICT_V2_LOCAL';
+const MAX_RESPONSE_BYTES = 256 * 1024;
 
 function configured() {
-  return Boolean(process.env.GOOGLE_VISION_API_KEY);
+  return Boolean(
+    process.env.LOCAL_AI_URL &&
+    process.env.LOCAL_AI_TOKEN
+  );
+}
+
+function sanitizeDetails(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  for (const [key, raw] of Object.entries(value).slice(0, 30)) {
+    if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key)) continue;
+    if (typeof raw === 'number' && Number.isFinite(raw)) out[key] = raw;
+    else if (typeof raw === 'boolean') out[key] = raw;
+    else if (typeof raw === 'string') out[key] = raw.slice(0, 200);
+  }
+  return out;
 }
 
 async function moderateImage(buffer, fetchImpl = fetch) {
-  if (!configured()) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     return {
       allowed: false,
-      reason: 'vision_not_configured',
+      reason: 'local_ai_invalid_image',
       details: {},
-      source: 'google_vision',
+      source: 'local_siglip2_nudenet',
+      policyVersion: POLICY_VERSION,
     };
   }
 
-  const body = {
-    requests: [{
-      image: { content: buffer.toString('base64') },
-      features: [
-        { type: 'SAFE_SEARCH_DETECTION' },
-        { type: 'LABEL_DETECTION', maxResults: 30 },
-        { type: 'FACE_DETECTION', maxResults: 10 },
-      ],
-    }],
-  };
+  if (!configured()) {
+    return {
+      allowed: false,
+      reason: 'local_ai_not_configured',
+      details: {},
+      source: 'local_siglip2_nudenet',
+      policyVersion: POLICY_VERSION,
+    };
+  }
 
+  const base = String(process.env.LOCAL_AI_URL).trim().replace(/\/$/, '');
   let response;
   try {
-    response = await fetchImpl(
-      'https://vision.googleapis.com/v1/images:annotate?key=' +
-        encodeURIComponent(process.env.GOOGLE_VISION_API_KEY),
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(12_000),
+    response = await fetchImpl(base + '/moderate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Local-AI-Token': process.env.LOCAL_AI_TOKEN,
+        Accept: 'application/json',
       },
-    );
+      body: buffer,
+      signal: AbortSignal.timeout(30_000),
+    });
   } catch {
     return {
       allowed: false,
-      reason: 'vision_unreachable',
+      reason: 'local_ai_unreachable',
       details: {},
-      source: 'google_vision',
+      source: 'local_siglip2_nudenet',
+      policyVersion: POLICY_VERSION,
     };
   }
 
   if (!response.ok) {
     return {
       allowed: false,
-      reason: 'vision_http_' + response.status,
+      reason: 'local_ai_http_' + response.status,
       details: {},
-      source: 'google_vision',
+      source: 'local_siglip2_nudenet',
+      policyVersion: POLICY_VERSION,
+    };
+  }
+
+  const declaredLength = Number(response.headers?.get?.('content-length') || 0);
+  if (declaredLength && declaredLength > MAX_RESPONSE_BYTES) {
+    return {
+      allowed: false,
+      reason: 'local_ai_response_too_large',
+      details: {},
+      source: 'local_siglip2_nudenet',
+      policyVersion: POLICY_VERSION,
     };
   }
 
@@ -174,24 +93,41 @@ async function moderateImage(buffer, fetchImpl = fetch) {
   } catch {
     return {
       allowed: false,
-      reason: 'vision_invalid_response',
+      reason: 'local_ai_invalid_response',
       details: {},
-      source: 'google_vision',
+      source: 'local_siglip2_nudenet',
+      policyVersion: POLICY_VERSION,
+    };
+  }
+
+  if (
+    payload?.policyVersion !== POLICY_VERSION ||
+    typeof payload?.allowed !== 'boolean' ||
+    typeof payload?.reason !== 'string'
+  ) {
+    return {
+      allowed: false,
+      reason: payload?.policyVersion !== POLICY_VERSION
+        ? 'local_ai_policy_mismatch'
+        : 'local_ai_invalid_response',
+      details: {},
+      source: 'local_siglip2_nudenet',
+      policyVersion: POLICY_VERSION,
     };
   }
 
   return {
-    ...evaluateVisionResponse(payload),
-    source: 'google_vision',
+    allowed: payload.allowed === true,
+    reason: payload.reason.slice(0, 80),
+    details: sanitizeDetails(payload.details),
+    source: 'local_siglip2_nudenet',
+    policyVersion: POLICY_VERSION,
   };
 }
 
 module.exports = {
-  LIKELIHOOD_RANK,
-  FEMALE_SCORE_THRESHOLD,
-  PERSON_SCORE_THRESHOLD,
-  MALE_SCORE_THRESHOLD,
-  evaluateVisionResponse,
+  POLICY_VERSION,
   configured,
+  sanitizeDetails,
   moderateImage,
 };
