@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/haredi-image-filter
+      - fix/haredi-ai-v3-review
     paths:
       - 'ai-service/test_real_models_smoke.py'
       - 'ai-service/requirements.txt'
@@ -23,8 +24,11 @@ jobs:
     env:
       AI_MAX_CONCURRENCY: '1'
       SIGLIP_MODEL: google/siglip2-base-patch16-512
+      SIGLIP_REVISION: b7a8618d40a3a296a724f779e3dddf1e7afc6157
       NSFW_MODEL: viddexa/nsfw-detection-mini
+      NSFW_REVISION: 008722e6cd8dff64efa75fb2a8482c80e41434ca
       GENDER_MODEL: dima806/man_woman_face_image_detection
+      GENDER_REVISION: ecab7935ec1df4243f7832b87df94b4cd1530502
     steps:
       - name: Checkout
         uses: actions/checkout@v6
