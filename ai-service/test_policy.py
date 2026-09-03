@@ -21,6 +21,23 @@ class HarediStrictPolicyTests(unittest.TestCase):
         self.assertFalse(result["allowed"])
         self.assertEqual(result["reason"], "female_detected")
 
+    def test_mixed_male_and_female_faces_block(self):
+        result = evaluate(
+            0.02,
+            [
+                {"female": 0.03, "male": 0.97, "detection": 0.98},
+                {"female": 0.96, "male": 0.04, "detection": 0.97},
+            ],
+            {
+                "a photograph of a woman": 0.61,
+                "a photograph of a man": 0.74,
+                "a photograph with no person": 0.02,
+            },
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "female_detected")
+        self.assertEqual(result["details"]["femaleFaceCount"], 1)
+
     def test_ambiguous_face_blocks(self):
         result = evaluate(
             0.02,
