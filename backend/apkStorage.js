@@ -183,11 +183,14 @@ async function deleteApk(config, assetId) {
   }
 }
 
-async function downloadApk(config, assetId) {
+async function downloadApk(config, assetId, requestHeaders = {}) {
   const response = await fetch(
     `${config.apiBase}/repos/${config.repository}/releases/assets/${encodeURIComponent(assetId)}`,
     {
-      headers: headers(config, 'application/octet-stream'),
+      headers: {
+        ...headers(config, 'application/octet-stream'),
+        ...requestHeaders,
+      },
       redirect: 'follow',
     }
   );
