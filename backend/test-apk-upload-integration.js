@@ -228,7 +228,11 @@ async function upload(baseUrl, cookie, opts) {
         category: 'tools',
       });
       const text = await res.text();
-      assert.strictEqual(res.status, 200, `${text}\nserver stderr:\n${main.testStderr}`);
+      if (res.status !== 200) {
+        console.log(`  response body: ${text}`);
+        console.log(`  server stderr: ${main.testStderr}`);
+      }
+      assert.strictEqual(res.status, 200, text);
       const body = JSON.parse(text);
 
       assert.strictEqual(body.packageName, 'com.example.good');
