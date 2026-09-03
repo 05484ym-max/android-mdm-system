@@ -5,6 +5,7 @@ const {
   POLICY_VERSION,
   moderateImage,
   sanitizeDetails,
+  normalizeReason,
   localAiEndpoint,
 } = require('./imageModerator');
 
@@ -59,6 +60,23 @@ const {
     assert.strictEqual(captured.url, 'http://local-ai.internal:8080/moderate');
     assert.strictEqual(captured.options.headers['X-Local-AI-Token'], 'test-secret');
     assert.ok(Buffer.isBuffer(captured.options.body));
+
+    result = await moderateImage(Buffer.from('image'), async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async json() {
+        return {
+          allowed: false,
+          reason: 'revealing_content',
+          policyVersion: POLICY_VERSION,
+          details: { nudenetRevealing: 0.88 },
+        };
+      },
+    }));
+    assert.strictEqual(result.allowed, false);
+    assert.strictEqual(result.reason, 'revealing_clothing');
+    assert.strictEqual(normalizeReason('revealing_content'), 'revealing_clothing');
 
     result = await moderateImage(Buffer.from('image'), async () => ({
       ok: true,
