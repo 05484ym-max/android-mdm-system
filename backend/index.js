@@ -8,6 +8,7 @@ const net = require('net');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
 const db = require('./db');
 const push = require('./push');
 const deviceHealth = require('./deviceHealth');
@@ -16,6 +17,7 @@ const diagnostics = require('./diagnostics');
 const alerts = require('./alerts');
 const playStoreSearch = require('./playStoreSearch');
 const appCategories = require('./appCategories');
+const apkStorage = require('./apkStorage');
 
 const app = express();
 app.use(express.json());
@@ -54,6 +56,19 @@ if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
 }
 
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+const APK_UPLOAD_MAX_BYTES = 150 * 1024 * 1024;
+
+function looksLikeApk(buffer) {
+  return buffer.length >= 4 &&
+    buffer[0] === 0x50 && buffer[1] === 0x4b &&
+    (buffer[2] === 0x03 || buffer[2] === 0x05) &&
+    (buffer[3] === 0x04 || buffer[3] === 0x06);
+}
+
+const uploadApkField = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: APK_UPLOAD_MAX_BYTES },
+}).single('apk');
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
    'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'OPEN_DEBUGGING_TEMP',
@@ -656,6 +671,70 @@ app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
   }
 }));
 
+app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
+  uploadApkField(req, res, err => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: `apk exceeds the ${APK_UPLOAD_MAX_BYTES} byte limit` });
+    }
+    return res.status(400).json({ error: 'invalid multipart upload' });
+  });
+}, wrap(async (req, res) => {
+  const file = req.file;
+  if (!file || !file.buffer || file.buffer.length === 0) {
+    return res.status(400).json({ error: 'apk file is required (multipart field "apk")' });
+  }
+  if (!looksLikeApk(file.buffer)) {
+    return res.status(400).json({ error: 'uploaded file is not a valid APK (not a ZIP archive)' });
+  }
+
+  const packageName = typeof req.body.packageName === 'string' ? req.body.packageName.trim() : '';
+  if (!PACKAGE_NAME_REGEX.test(packageName)) {
+    return res.status(400).json({ error: 'packageName is required and must be a valid Android package name' });
+  }
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  let category = null;
+  if (req.body.category !== undefined && req.body.category !== '') {
+    if (!appCategories.isValidCategoryKey(req.body.category)) {
+      return res.status(400).json({ error: 'invalid category' });
+    }
+    category = req.body.category;
+  }
+
+  const storageConfig = apkStorage.loadStorageConfig();
+  const sha256Hex = crypto.createHash('sha256').update(file.buffer).digest('hex');
+  const storageKey = apkStorage.generateApkStorageKey();
+
+  await apkStorage.uploadApk(storageConfig, storageKey, file.buffer);
+  const apkUrl = apkStorage.publicUrlForKey(storageConfig, storageKey);
+
+  let row;
+  try {
+    row = await db.insertUploadedApp({
+      packageName,
+      name: name.slice(0, 100),
+      category,
+      apkUrl,
+      apkSha256: sha256Hex,
+      apkSizeBytes: file.buffer.length,
+      apkStorageKey: storageKey,
+    });
+  } catch (e) {
+    await apkStorage.deleteApk(storageConfig, storageKey);
+    throw e;
+  }
+
+  res.json({
+    packageName: row.packageName,
+    name: row.name,
+    apkUrl: row.apkUrl,
+    sha256: row.apkSha256,
+    sizeBytes: row.apkSizeBytes,
+  });
+}));
+
 const REFRESH_PLAY_METADATA_BATCH_SIZE = 5;
 const PLAY_METADATA_ERROR_MAX_LENGTH = 300;
 
@@ -1255,7 +1334,10 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   // check needed here; filtering already happened before this .map).
   const catalog = (await db.listAppsCatalog())
     .filter(app => allowed.has(app.packageName))
-    .map(({ packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder }) => ({
+    .map(({
+      packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder,
+      appSource, apkUrl, apkSha256, apkSizeBytes,
+    }) => ({
       packageName,
       name,
       iconUrl,
@@ -1265,6 +1347,10 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
       categoryLabel: appCategories.categoryLabel(category),
       isRecommended,
       sortOrder,
+      appSource,
+      apkUrl: appSource === 'APK' ? apkUrl : null,
+      apkSha256: appSource === 'APK' ? apkSha256 : null,
+      apkSizeBytes: appSource === 'APK' ? apkSizeBytes : null,
     }));
 
   const commands = await db.takePendingCommands(req.params.deviceId);
