@@ -103,7 +103,7 @@ jobs:
       - name: Checkout filtered browser client
         uses: actions/checkout@v6
         with:
-          ref: filtered-browser-client
+          ref: fix/filtered-browser-raster-icon
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -132,6 +132,34 @@ jobs:
       - name: Test and build filtered browser Android sources for CodeQL
         working-directory: client
         run: gradle testDebugUnitTest assembleDebug
+
+      - name: Verify browser raster icon is packaged
+        run: |
+          set -euo pipefail
+          APK=client/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l "$APK" | tee /tmp/browser-apk-files.txt
+          grep -E 'res/[^ ]*browser_icon\.png
+        with:
+          category: /language:java-kotlin-browser
+
+      - name: Upload filtered browser debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: filtered-browser-debug
+          path: client/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+ /tmp/browser-apk-files.txt
+          python3 - "$APK" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              matches = [n for n in z.namelist() if n.startswith("res/") and n.endswith("browser_icon.png")]
+              if not matches:
+                  raise SystemExit("browser_icon.png missing from APK")
+              data = z.read(matches[0])
+              if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                  raise SystemExit("browser icon fallback is not a valid PNG")
+              print(matches[0], len(data))
+          PY
 
       - name: Analyze filtered browser Java/Kotlin
         uses: github/codeql-action/analyze@v4
