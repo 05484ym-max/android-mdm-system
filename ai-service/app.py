@@ -1,6 +1,7 @@
 import hmac
 import io
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -13,10 +14,9 @@ from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
 MAX_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="1.0.1")
-
 _nudenet: NudeDetector | None = None
 _siglip: Any = None
+_models_ready = False
 
 
 def _token_ok(value: str | None) -> bool:
@@ -105,14 +105,39 @@ def _decode_image(body: bytes) -> Image.Image:
     return image
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global _models_ready
+    preload = os.environ.get("LOCAL_AI_PRELOAD_MODELS", "1") == "1"
+    if preload:
+        # Fail deployment/startup instead of accepting traffic before both
+        # models are actually available. This avoids first-request timeouts.
+        _load_nudenet()
+        _load_siglip()
+        _models_ready = True
+    try:
+        yield
+    finally:
+        _models_ready = False
+
+
+app = FastAPI(
+    title="Yehudi Kasher Local Image AI",
+    version="1.0.2",
+    lifespan=lifespan,
+)
+
+
 @app.get("/health")
 def health():
     model_path = os.environ.get("NUDENET_MODEL_PATH")
     require_640 = os.environ.get("NUDENET_REQUIRE_640", "0") == "1"
+    model_guard_ok = (not require_640) or bool(model_path)
     return {
-        "status": "ok",
+        "status": "ok" if _models_ready else "warming",
+        "ready": _models_ready,
         "policyVersion": POLICY_VERSION,
-        "productionReady": (not require_640) or bool(model_path),
+        "productionReady": _models_ready and model_guard_ok,
         "nudenetModel": model_path or "bundled-320n",
         "siglipModel": os.environ.get(
             "SIGLIP_MODEL",
