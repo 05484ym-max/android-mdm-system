@@ -5,6 +5,57 @@ Owner: Claude
 
 ## DONE
 
+**Persistent APK upload (custom app-store entries), this update:**
+- **`backend/apkStorage.js` (new)**: S3-compatible object storage wrapper
+  (`@aws-sdk/client-s3`), designed for Cloudflare R2 but not R2-specific.
+  `loadStorageConfig()` fails closed (throws) if any of
+  `APK_STORAGE_ENDPOINT`/`_REGION`/`_BUCKET`/`_ACCESS_KEY_ID`/
+  `_SECRET_ACCESS_KEY`/`_PUBLIC_BASE_URL` is missing — no default
+  bucket/endpoint is ever assumed. `generateApkStorageKey()` returns a
+  random `apps/<uuid>.apk` key, never derived from anything caller-
+  supplied. `uploadApk`/`deleteApk` throw/log-and-return-false
+  respectively (upload is fail-closed; delete is best-effort cleanup,
+  documented as never allowed to mask the real error it's cleaning up
+  after). See `docs/apk-storage.md`.
+- **`backend/db.js`**: additive `apps_catalog` columns
+  (`apk_url`/`apk_sha256`/`apk_size_bytes`/`apk_storage_key`/
+  `app_source` (`CHECK IN ('PLAY','APK')`, `NOT NULL DEFAULT 'PLAY'`)/
+  `uploaded_at`) — every pre-existing row reads back as `app_source:
+  'PLAY'` with every apk_* field null, no backfill needed. New
+  `insertUploadedApp()` upserts an APK-source row (same "manual category
+  never silently overwritten" rule as `addAppToCatalog`'s existing
+  Play-metadata-refresh protection); `mapCatalogRow` extended to surface
+  all of the above.
+- **`backend/index.js`**: `POST /api/apps/upload-apk` (`requireAdmin`,
+  `multer` memory storage only — never Render's local disk, max 150MB).
+  Validates the upload is APK-shaped by content (ZIP magic bytes — not a
+  full parse; no such parser is a dependency here), requires `packageName`
+  from the admin (never guessed from the file), computes SHA-256
+  server-side, uploads before any database write, and deletes the
+  just-uploaded object again if the database write then fails (fail-
+  closed: no storage/DB failure can ever leave a usable-looking catalog
+  entry). `/api/devices/:deviceId/sync`'s catalog mapping gained
+  `appSource`/`apkUrl`/`apkSha256`/`apkSizeBytes` — the three apk-related
+  fields are explicitly forced to `null` for every `appSource: 'PLAY'` row
+  at the response-mapping layer, regardless of the underlying data.
+  `/browser/check`, `browserPolicy.js`, and the Phase 2.4 signed-snapshot
+  routes are completely untouched (confirmed via `git diff --stat`).
+- **`admin-panel/index.html` + `admin-panel/apk-upload.js` (new)**: the
+  previously-disabled "העלה APK" button now opens a real upload modal
+  (file picker restricted to `.apk`, name/packageName/category fields,
+  real upload-progress percentage via `XMLHttpRequest`, a busy/disabled
+  submit button preventing a double-submit, Hebrew success/error
+  messaging, automatic catalog refresh on success). An uploaded app's tile
+  shows a small "APK" badge (`.apk-source-badge`) wherever `appSource ===
+  'APK'`. No existing catalog UI (category/recommended/sort controls,
+  Play search/add) was changed.
+- **`backend/fakeS3Server.js` (new, test infrastructure)**: a small local
+  HTTP server standing in for an S3-compatible bucket, since this sandbox
+  has no real R2 credentials/network reachability — documented in the file
+  itself as a real HTTP server the real AWS SDK talks to, not a mock of
+  the SDK. See `docs/apk-storage.md`'s "Testing notes" for exactly what
+  this does and doesn't prove.
+
 **Phase 2.4 correction (device-complete signed snapshot + rollback contract fix), this update:**
 - **Synced `filtered-browser-server` with `origin/main` first** (61 commits
   behind before merging) — brought in the app-store-categories work
@@ -464,6 +515,96 @@ Owner: Claude
 
 ## TESTED
 
+**Persistent APK upload, this update.**
+
+Exact environment: real local PostgreSQL 16 (new dedicated
+`apkupload_test` database, same setup pattern as every other suite on this
+branch), real running `backend/index.js` processes (this feature's suites
+spawn their own — a main fixture with a working fake-S3 endpoint, one
+pointed at an unreachable storage endpoint, and one with no
+`APK_STORAGE_*` config at all, for the fail-closed scenarios), real
+multipart/form-data HTTP requests via the platform's own `fetch()`/
+`FormData`, and a real headless Chromium browser for the admin UI.
+
+- **`backend/test-apk-storage.js`: 12/12 passed** (pure, no DB/network):
+  `loadStorageConfig` failing closed for each of the five required env
+  vars individually, defaulting region to `'auto'`, and returning every
+  configured field without fabricating a default; `generateApkStorageKey`
+  shape/uniqueness (50 calls, 50 distinct keys) and taking no arguments at
+  all (nothing to trust from a caller); `publicUrlForKey` joining
+  correctly with and without a trailing slash on the base URL;
+  `APK_CONTENT_TYPE`'s exact value.
+- **`backend/test-apk-upload-integration.js`: 15/15 passed**, all against
+  real Postgres + real HTTP: unauthenticated upload rejected before
+  touching storage/DB; a non-APK file (wrong magic bytes) rejected with no
+  catalog row; missing packageName/name rejected (never guessed from the
+  file); an invalid category rejected; a missing file field rejected; a
+  150MB+1-byte upload rejected with 413 before reaching storage or the
+  database; **a valid upload's server-computed SHA-256 verified against
+  an independently-computed hash of the exact same bytes, its storage key
+  verified random (uuid-shaped, never the original filename), and the
+  resulting catalog row's `appSource`/`apkSha256`/`apkSizeBytes`/`apkUrl`
+  all verified correct**; two uploads getting two different randomized
+  keys; **`apkUrl`/`apkSha256` verified present in a real device
+  `/sync` response for an APK-source app the device is allowed, and
+  verified `null` for a genuine Play-sourced app on the same sync
+  response**; **storage failure (an unreachable endpoint) verified to
+  leave zero catalog rows**; missing `APK_STORAGE_*` config on a whole
+  server instance verified to fail closed the same way; **a real
+  Postgres failure engineered deterministically** (the `apps_catalog`
+  table is renamed away for the duration of one request, so the `INSERT`
+  genuinely fails with a real "relation does not exist" error, then
+  renamed back) **verified to trigger cleanup of the just-uploaded
+  object — the fake bucket's object count returns to exactly what it was
+  before the failed request**; re-uploading the same `packageName`
+  verified to update the existing row rather than duplicate it; and a
+  plain Play-sourced `addAppToCatalog`/`GET /api/apps` regression check
+  confirming `appSource`/`apkUrl`/etc. are completely unaffected for a
+  non-uploaded app.
+- **`backend/test-apk-upload-ui-smoke.js`: 5/5 passed**, real headless
+  Chromium against the real admin panel: the upload button is enabled
+  (no longer the disabled placeholder); clicking it opens the modal with
+  an empty form and populated category options; submitting an invalid
+  package name shows the correct Hebrew validation message and creates no
+  row; **a real end-to-end upload through the actual UI** (real file
+  input via Playwright's `setInputFiles`, real `XMLHttpRequest` multipart
+  POST, real fake-S3 backend) succeeds, shows the Hebrew success message,
+  closes the modal, and the catalog re-renders with exactly one visible
+  "APK" badge; and no uncaught JavaScript exception occurred anywhere in
+  the flow.
+- **A test-authoring bug found and fixed while writing the integration
+  suite** (not a product bug): `assert.strictEqual(res.status, 200, await
+  res.text())` eagerly evaluates its third argument regardless of whether
+  the assertion passes, consuming the response body stream before a
+  later `res.json()` call could read it (`TypeError: Body is unusable`).
+  Fixed by reading the body exactly once (`res.text()`, then
+  `JSON.parse`) rather than reading it twice.
+- **A fake-S3 test-double bug found and fixed** (also not a product bug —
+  in `fakeS3Server.js`, not `apkStorage.js`): the AWS SDK appends a
+  diagnostic query parameter to its request URL that differs per
+  operation (`?x-id=PutObject` vs `?x-id=DeleteObject`) even for the exact
+  same object key. The fake server was using the full request URL
+  (path + query string) as its object-identity key, so a `PUT` and a
+  later `DELETE` for the same real S3 key looked like two different
+  objects and the "DB failure triggers cleanup" test failed with the
+  object count one higher than expected. A real S3/R2 bucket identifies
+  an object by path alone; fixed by stripping the query string before
+  using it as the map key.
+- **Full regression, this update — every suite on the branch, all
+  clean:** `test-app-categories.js` 11/11, `test-browser-policy.js`
+  55/55, `test-policy-signing.js` 25/25, `test-db-integration.js` 46/46,
+  `test-admin-ui-e2e.js` 38/38, `test-app-catalog-integration.js` 20/20,
+  `test-app-catalog-ui-smoke.js` 13/13, `test-policy-signing-integration.js`
+  19/19, `test-browser-load.js` 28/28 (including its real
+  `service postgresql stop`/`start` fail-closed test). **Zero failures,
+  zero regressions from adding this feature.**
+- **CodeQL**: this update's commit was pushed to the already-present
+  workflow (`.github/workflows/codeql.yml`) to trigger it. As with every
+  prior phase, **this session cannot observe the GitHub Actions run
+  result directly** — reported honestly rather than assumed clean. Check
+  `https://github.com/05484ym-max/android-mdm-system/actions` for the
+  actual result.
+
 **Phase 2.4 correction — device-complete snapshot + rollback fix, this update.**
 
 Exact environment: same real local PostgreSQL 16 (`browser_test` database)
@@ -845,6 +986,20 @@ wrong version. `/browser/check` and `/sync` remain completely untouched.
 **GPT still does not need to change anything in `/client/**` for this
 update.**
 
+**Persistent APK upload**: `/browser/check`, `/api/devices/:deviceId/browser/policy-snapshot`,
+and every existing `/sync` field are unchanged. `/sync`'s `catalog` array
+gains four new, purely additive fields per app —
+`appSource`/`apkUrl`/`apkSha256`/`apkSizeBytes` — with `apkUrl`/
+`apkSha256`/`apkSizeBytes` always `null` for a Play-sourced app. **GPT
+does not need to change anything in `/client/**`/`dpc-app/**` for this
+update to keep working exactly as before** — the new fields are purely
+additive and only meaningful for an app a device is allowed that also
+happens to be `appSource: "APK"` (none exist yet unless an admin uploads
+one). Actually downloading/installing/verifying an APK from `apkUrl` on
+the device side is intentionally not implemented here — see
+`docs/apk-storage.md`'s "Device sync contract" section for the exact
+payload shape whenever that Android-side work is greenlit.
+
 ## KNOWN LIMITATIONS
 
 - No Redis, queue, analyzer worker, AI, Safe Browsing integration, domain-age/
@@ -925,6 +1080,24 @@ update.**
   `https://github.com/05484ym-max/android-mdm-system/actions` (or the
   "Security" → "Code scanning" tab) after this push to see the real
   result.
+
+- **Persistent APK upload**: no real Cloudflare R2 bucket/credentials or
+  network reachability exist in this sandbox — `backend/fakeS3Server.js`
+  (a real local HTTP server, not a mock of the AWS SDK) stands in for it;
+  see `docs/apk-storage.md`'s "Testing notes" and "What could not be
+  verified" for the precise scope of what that does and doesn't prove
+  (in particular: it never checks AWS SigV4 request signing, so real
+  credentials/signing against an actual R2 endpoint remain unverified).
+  No APK content validation beyond a ZIP-magic-bytes check exists — no
+  manifest parsing, no signing-certificate check, no cross-check that the
+  admin-supplied `packageName` matches what the APK actually contains
+  (there is no such parser among this project's dependencies; explicitly
+  out of scope per instruction). Android-side install/verification logic
+  is not implemented — server/admin-only, per this branch's standing
+  scope. Direct unsigned client-to-bucket upload (the admin's browser
+  uploading straight to R2 with a presigned URL, bypassing this backend
+  entirely) was explicitly deferred — today's backend-authenticated
+  upload path was called out as acceptable for this phase.
 
 ## NEXT
 

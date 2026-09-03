@@ -8,6 +8,7 @@ const net = require('net');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
 const db = require('./db');
 const push = require('./push');
 const deviceHealth = require('./deviceHealth');
@@ -18,6 +19,7 @@ const playStoreSearch = require('./playStoreSearch');
 const browserPolicy = require('./browserPolicy');
 const policySigning = require('./policySigning');
 const appCategories = require('./appCategories');
+const apkStorage = require('./apkStorage');
 
 const app = express();
 app.use(express.json());
@@ -56,6 +58,40 @@ if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
 }
 
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+// Deliberately its own constant, separate from the unrelated, pre-existing
+// APK_MAX_BYTES below (that one bounds fetchApkSha256's download for the
+// INSTALL_APP-by-URL device command, a completely different flow) - the
+// two limits are allowed to diverge and must never be accidentally merged.
+const APK_UPLOAD_MAX_BYTES = 150 * 1024 * 1024;
+
+/**
+ * Content-based "is this an APK" check - never trusts the browser-supplied
+ * mimetype or original filename (both are trivially spoofable), only the
+ * bytes actually uploaded. Every valid APK is a ZIP archive, so it always
+ * begins with a ZIP local-file-header ('PK\x03\x04'), or, for the
+ * practically-impossible case of a completely empty ZIP, the end-of-
+ * central-directory ('PK\x05\x06') signature. This is deliberately not a
+ * full APK parse (no AndroidManifest.xml/package-name extraction - there is
+ * no such parser among this project's dependencies) - see the upload-apk
+ * route below for why packageName is always required from the admin
+ * instead of guessed from the file.
+ */
+function looksLikeApk(buffer) {
+  return buffer.length >= 4 &&
+    buffer[0] === 0x50 && buffer[1] === 0x4b &&
+    (buffer[2] === 0x03 || buffer[2] === 0x05) &&
+    (buffer[3] === 0x04 || buffer[3] === 0x06);
+}
+
+// Memory storage only - an uploaded APK is never written to this
+// container's local disk (Render's disk is ephemeral and must never hold
+// the only copy of an app binary). req.file.buffer holds the whole upload;
+// multer enforces the size cap during the multipart parse itself, before
+// the full 150MB necessarily has to sit in memory from a runaway request.
+const uploadApkField = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: APK_UPLOAD_MAX_BYTES },
+}).single('apk');
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
    'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'OPEN_DEBUGGING_TEMP',
@@ -663,6 +699,99 @@ app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
   }
 }));
 
+// ---------- persistent APK upload (custom, non-Play catalog entries) ----------
+//
+// Storage is S3-compatible object storage (Cloudflare R2 in production) -
+// see apkStorage.js and docs/apk-storage.md. The upload is fail-closed at
+// every stage: a misconfigured/unreachable bucket throws before any
+// database write is attempted (loadStorageConfig/uploadApk both throw into
+// the global error handler below), and if the database write itself fails
+// after a successful upload, the just-uploaded object is deleted again so
+// no orphaned object is left with a broken/absent catalog reference. The
+// multer stage runs before requireAdmin's guard has a chance to matter for
+// a request that isn't multipart at all, but requireAdmin still runs
+// first in the middleware chain - an unauthenticated request never reaches
+// multer or touches storage/the database at all.
+app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
+  uploadApkField(req, res, err => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: `apk exceeds the ${APK_UPLOAD_MAX_BYTES} byte limit` });
+    }
+    return res.status(400).json({ error: 'invalid multipart upload' });
+  });
+}, wrap(async (req, res) => {
+  const file = req.file;
+  if (!file || !file.buffer || file.buffer.length === 0) {
+    return res.status(400).json({ error: 'apk file is required (multipart field "apk")' });
+  }
+  if (!looksLikeApk(file.buffer)) {
+    return res.status(400).json({ error: 'uploaded file is not a valid APK (not a ZIP archive)' });
+  }
+
+  const packageName = typeof req.body.packageName === 'string' ? req.body.packageName.trim() : '';
+  if (!PACKAGE_NAME_REGEX.test(packageName)) {
+    // No APK-parsing tool is available to derive/verify a package name from
+    // the file itself (see looksLikeApk above) - it must always come from
+    // the admin, never guessed from the upload.
+    return res.status(400).json({ error: 'packageName is required and must be a valid Android package name' });
+  }
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  if (!name) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  let category = null;
+  if (req.body.category !== undefined && req.body.category !== '') {
+    if (!appCategories.isValidCategoryKey(req.body.category)) {
+      return res.status(400).json({ error: 'invalid category' });
+    }
+    category = req.body.category;
+  }
+
+  // Throws (fail-closed) if APK_STORAGE_* env vars are missing/incomplete -
+  // deliberately checked before the (comparatively expensive) hash/upload
+  // work below, and again before any database write.
+  const storageConfig = apkStorage.loadStorageConfig();
+
+  const sha256Hex = crypto.createHash('sha256').update(file.buffer).digest('hex');
+  const storageKey = apkStorage.generateApkStorageKey();
+
+  // Upload before touching the database - if this throws, no catalog row
+  // is ever created and there is nothing to clean up (nothing was stored).
+  await apkStorage.uploadApk(storageConfig, storageKey, file.buffer);
+  const apkUrl = apkStorage.publicUrlForKey(storageConfig, storageKey);
+
+  let row;
+  try {
+    row = await db.insertUploadedApp({
+      packageName,
+      name: name.slice(0, 100),
+      category,
+      apkUrl,
+      apkSha256: sha256Hex,
+      apkSizeBytes: file.buffer.length,
+      apkStorageKey: storageKey,
+    });
+  } catch (e) {
+    // The object already landed in storage but no catalog row exists to
+    // reference it - never leave a "usable-looking" APK in the bucket with
+    // nothing pointing at it. Cleanup is best-effort and never throws (see
+    // apkStorage.deleteApk); the original database error still propagates
+    // to the global error handler below either way, so this request never
+    // reports success.
+    await apkStorage.deleteApk(storageConfig, storageKey);
+    throw e;
+  }
+
+  res.json({
+    packageName: row.packageName,
+    name: row.name,
+    apkUrl: row.apkUrl,
+    sha256: row.apkSha256,
+    sizeBytes: row.apkSizeBytes,
+  });
+}));
+
 const REFRESH_PLAY_METADATA_BATCH_SIZE = 5;
 const PLAY_METADATA_ERROR_MAX_LENGTH = 300;
 
@@ -1260,9 +1389,19 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   // never see recommended/category metadata for an app it isn't approved
   // for, since it never sees that app's row at all (no separate policy
   // check needed here; filtering already happened before this .map).
+  // appSource/apkUrl/apkSha256/apkSizeBytes are additive fields alongside
+  // the original ones - never renamed, never removed (same rule as the
+  // category/isRecommended/sortOrder fields above). A Play-sourced app's
+  // apk* fields are always forced to null here regardless of what's in the
+  // database, so a custom APK install is only ever offered for an app that
+  // was actually uploaded as one - see docs/apk-storage.md's "Device sync
+  // contract" section.
   const catalog = (await db.listAppsCatalog())
     .filter(app => allowed.has(app.packageName))
-    .map(({ packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder }) => ({
+    .map(({
+      packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder,
+      appSource, apkUrl, apkSha256, apkSizeBytes,
+    }) => ({
       packageName,
       name,
       iconUrl,
@@ -1272,6 +1411,10 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
       categoryLabel: appCategories.categoryLabel(category),
       isRecommended,
       sortOrder,
+      appSource,
+      apkUrl: appSource === 'APK' ? apkUrl : null,
+      apkSha256: appSource === 'APK' ? apkSha256 : null,
+      apkSizeBytes: appSource === 'APK' ? apkSizeBytes : null,
     }));
 
   const commands = await db.takePendingCommands(req.params.deviceId);

@@ -13,6 +13,12 @@ and a "מומלצות" (recommended) section using purely local filtering of
 what's already synced — no new device-facing search/filter API was added
 (see "Search behavior" below for why).
 
+A second way an app can enter this same catalog — a directly-uploaded APK
+instead of a Play Store package — was added later; see
+`docs/apk-storage.md` for that (`app_source`/`apkUrl`/`apkSha256` fields,
+storage/upload details). Everything in this document about category/
+search/recommended/sort applies identically to both kinds of catalog row.
+
 ## Category keys (fixed V1 set)
 
 Stable machine keys — these are what's stored in `apps_catalog.category` and
