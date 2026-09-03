@@ -9,7 +9,6 @@ on:
       - 'client/**'
       - 'browser-worker/**'
       - 'ai-service/**'
-      - 'ai-service/**'
       - '!admin-panel/downloads/**'
       - '.github/workflows/codeql.yml'
   pull_request:
@@ -20,6 +19,7 @@ on:
       - 'admin-panel/**'
       - 'client/**'
       - 'browser-worker/**'
+      - 'ai-service/**'
       - '!admin-panel/downloads/**'
       - '.github/workflows/codeql.yml'
   workflow_dispatch:
@@ -79,6 +79,10 @@ jobs:
       - name: Test local HAREDI_STRICT policy
         working-directory: ai-service
         run: python -m unittest -v test_policy.py
+
+      - name: Test local AI service contract
+        working-directory: ai-service
+        run: python -m unittest -v test_service_contract.py
 
       - name: Compile local AI service
         working-directory: ai-service
