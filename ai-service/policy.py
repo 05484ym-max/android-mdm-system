@@ -1,4 +1,4 @@
-POLICY_VERSION = "HAREDI_STRICT_V3_PERMISSIVE"
+POLICY_VERSION = "HAREDI_STRICT_V4_GROUP_SAFE"
 
 SIGLIP_PROMPTS = [
     "a photograph of a woman",
@@ -31,6 +31,10 @@ def evaluate(
     The policy is deliberately fail-closed. A lack of an unsafe signal is not
     sufficient to allow an image; it needs affirmative evidence that either no
     person is present or that every detected face is confidently male.
+
+    Female whole-image evidence is evaluated independently of male evidence.
+    An image may contain both men and women, so a strong man score must never
+    cancel a meaningful woman/girl score.
     """
     nsfw = _bounded(nsfw_score)
     if nsfw >= 0.35:
@@ -98,10 +102,19 @@ def evaluate(
             },
         }
 
-    if woman >= 0.50 and woman >= man:
+    # HAREDI_STRICT V4: never compare the female score against the male score
+    # as a gate. Group photos can legitimately score highly for both.
+    if woman >= 0.50:
         return {
             "allowed": False,
             "reason": "female_detected",
+            "details": {"siglipFemale": woman, "siglipMale": man},
+        }
+
+    if woman >= 0.42:
+        return {
+            "allowed": False,
+            "reason": "ambiguous_person",
             "details": {"siglipFemale": woman, "siglipMale": man},
         }
 
@@ -119,20 +132,13 @@ def evaluate(
         }
 
     if male_faces:
-        # Even with confidently male faces, strong whole-image evidence for a
-        # woman remains a block. Otherwise a male-only image may pass.
-        if woman >= 0.42 and woman > man:
-            return {
-                "allowed": False,
-                "reason": "ambiguous_person",
-                "details": {"siglipFemale": woman, "siglipMale": man},
-            }
         return {
             "allowed": True,
             "reason": "image_safe_haredi_strict",
             "details": {
                 "maleFaceCount": len(male_faces),
                 "minMaleFace": min(male_faces),
+                "siglipFemale": woman,
                 "nsfwScore": nsfw,
             },
         }
