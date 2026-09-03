@@ -3,11 +3,21 @@
 const POLICY_VERSION = 'HAREDI_STRICT_V2_LOCAL';
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
+function localAiEndpoint() {
+  if (!process.env.LOCAL_AI_URL) return null;
+  try {
+    const url = new URL(String(process.env.LOCAL_AI_URL).trim());
+    if (!['http:', 'https:'].includes(url.protocol)) return null;
+    if (url.username || url.password || url.search || url.hash) return null;
+    url.pathname = url.pathname.replace(/\/$/, '') + '/moderate';
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function configured() {
-  return Boolean(
-    process.env.LOCAL_AI_URL &&
-    process.env.LOCAL_AI_TOKEN
-  );
+  return Boolean(localAiEndpoint() && process.env.LOCAL_AI_TOKEN);
 }
 
 function sanitizeDetails(value) {
@@ -43,10 +53,10 @@ async function moderateImage(buffer, fetchImpl = fetch) {
     };
   }
 
-  const base = String(process.env.LOCAL_AI_URL).trim().replace(/\/$/, '');
+  const endpoint = localAiEndpoint();
   let response;
   try {
-    response = await fetchImpl(base + '/moderate', {
+    response = await fetchImpl(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/octet-stream',
@@ -127,6 +137,7 @@ async function moderateImage(buffer, fetchImpl = fetch) {
 
 module.exports = {
   POLICY_VERSION,
+  localAiEndpoint,
   configured,
   sanitizeDetails,
   moderateImage,
