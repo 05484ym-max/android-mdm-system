@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const https = require('https');
 const dns = require('dns');
 const net = require('net');
+const { Readable } = require('stream');
 const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -704,6 +705,7 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
   }
 
   const storageConfig = apkStorage.loadStorageConfig();
+  const existingApp = (await db.listAppsCatalog()).find(app => app.packageName === packageName) || null;
   const sha256Hex = crypto.createHash('sha256').update(file.buffer).digest('hex');
   const storageName = apkStorage.generateApkStorageKey();
 
@@ -727,6 +729,11 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
     throw e;
   }
 
+  if (existingApp && existingApp.appSource === 'APK' &&
+      existingApp.apkStorageKey && existingApp.apkStorageKey !== uploaded.assetId) {
+    await apkStorage.deleteApk(storageConfig, existingApp.apkStorageKey);
+  }
+
   res.json({
     packageName: row.packageName,
     name: row.name,
@@ -746,8 +753,8 @@ app.get('/api/apps/apk/:assetId', wrap(async (req, res) => {
   const length = upstream.headers.get('content-length');
   if (length) res.setHeader('Content-Length', length);
   res.setHeader('Cache-Control', 'private, max-age=300');
-  const bytes = Buffer.from(await upstream.arrayBuffer());
-  res.send(bytes);
+  if (!upstream.body) throw new Error('GitHub APK download returned an empty body');
+  Readable.fromWeb(upstream.body).pipe(res);
 }));
 
 const REFRESH_PLAY_METADATA_BATCH_SIZE = 5;
