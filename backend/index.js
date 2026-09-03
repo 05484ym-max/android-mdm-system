@@ -1863,6 +1863,7 @@ app.get('/api/browser/check', wrap(async (req, res) => {
 
 const IMAGE_FILTER_POLICY_VERSION = imageModerator.POLICY_VERSION;
 const imageProxyRate = new Map();
+const imageModerationInFlight = new Map();
 const IMAGE_PROXY_WINDOW_MS = 60 * 1000;
 const IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW = 240;
 
@@ -1923,6 +1924,54 @@ function imageModerationDecisionIsCacheable(result) {
   ]).has(result.reason);
 }
 
+async function getOrModerateImageDecision(sha256Hex, remote) {
+  const cached = await db.getBrowserImageModeration(
+    sha256Hex,
+    IMAGE_FILTER_POLICY_VERSION,
+  );
+  if (cached) return cached;
+
+  const existing = imageModerationInFlight.get(sha256Hex);
+  if (existing) return existing;
+
+  const work = (async () => {
+    // Re-check the database after winning the in-memory race in case another
+    // process/instance populated the shared cache between the first read and
+    // this point.
+    const secondRead = await db.getBrowserImageModeration(
+      sha256Hex,
+      IMAGE_FILTER_POLICY_VERSION,
+    );
+    if (secondRead) return secondRead;
+
+    const moderated = await imageModerator.moderateImage(remote.buffer);
+    let decision = {
+      sha256: sha256Hex,
+      policyVersion: IMAGE_FILTER_POLICY_VERSION,
+      allowed: moderated.allowed === true,
+      reason: moderated.reason,
+      details: moderated.details || {},
+      source: moderated.source || 'local_siglip2_nudenet',
+      mimeType: remote.mimeType,
+      sizeBytes: remote.buffer.length,
+    };
+
+    if (imageModerationDecisionIsCacheable(moderated)) {
+      decision = await db.saveBrowserImageModeration(decision);
+    }
+    return decision;
+  })();
+
+  imageModerationInFlight.set(sha256Hex, work);
+  try {
+    return await work;
+  } finally {
+    if (imageModerationInFlight.get(sha256Hex) === work) {
+      imageModerationInFlight.delete(sha256Hex);
+    }
+  }
+}
+
 app.post('/api/browser/image', wrap(async (req, res) => {
   const rawUrl = req.body && typeof req.body.url === 'string' ? req.body.url : '';
   if (!rawUrl || rawUrl.length > 8192) {
@@ -1961,25 +2010,7 @@ app.post('/api/browser/image', wrap(async (req, res) => {
   }
 
   const sha256Hex = crypto.createHash('sha256').update(remote.buffer).digest('hex');
-  let decision = await db.getBrowserImageModeration(sha256Hex, IMAGE_FILTER_POLICY_VERSION);
-
-  if (!decision) {
-    const moderated = await imageModerator.moderateImage(remote.buffer);
-    decision = {
-      sha256: sha256Hex,
-      policyVersion: IMAGE_FILTER_POLICY_VERSION,
-      allowed: moderated.allowed === true,
-      reason: moderated.reason,
-      details: moderated.details || {},
-      source: moderated.source || 'google_vision',
-      mimeType: remote.mimeType,
-      sizeBytes: remote.buffer.length,
-    };
-
-    if (imageModerationDecisionIsCacheable(moderated)) {
-      decision = await db.saveBrowserImageModeration(decision);
-    }
-  }
+  const decision = await getOrModerateImageDecision(sha256Hex, remote);
 
   if (decision.allowed !== true) {
     return sendBlockedImage(res, decision.reason);
