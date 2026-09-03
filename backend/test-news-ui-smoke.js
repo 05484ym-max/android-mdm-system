@@ -86,7 +86,19 @@ function resolveChromiumExecutable() {
   const base = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(require('os').homedir(), '.cache', 'ms-playwright');
   const dirs = fs.readdirSync(base).filter(d => /^chromium-\d+$/.test(d));
   if (!dirs.length) throw new Error(`no chromium-* directory found under ${base}`);
-  return path.join(base, dirs.sort().pop(), 'chrome-linux', 'chrome');
+  const versionDir = path.join(base, dirs.sort().pop());
+  // Playwright's own internal layout has changed across versions: older
+  // installs unzip to chrome-linux/chrome, newer ones (rebranded "Chrome
+  // for Testing") unzip to chrome-linux64/chrome - discovered for real via
+  // a CI failure (`browserType.launch: Failed to launch chromium because
+  // executable doesn't exist at .../chrome-linux/chrome`) after `npm ci`
+  // resolved a newer 1.x than this sandbox's pre-installed copy. Try both
+  // rather than hardcoding either, so this keeps working across versions.
+  for (const dirName of ['chrome-linux', 'chrome-linux64']) {
+    const candidate = path.join(versionDir, dirName, 'chrome');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(`no chrome executable found under ${versionDir} (checked chrome-linux/ and chrome-linux64/)`);
 }
 
 // Polls for the actual expected state rather than a coarser signal that
