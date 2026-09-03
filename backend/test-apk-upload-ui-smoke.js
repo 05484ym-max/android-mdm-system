@@ -36,6 +36,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Pool } = require('pg');
 const { startFakeS3Server } = require('./fakeS3Server');
+const { buildTestApk } = require('./testApkFixture');
 
 const PORT = 4354;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -138,12 +139,7 @@ async function waitForText(getText, expected, timeoutMs = 8000) {
     await db.init();
     await resetTestDatabase();
 
-    const apkBuffer = Buffer.alloc(4096);
-    apkBuffer.writeUInt8(0x50, 0);
-    apkBuffer.writeUInt8(0x4b, 1);
-    apkBuffer.writeUInt8(0x03, 2);
-    apkBuffer.writeUInt8(0x04, 3);
-    crypto.randomFillSync(apkBuffer, 4);
+    const apkBuffer = buildTestApk('com.uismoke.apk', 4096);
     fs.writeFileSync(fixtureApkPath, apkBuffer);
 
     const executablePath = resolveChromiumExecutable();
@@ -189,7 +185,6 @@ async function waitForText(getText, expected, timeoutMs = 8000) {
     });
 
     await test('a real upload through the UI succeeds, shows a Hebrew success message, and refreshes the catalog with an APK badge', async () => {
-      await page.fill('#apkPackageName', 'com.uismoke.apk');
       await page.click('#apkUploadSubmitBtn');
       await waitForText(
         () => page.locator('#apkUploadStatus').textContent(),
