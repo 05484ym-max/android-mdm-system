@@ -38,3 +38,25 @@
   font-size: 0.8rem; font-weight: 600;
 }
 .news-card-actions button.news-delete-btn { border-color: rgba(179,67,44,0.35); color: var(--danger); }
+
+
+.news-media-field { margin: 10px 0 12px; }
+.news-media-label { display:block; font-size:0.88rem; font-weight:700; color:var(--text); margin-bottom:6px; }
+.news-media-help { font-size:0.76rem; color:var(--text-dim); margin-top:4px; }
+.news-media-preview {
+  margin-top:10px; border:1px solid var(--card-border); border-radius:14px;
+  overflow:hidden; background:rgba(0,0,0,0.03); padding:8px;
+}
+.news-media-preview img,
+.news-card-media img {
+  display:block; width:100%; max-height:320px; object-fit:contain; border-radius:10px;
+}
+.news-media-preview video,
+.news-card-media video {
+  display:block; width:100%; max-height:360px; border-radius:10px; background:#111;
+}
+.news-card-media { margin-top:10px; }
+.news-media-type-badge {
+  display:inline-flex; align-items:center; gap:5px; margin-top:7px;
+  font-size:0.74rem; color:var(--text-dim);
+}

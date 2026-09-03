@@ -418,6 +418,17 @@
     <h2 id="newsFormTitle">הודעה חדשה</h2>
     <input class="login-input" id="newsTitleInput" placeholder="כותרת" maxlength="200" />
     <textarea class="login-input news-textarea" id="newsBodyInput" placeholder="תוכן ההודעה (טקסט רגיל בלבד)" maxlength="20000"></textarea>
+    <div class="news-media-field">
+      <label for="newsMediaInput" class="news-media-label">תמונה או סרטון (אופציונלי)</label>
+      <input type="file" class="login-input" id="newsMediaInput"
+             accept="image/png,image/jpeg,image/webp,video/mp4,video/webm" />
+      <div class="news-media-help">תמונה עד 10MB · סרטון עד 50MB · PNG/JPG/WebP/MP4/WebM</div>
+      <div id="newsMediaPreview" class="news-media-preview" style="display:none;"></div>
+      <label class="news-checkbox-row" id="newsRemoveMediaRow" style="display:none;">
+        <input type="checkbox" id="newsRemoveMediaInput" />
+        הסר את התמונה / הסרטון הקיימים
+      </label>
+    </div>
     <label class="news-checkbox-row">
       <input type="checkbox" id="newsPinnedInput" />
       הצמד / סמן כחשובה
