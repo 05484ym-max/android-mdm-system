@@ -64,8 +64,7 @@ class RealModelSmokeTests(unittest.TestCase):
 
         scores = ai_app._siglip_scores(image)
         self.assertIsInstance(scores, dict)
-        self.assertTrue(scores, "SigLIP returned no usable candidate scores")
-        self.assertTrue(set(scores).issubset(set(SIGLIP_PROMPTS)))
+        self.assertEqual(set(scores), set(SIGLIP_PROMPTS))
         for score in scores.values():
             self.assertGreaterEqual(score, 0.0)
             self.assertLessEqual(score, 1.0)
