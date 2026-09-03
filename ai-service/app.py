@@ -4,6 +4,7 @@ import io
 import math
 import os
 import threading
+from contextlib import asynccontextmanager
 from typing import Any
 
 import cv2
@@ -16,16 +17,17 @@ from transformers import pipeline
 
 from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="3.0.0")
-
 MAX_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
 MAX_FACE_DETECT_SIDE = 1280
 MAX_FACES = 8
 
 DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-512"
+DEFAULT_SIGLIP_REVISION = "b7a8618d40a3a296a724f779e3dddf1e7afc6157"
 DEFAULT_NSFW_MODEL = "viddexa/nsfw-detection-mini"
+DEFAULT_NSFW_REVISION = "008722e6cd8dff64efa75fb2a8482c80e41434ca"
 DEFAULT_GENDER_MODEL = "dima806/man_woman_face_image_detection"
+DEFAULT_GENDER_REVISION = "ecab7935ec1df4243f7832b87df94b4cd1530502"
 YUNET_REPO = "opencv/opencv_zoo"
 YUNET_FILE = "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
@@ -45,6 +47,7 @@ _siglip: Any = None
 _nsfw: Any = None
 _gender: Any = None
 _face_detector: Any = None
+_models_ready = False
 _model_load_lock = threading.Lock()
 _face_detector_lock = threading.Lock()
 _inference_gate = threading.BoundedSemaphore(_configured_concurrency())
@@ -65,7 +68,10 @@ def _load_siglip():
             _siglip = pipeline(
                 task="zero-shot-image-classification",
                 model=os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
+                revision=os.environ.get("SIGLIP_REVISION", DEFAULT_SIGLIP_REVISION),
                 device=-1,
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
             )
     return _siglip
 
@@ -79,7 +85,10 @@ def _load_nsfw():
             _nsfw = pipeline(
                 task="image-classification",
                 model=os.environ.get("NSFW_MODEL", DEFAULT_NSFW_MODEL),
+                revision=os.environ.get("NSFW_REVISION", DEFAULT_NSFW_REVISION),
                 device=-1,
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
             )
     return _nsfw
 
@@ -93,7 +102,10 @@ def _load_gender():
             _gender = pipeline(
                 task="image-classification",
                 model=os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL),
+                revision=os.environ.get("GENDER_REVISION", DEFAULT_GENDER_REVISION),
                 device=-1,
+                trust_remote_code=False,
+                model_kwargs={"use_safetensors": True},
             )
     return _gender
 
@@ -128,13 +140,23 @@ def _load_face_detector():
 
 
 def _siglip_scores(image: Image.Image) -> dict[str, float]:
-    raw = _load_siglip()(image, candidate_labels=SIGLIP_PROMPTS)
+    raw = _load_siglip()(
+        image,
+        candidate_labels=SIGLIP_PROMPTS,
+        # Prompts are already complete natural-language statements. Avoid the
+        # Transformers default hypothesis wrapper from changing their meaning.
+        hypothesis_template="{}",
+    )
+    if not isinstance(raw, list):
+        raise RuntimeError("siglip_invalid_result")
+
     scores: dict[str, float] = {}
-    for item in raw or []:
+    expected = set(SIGLIP_PROMPTS)
+    for item in raw:
         if not isinstance(item, dict):
             continue
         label = str(item.get("label", ""))
-        if label not in SIGLIP_PROMPTS:
+        if label not in expected:
             continue
         try:
             score = float(item.get("score", 0.0))
@@ -142,8 +164,11 @@ def _siglip_scores(image: Image.Image) -> dict[str, float]:
             continue
         if 0.0 <= score <= 1.0:
             scores[label] = max(scores.get(label, 0.0), score)
-    if not scores:
-        raise RuntimeError("siglip_no_scores")
+
+    # HAREDI_STRICT must never interpret a missing candidate as score 0. A
+    # partial model response is an AI failure and therefore blocks fail-closed.
+    if set(scores) != expected:
+        raise RuntimeError("siglip_incomplete_result")
     return scores
 
 
@@ -270,16 +295,46 @@ def _run_models(body: bytes, image: Image.Image) -> dict:
         return evaluate(nsfw, faces, siglip)
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global _models_ready
+    preload = os.environ.get("LOCAL_AI_PRELOAD_MODELS", "1") == "1"
+    if preload:
+        # Production startup is intentionally strict: if any reviewed model
+        # cannot be downloaded/loaded, the service must not advertise ready.
+        _load_face_detector()
+        _load_gender()
+        _load_nsfw()
+        _load_siglip()
+        _models_ready = True
+    try:
+        yield
+    finally:
+        _models_ready = False
+
+
+app = FastAPI(
+    title="Yehudi Kasher Local Image AI",
+    version="3.1.0",
+    lifespan=lifespan,
+)
+
+
 @app.get("/health")
 def health():
+    token_configured = bool(os.environ.get("LOCAL_AI_TOKEN", ""))
     return {
-        "status": "ok",
+        "status": "ok" if _models_ready else "warming",
+        "ready": _models_ready,
         "policyVersion": POLICY_VERSION,
-        "productionReady": True,
+        "productionReady": _models_ready and token_configured,
         "models": {
             "siglip": os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
+            "siglipRevision": os.environ.get("SIGLIP_REVISION", DEFAULT_SIGLIP_REVISION),
             "nsfw": os.environ.get("NSFW_MODEL", DEFAULT_NSFW_MODEL),
+            "nsfwRevision": os.environ.get("NSFW_REVISION", DEFAULT_NSFW_REVISION),
             "gender": os.environ.get("GENDER_MODEL", DEFAULT_GENDER_MODEL),
+            "genderRevision": os.environ.get("GENDER_REVISION", DEFAULT_GENDER_REVISION),
             "faceDetector": "opencv/opencv_zoo:YuNet-2023mar",
         },
         "maxImageBytes": MAX_BYTES,
