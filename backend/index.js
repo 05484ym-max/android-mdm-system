@@ -1086,42 +1086,43 @@ app.post('/api/apps/:packageName/assign-all', requireAdmin, wrap(async (req, res
   res.json({ status: 'ok', updated: devices.length });
 }));
 
-// Global removal - deletes the app from the catalog entirely, strips it
-// from every device's allowedApps (waking each affected device to sync,
-// same as any other policy change - see savePolicyAndWake), and - only for
-// an app that was actually uploaded as an APK (app_source === 'APK') -
-// best-effort deletes its APK/icon GitHub Release assets. This is
-// deliberately separate from the per-device removal below
-// (DELETE /api/devices/:deviceId/policy/apps/:packageName, "הסר מהלקוח"),
-// which only ever touches one device's own policy and must never reach
-// this route's catalog/storage side effects.
+// Global removal - atomically (see db.deleteAppFromCatalogAtomic) deletes
+// the app from the catalog and strips it from every device's allowedApps in
+// one PostgreSQL transaction, then - only once that's committed - wakes
+// each affected device to sync, and - only for an app that was actually
+// uploaded as an APK (app_source === 'APK') - best-effort deletes its
+// APK/icon GitHub Release assets. This is deliberately separate from the
+// per-device removal below (DELETE /api/devices/:deviceId/policy/apps/:packageName,
+// "הסר מהלקוח"), which only ever touches one device's own policy and must
+// never reach this route's catalog/storage side effects.
 app.delete('/api/apps/:packageName', requireAdmin, wrap(async (req, res) => {
   const { packageName } = req.params;
   if (!PACKAGE_NAME_REGEX.test(packageName)) {
     return res.status(400).json({ error: 'invalid packageName format' });
   }
 
-  // Atomically removes the row and hands back exactly the metadata needed
-  // for storage cleanup below (see db.deleteAppFromCatalog's own comment) -
-  // this is the "collect metadata before/while deleting from the catalog"
-  // step; null means no such app existed.
-  const deleted = await db.deleteAppFromCatalog(packageName);
-  if (!deleted) {
+  // The entire PostgreSQL side (read storage metadata, strip the package
+  // from every device policy that had it allowed, delete the catalog row)
+  // happens atomically in one transaction - see db.deleteAppFromCatalogAtomic's
+  // own comment. Nothing here can leave the DB in a mixed state: either the
+  // whole thing committed, or none of it did. null means no such app
+  // existed - nothing was touched, 404.
+  const result = await db.deleteAppFromCatalogAtomic(packageName);
+  if (!result) {
     return res.status(404).json({ error: 'app not found in catalog' });
   }
+  const { deletedApp, affectedDevices, devicesUpdated } = result;
 
-  // Same allowedApps-filter + savePolicyAndWake pattern already used by the
-  // single-device removal route below - looped across every device instead
-  // of one. A device that never had this app allowed is left untouched (no
-  // wake, no wasted write).
-  const devices = await db.listDevices();
-  let devicesUpdated = 0;
-  for (const device of devices) {
-    const policy = normalizePolicy(device.policy);
-    if (policy.allowedApps.includes(packageName)) {
-      policy.allowedApps = policy.allowedApps.filter(p => p !== packageName);
-      await savePolicyAndWake(device, policy);
-      devicesUpdated++;
+  // Waking devices happens only AFTER the transaction above already
+  // committed - a push failure here must never roll back an
+  // already-successful deletion. push.wake itself never throws (it catches
+  // internally and returns { sent, reason }); still check the result and log
+  // a warning per failure so a silent notification gap is visible in the
+  // server log, then keep going through the rest of the affected devices.
+  for (const { deviceId, pushToken } of affectedDevices) {
+    const wakeResult = await push.wake(pushToken);
+    if (!wakeResult.sent) {
+      console.warn(`[apps] wake failed for device ${deviceId} after deleting ${packageName}: ${wakeResult.reason}`);
     }
   }
 
@@ -1132,11 +1133,11 @@ app.delete('/api/apps/:packageName', requireAdmin, wrap(async (req, res) => {
   // API here must not turn an otherwise-successful catalog+policy removal
   // into a 500 - the app is already gone from the store and from every
   // device regardless of whether this cleanup step succeeds.
-  if (deleted.appSource === 'APK') {
+  if (deletedApp.appSource === 'APK') {
     try {
       const storageConfig = apkStorage.loadStorageConfig();
-      if (deleted.apkStorageKey) await apkStorage.deleteApk(storageConfig, deleted.apkStorageKey);
-      if (deleted.apkIconStorageKey) await apkStorage.deleteApk(storageConfig, deleted.apkIconStorageKey);
+      if (deletedApp.apkStorageKey) await apkStorage.deleteApk(storageConfig, deletedApp.apkStorageKey);
+      if (deletedApp.apkIconStorageKey) await apkStorage.deleteApk(storageConfig, deletedApp.apkIconStorageKey);
     } catch (e) {
       console.error(`[apps] storage cleanup failed for deleted app ${packageName}:`, e.message);
     }

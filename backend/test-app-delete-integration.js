@@ -297,6 +297,60 @@ async function resetTestDatabase() {
       assert.deepStrictEqual(allowed, ['com.delete.bystander'], 'only the deleted package should be stripped, the bystander stays allowed');
     });
 
+    // ================= atomic rollback =================
+    //
+    // db.deleteAppFromCatalogAtomic is exercised directly here (same real
+    // Postgres database the spawned server above also uses), not through
+    // HTTP - rollback is a pure DB-transaction property, and
+    // setDeleteAppFromCatalogAtomicTestHook only exists in this test
+    // process's own require('./db'), not inside the separate spawned server
+    // process. The forced failure itself is real (a real thrown Error
+    // reaching the real try/catch/ROLLBACK in db.js) - nothing about the
+    // transaction or rollback logic under test is mocked.
+
+    await test('a deliberate failure in the middle of the transaction rolls back the whole delete - nothing is removed', async () => {
+      await db.addAppToCatalog('com.delete.rollback', 'Rollback Target', null, '1.0', Date.now(), 'other');
+      const device = await createTestDevice('rollback');
+      await assignApp(mainBase, cookie, device, 'com.delete.rollback');
+
+      db.setDeleteAppFromCatalogAtomicTestHook(async () => {
+        throw new Error('deliberate test failure mid-transaction');
+      });
+      try {
+        await assert.rejects(
+          () => db.deleteAppFromCatalogAtomic('com.delete.rollback'),
+          /deliberate test failure mid-transaction/,
+        );
+      } finally {
+        db.setDeleteAppFromCatalogAtomicTestHook(null);
+      }
+
+      const catalog = await (await adminFetch(mainBase, cookie, '/api/apps')).json();
+      assert.ok(
+        catalog.some(a => a.packageName === 'com.delete.rollback'),
+        'the app must still be in the catalog after a rolled-back delete',
+      );
+      assert.deepStrictEqual(
+        await allowedAppsFor(mainBase, cookie, device),
+        ['com.delete.rollback'],
+        'the device policy must be completely unchanged after a rolled-back delete',
+      );
+    });
+
+    await test('after a rolled-back attempt, a real (non-forced) delete of the same app still succeeds normally', async () => {
+      const device = await createTestDevice('rollback-retry');
+      await assignApp(mainBase, cookie, device, 'com.delete.rollback');
+
+      const res = await adminFetch(mainBase, cookie, '/api/apps/com.delete.rollback', { method: 'DELETE' });
+      const body = await res.json();
+      assert.strictEqual(res.status, 200, JSON.stringify(body));
+      assert.strictEqual(body.devicesUpdated, 2, 'both devices that had it allowed (the earlier one and this one) should be counted');
+
+      const catalog = await (await adminFetch(mainBase, cookie, '/api/apps')).json();
+      assert.ok(!catalog.some(a => a.packageName === 'com.delete.rollback'), 'the catalog row must actually be gone this time');
+      assert.deepStrictEqual(await allowedAppsFor(mainBase, cookie, device), []);
+    });
+
     // ================= APK/icon asset cleanup, scoped to only the deleted app =================
 
     await test('global delete of an APK-sourced app removes exactly its own APK and icon GitHub assets', async () => {
