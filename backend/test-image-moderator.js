@@ -5,6 +5,7 @@ const {
   POLICY_VERSION,
   moderateImage,
   sanitizeDetails,
+  localAiEndpoint,
 } = require('./imageModerator');
 
 (async () => {
@@ -16,6 +17,13 @@ const {
     delete process.env.LOCAL_AI_TOKEN;
 
     let result = await moderateImage(Buffer.from('image'));
+    assert.strictEqual(result.allowed, false);
+    assert.strictEqual(result.reason, 'local_ai_not_configured');
+
+    process.env.LOCAL_AI_URL = 'file:///tmp/not-allowed';
+    process.env.LOCAL_AI_TOKEN = 'test-secret';
+    assert.strictEqual(localAiEndpoint(), null);
+    result = await moderateImage(Buffer.from('image'));
     assert.strictEqual(result.allowed, false);
     assert.strictEqual(result.reason, 'local_ai_not_configured');
 
