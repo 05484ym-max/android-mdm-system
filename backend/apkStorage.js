@@ -93,6 +93,22 @@ function generateIconStorageKey(extension = 'png') {
   return `${crypto.randomUUID()}.${safe}`;
 }
 
+function mediaExtension(contentType) {
+  return {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+  }[contentType] || null;
+}
+
+function generateMediaStorageKey(contentType) {
+  const extension = mediaExtension(contentType);
+  if (!extension) throw new Error('unsupported news media content type');
+  return `news-${crypto.randomUUID()}.${extension}`;
+}
+
 async function uploadAsset(config, key, buffer, contentType) {
   const release = await ensureRelease(config);
   const uploadUrl = new URL(
@@ -147,6 +163,11 @@ async function uploadIcon(config, key, buffer, contentType) {
   return uploadAsset(config, key, buffer, contentType);
 }
 
+async function uploadMedia(config, key, buffer, contentType) {
+  if (!mediaExtension(contentType)) throw new Error('unsupported news media content type');
+  return uploadAsset(config, key, buffer, contentType);
+}
+
 async function deleteApk(config, assetId) {
   try {
     const response = await fetch(
@@ -181,8 +202,10 @@ module.exports = {
   loadStorageConfig,
   generateApkStorageKey,
   generateIconStorageKey,
+  generateMediaStorageKey,
   uploadApk,
   uploadIcon,
+  uploadMedia,
   deleteApk,
   downloadApk,
 };
