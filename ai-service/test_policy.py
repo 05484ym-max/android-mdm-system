@@ -1,58 +1,75 @@
-from policy import evaluate
+import unittest
+
+from policy import POLICY_VERSION, evaluate
 
 
-def test_female_face_blocks():
-    result = evaluate(
-        [{"class": "FACE_FEMALE", "score": 0.91}],
-        {},
-    )
-    assert result["allowed"] is False
-    assert result["reason"] == "female_detected"
+class HarediStrictPolicyTests(unittest.TestCase):
+    def test_policy_version_is_local_v2(self):
+        self.assertEqual(POLICY_VERSION, "HAREDI_STRICT_V2_LOCAL")
+
+    def test_female_face_blocks(self):
+        result = evaluate(
+            [{"class": "FACE_FEMALE", "score": 0.91}],
+            {},
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "female_detected")
+
+    def test_revealing_blocks(self):
+        result = evaluate(
+            [{"class": "BELLY_EXPOSED", "score": 0.75}],
+            {},
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "revealing_content")
+
+    def test_siglip_woman_blocks(self):
+        result = evaluate(
+            [],
+            {
+                "a photograph of a woman": 0.88,
+                "a photograph of a man": 0.05,
+                "a photograph with no person": 0.08,
+            },
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "female_detected")
+
+    def test_confident_male_can_pass(self):
+        result = evaluate(
+            [],
+            {
+                "a photograph of a woman": 0.06,
+                "a photograph of a man": 0.86,
+                "a photograph of a boy": 0.04,
+                "a photograph with no person": 0.03,
+            },
+        )
+        self.assertTrue(result["allowed"])
+
+    def test_ambiguous_person_blocks(self):
+        result = evaluate(
+            [],
+            {
+                "a photograph of a woman": 0.48,
+                "a photograph of a man": 0.42,
+                "a photograph with no person": 0.10,
+            },
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "ambiguous_person")
+
+    def test_swimsuit_blocks(self):
+        result = evaluate(
+            [],
+            {
+                "a photograph of a person wearing a swimsuit": 0.82,
+                "a photograph of a man": 0.12,
+            },
+        )
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "revealing_clothing")
 
 
-def test_revealing_blocks():
-    result = evaluate(
-        [{"class": "BELLY_EXPOSED", "score": 0.75}],
-        {},
-    )
-    assert result["allowed"] is False
-    assert result["reason"] == "revealing_content"
-
-
-def test_siglip_woman_blocks():
-    result = evaluate(
-        [],
-        {
-            "a photograph of a woman": 0.88,
-            "a photograph of a man": 0.05,
-            "a photograph with no person": 0.08,
-        },
-    )
-    assert result["allowed"] is False
-    assert result["reason"] == "female_detected"
-
-
-def test_confident_male_can_pass():
-    result = evaluate(
-        [],
-        {
-            "a photograph of a woman": 0.06,
-            "a photograph of a man": 0.86,
-            "a photograph of a boy": 0.04,
-            "a photograph with no person": 0.03,
-        },
-    )
-    assert result["allowed"] is True
-
-
-def test_ambiguous_person_blocks():
-    result = evaluate(
-        [],
-        {
-            "a photograph of a woman": 0.48,
-            "a photograph of a man": 0.42,
-            "a photograph with no person": 0.10,
-        },
-    )
-    assert result["allowed"] is False
-    assert result["reason"] == "ambiguous_person"
+if __name__ == "__main__":
+    unittest.main()
