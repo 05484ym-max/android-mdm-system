@@ -45,6 +45,10 @@ data class CatalogApp(
     val categoryLabel: String = "אחר",
     val isRecommended: Boolean = false,
     val sortOrder: Int = 0,
+    val appSource: String = "PLAY",
+    val apkUrl: String? = null,
+    val apkSha256: String? = null,
+    val apkSizeBytes: Long? = null,
 )
 
 data class SyncResult(
@@ -116,6 +120,10 @@ class ApiClient(
                 categoryLabel = item.optString("categoryLabel", "אחר").ifBlank { "אחר" },
                 isRecommended = item.optBoolean("isRecommended", false),
                 sortOrder = item.optInt("sortOrder", 0).coerceIn(0, 100000),
+                appSource = item.optString("appSource", "PLAY").ifBlank { "PLAY" },
+                apkUrl = if (item.isNull("apkUrl")) null else item.optString("apkUrl", null),
+                apkSha256 = if (item.isNull("apkSha256")) null else item.optString("apkSha256", null),
+                apkSizeBytes = if (item.isNull("apkSizeBytes")) null else item.optLong("apkSizeBytes"),
             )
         }
 
