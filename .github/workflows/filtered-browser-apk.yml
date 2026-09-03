@@ -1,0 +1,76 @@
+name: Filtered Browser APK
+
+on:
+  push:
+    branches:
+      - filtered-browser-client
+      - fix/filtered-browser-raster-icon
+    paths:
+      - 'client/**'
+      - '.github/workflows/filtered-browser-apk.yml'
+  pull_request:
+    branches:
+      - filtered-browser-client
+    paths:
+      - 'client/**'
+      - '.github/workflows/filtered-browser-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: 8.9
+
+      - name: Test and build browser
+        working-directory: client
+        run: gradle testDebugUnitTest assembleDebug
+
+      - name: Verify raster icon fallback is packaged
+        run: |
+          set -euo pipefail
+          APK=client/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l "$APK" | tee /tmp/apk-files.txt
+          grep -E 'res/[^ ]*browser_icon\.png$' /tmp/apk-files.txt
+          python3 - "$APK" <<'PY'
+          import sys, zipfile
+          apk = sys.argv[1]
+          with zipfile.ZipFile(apk) as z:
+              matches = [n for n in z.namelist() if n.startswith("res/") and n.endswith("browser_icon.png")]
+              if not matches:
+                  raise SystemExit("browser_icon.png missing from APK")
+              data = z.read(matches[0])
+              if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                  raise SystemExit("browser icon fallback is not a valid PNG")
+              if len(data) < 1024:
+                  raise SystemExit("browser icon fallback is unexpectedly tiny")
+              print(f"Verified {matches[0]} ({len(data)} bytes)")
+          PY
+
+      - name: Upload verified browser APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: filtered-browser-debug
+          path: client/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
