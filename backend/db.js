@@ -683,6 +683,25 @@ async function updateAppCatalogMeta(packageName, { category, isRecommended, sort
 }
 
 /**
+ * Global removal of a catalog app (see DELETE /api/apps/:packageName).
+ * A single atomic DELETE ... RETURNING * both removes the row and hands
+ * back exactly the metadata (app_source/apk_storage_key/
+ * apk_icon_storage_key) the caller needs to clean up its GitHub Release
+ * assets - there is no separate SELECT-then-DELETE gap where the row could
+ * disappear (e.g. a concurrent request) between reading its metadata and
+ * removing it. Returns null if no such package existed (caller 404s);
+ * removing devices' allowedApps entries and any storage cleanup are the
+ * caller's responsibility - this function only ever touches apps_catalog.
+ */
+async function deleteAppFromCatalog(packageName) {
+  const { rows } = await pool.query(
+    `DELETE FROM apps_catalog WHERE package_name = $1 RETURNING *`,
+    [packageName],
+  );
+  return rows[0] ? mapCatalogRow(rows[0]) : null;
+}
+
+/**
  * Starvation-safe candidate list for the refresh-play-metadata backfill:
  * apps that have never been checked sort first (NULLS FIRST), then whichever
  * was checked longest ago. Every attempt - success or failure, and a success
@@ -1118,6 +1137,7 @@ module.exports = {
   addAppToCatalog,
   insertUploadedApp,
   updateAppCatalogMeta,
+  deleteAppFromCatalog,
   listAppsPendingPlayMetadataRefresh,
   claimAppsForPlayMetadataRefresh,
   recordPlayMetadataCheckSuccess,

@@ -195,6 +195,11 @@
     flex: 1; padding: 7px 6px; font-size: 0.72rem; white-space: normal;
   }
   .catalog-tile .approved-badge { margin-top: 4px; }
+  .catalog-remove-btn {
+    width: 100%; margin-top: 6px; background: transparent;
+    border: 1px solid rgba(179,67,44,0.4); color: var(--danger);
+    padding: 7px 6px; font-size: 0.72rem;
+  }
   .sub-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
   .sub-tab-btn {
     flex: 1; padding: 10px; border-radius: 12px; border: 1px solid var(--card-border);
@@ -376,7 +381,9 @@
       </button>
     <input class="search-input" id="catalogSearch" placeholder="חפש אפליקציה (שם, חבילה או קטגוריה)" />
     <div class="category-chips" id="catalogCategoryChips"></div>
-    <div id="catalogList"><div class="empty-state">טוען...</div></div>
+    <!-- Always-visible add-app area - deliberately placed here, right after
+         search/filter and before the (potentially long) app list below, so
+         it never requires scrolling past the whole catalog to reach. -->
     <div class="add-app-row" id="appImportActions" style="margin-top:10px;">
       <button class="add-app-btn" id="openPlaySearchBtn">חפש ב-Google Play</button>
       <button class="add-app-btn" id="openApkUploadBtn">העלה APK</button>
@@ -386,6 +393,7 @@
       <input class="package-input" id="newAppPackage" placeholder="com.waze" />
       <button class="add-app-btn" id="addAppToCatalogBtn">הוסף לקטלוג</button>
     </div>
+    <div id="catalogList"><div class="empty-state">טוען...</div></div>
   </div>
 </div>
 
@@ -883,7 +891,7 @@ function renderDeviceDetail(deviceId) {
   document.getElementById('detailTitle').textContent = d.customerName || 'לקוח ללא שם';
 
   const appsHtml = apps.length
-    ? apps.map(a => `<span class="app-chip">${escapeHtml(a)} <button class="remove-app-btn" data-package="${escapeHtml(a)}">✕</button></span>`).join('')
+    ? apps.map(a => `<span class="app-chip">${escapeHtml(a)} <button class="remove-app-btn" data-package="${escapeHtml(a)}" title="הסר מהלקוח" aria-label="הסר מהלקוח">✕</button></span>`).join('')
     : '<span class="no-apps">אין אפליקציות ברשימה — כרגע הכל מותר כברירת מחדל</span>';
 
   const statusLine = d.status
@@ -1276,6 +1284,7 @@ function renderCatalog(apps) {
           <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
           <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
         </div>
+        <button class="add-app-btn catalog-remove-btn" data-remove-app="${escapeHtml(a.packageName)}" data-remove-name="${escapeHtml(a.name)}" title="הסר את האפליקציה מהמערכת עבור כל הלקוחות">הסר מהמערכת</button>
         ${catalogMetaRowHtml(a)}
       </div>
     `).join('')}</div>`;
@@ -1301,6 +1310,44 @@ function renderCatalog(apps) {
         btn.textContent = 'מוסיף...';
         await fetch(`/api/apps/${encodeURIComponent(packageName)}/assign-all`, { method: 'POST' });
         loadDevices();
+      });
+    });
+
+    // Global removal - deletes the app from the catalog, strips it from
+    // every device's allowedApps (waking each affected device, same as any
+    // other policy change), and - only for an app actually uploaded as an
+    // APK - deletes its GitHub Release APK/icon assets too. Deliberately
+    // separate from the per-device "✕" chip in the device detail view
+    // ("הסר מהלקוח"), which only ever touches one device.
+    document.querySelectorAll('[data-remove-app]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const packageName = btn.getAttribute('data-remove-app');
+        const name = btn.getAttribute('data-remove-name');
+        const confirmed = confirm(
+          `להסיר לצמיתות את "${name}" (${packageName}) מהמערכת?\n` +
+          `הפעולה תסיר את האפליקציה מהקטלוג ומרשימת האפליקציות המאושרות של כל הלקוחות. לא ניתן לבטל פעולה זו.`
+        );
+        if (!confirmed) return;
+
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'מסיר...';
+        try {
+          const res = await fetch(`/api/apps/${encodeURIComponent(packageName)}`, { method: 'DELETE' });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            alert(body.error || 'הסרת האפליקציה נכשלה');
+            btn.disabled = false;
+            btn.textContent = originalText;
+            return;
+          }
+          alert(`"${name}" הוסרה מהמערכת ומ-${body.devicesUpdated} מכשיר/ים`);
+          await Promise.all([loadAppsCatalog(), loadDevices()]);
+        } catch (e) {
+          alert('שגיאת תקשורת - הסרת האפליקציה נכשלה');
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
       });
     });
 

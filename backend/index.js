@@ -1086,6 +1086,65 @@ app.post('/api/apps/:packageName/assign-all', requireAdmin, wrap(async (req, res
   res.json({ status: 'ok', updated: devices.length });
 }));
 
+// Global removal - deletes the app from the catalog entirely, strips it
+// from every device's allowedApps (waking each affected device to sync,
+// same as any other policy change - see savePolicyAndWake), and - only for
+// an app that was actually uploaded as an APK (app_source === 'APK') -
+// best-effort deletes its APK/icon GitHub Release assets. This is
+// deliberately separate from the per-device removal below
+// (DELETE /api/devices/:deviceId/policy/apps/:packageName, "הסר מהלקוח"),
+// which only ever touches one device's own policy and must never reach
+// this route's catalog/storage side effects.
+app.delete('/api/apps/:packageName', requireAdmin, wrap(async (req, res) => {
+  const { packageName } = req.params;
+  if (!PACKAGE_NAME_REGEX.test(packageName)) {
+    return res.status(400).json({ error: 'invalid packageName format' });
+  }
+
+  // Atomically removes the row and hands back exactly the metadata needed
+  // for storage cleanup below (see db.deleteAppFromCatalog's own comment) -
+  // this is the "collect metadata before/while deleting from the catalog"
+  // step; null means no such app existed.
+  const deleted = await db.deleteAppFromCatalog(packageName);
+  if (!deleted) {
+    return res.status(404).json({ error: 'app not found in catalog' });
+  }
+
+  // Same allowedApps-filter + savePolicyAndWake pattern already used by the
+  // single-device removal route below - looped across every device instead
+  // of one. A device that never had this app allowed is left untouched (no
+  // wake, no wasted write).
+  const devices = await db.listDevices();
+  let devicesUpdated = 0;
+  for (const device of devices) {
+    const policy = normalizePolicy(device.policy);
+    if (policy.allowedApps.includes(packageName)) {
+      policy.allowedApps = policy.allowedApps.filter(p => p !== packageName);
+      await savePolicyAndWake(device, policy);
+      devicesUpdated++;
+    }
+  }
+
+  // Storage cleanup only ever applies to an APK-sourced row, and only ever
+  // targets THIS row's own asset ids - never another app's. Best-effort and
+  // deliberately non-fatal: apkStorage.deleteApk already never throws (logs
+  // and returns false on failure), and a misconfigured/unreachable GitHub
+  // API here must not turn an otherwise-successful catalog+policy removal
+  // into a 500 - the app is already gone from the store and from every
+  // device regardless of whether this cleanup step succeeds.
+  if (deleted.appSource === 'APK') {
+    try {
+      const storageConfig = apkStorage.loadStorageConfig();
+      if (deleted.apkStorageKey) await apkStorage.deleteApk(storageConfig, deleted.apkStorageKey);
+      if (deleted.apkIconStorageKey) await apkStorage.deleteApk(storageConfig, deleted.apkIconStorageKey);
+    } catch (e) {
+      console.error(`[apps] storage cleanup failed for deleted app ${packageName}:`, e.message);
+    }
+  }
+
+  res.json({ status: 'ok', packageName, devicesUpdated });
+}));
+
 app.post('/api/devices/:deviceId/policy/apps', requireAdmin, wrap(async (req, res) => {
   const { packageName } = req.body;
   if (typeof packageName !== 'string' || !PACKAGE_NAME_REGEX.test(packageName)) {
