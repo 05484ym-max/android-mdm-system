@@ -1,0 +1,194 @@
+name: Customer Updates Tests
+
+# Runs the real backend integration suite and the real admin-panel UI
+# smoke suite for the "חדשות ועדכונים" (customer news/updates) feature -
+# neither is exercised by the CodeQL workflow (that's static analysis
+# only, it never executes application tests). Both jobs use a real,
+# ephemeral, test-only PostgreSQL service container - never production
+# credentials, never a mock database.
+
+on:
+  push:
+    paths:
+      - 'backend/**'
+      - 'admin-panel/**'
+      - '.github/workflows/customer-updates-tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - 'admin-panel/**'
+      - '.github/workflows/customer-updates-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: customer-updates-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Test-only credentials for the ephemeral Postgres service container
+  # below - this database exists only for the lifetime of the job and is
+  # discarded afterward. Never production, never real secrets.
+  PGUSER: newsupdates_test_user
+  PGPASSWORD: newsupdates_test_pw
+  PGDATABASE: newsupdates_test
+  ADMIN_USERNAME: itest_admin
+  ADMIN_PASSWORD: itest_password_123
+  JWT_SECRET: itest-jwt-secret-not-for-prod-ci-only
+  SECURE_COOKIES: '0'
+  DATABASE_SSL: disable
+
+jobs:
+  postgres-integration:
+    name: Backend integration (real PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: newsupdates_test_user
+          POSTGRES_PASSWORD: newsupdates_test_pw
+          POSTGRES_DB: newsupdates_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsupdates_test_user -d newsupdates_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Start backend server against the ephemeral Postgres service
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+          PORT: '4411'
+        run: |
+          node index.js > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4411/health >/dev/null 2>&1; then
+              echo "server is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::server did not become healthy in time"
+          cat server.log
+          exit 1
+
+      - name: Run test-customer-updates-integration.js (real HTTP + real Postgres)
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+          TEST_BASE_URL: http://127.0.0.1:4411
+        run: node test-customer-updates-integration.js
+
+      - name: Show server log on failure
+        if: failure()
+        working-directory: backend
+        run: cat server.log || true
+
+      - name: Stop backend server
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" 2>/dev/null || true
+          fi
+
+  admin-ui-smoke:
+    name: Admin panel UI smoke (real Chromium)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: newsupdates_test_user
+          POSTGRES_PASSWORD: newsupdates_test_pw
+          POSTGRES_DB: newsupdates_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsupdates_test_user -d newsupdates_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      # Installs a real Chromium binary plus its OS-level dependencies -
+      # test-news-ui-smoke.js drives this exact browser via Playwright,
+      # nothing about the browser itself is mocked or stubbed.
+      - name: Install Playwright Chromium
+        working-directory: backend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start backend server against the ephemeral Postgres service
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+          PORT: '4412'
+        run: |
+          node index.js > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4412/health >/dev/null 2>&1; then
+              echo "server is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::server did not become healthy in time"
+          cat server.log
+          exit 1
+
+      - name: Run test-news-ui-smoke.js (real headless Chromium)
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+          TEST_BASE_URL: http://127.0.0.1:4412
+        run: node test-news-ui-smoke.js
+
+      - name: Show server log on failure
+        if: failure()
+        working-directory: backend
+        run: cat server.log || true
+
+      - name: Stop backend server
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" 2>/dev/null || true
+          fi
