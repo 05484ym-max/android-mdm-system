@@ -232,6 +232,7 @@
     background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.75rem; text-align: center;
   }
   .catalog-version-info { color: var(--text-dim); font-size: 0.68rem; line-height: 1.5; }
+  .catalog-version-info.catalog-freshness-stale { color: var(--danger); }
   .catalog-source-badge {
     display: inline-block; color: var(--text-dim); font-size: 0.65rem;
     background: var(--bg); border: 1px solid var(--card-border); border-radius: 8px;
@@ -1151,6 +1152,27 @@ function catalogVersionInfoHtml(a) {
   return `<div class="catalog-version-info">גרסה: ${escapeHtml(a.playVersion)}${updated ? ` · עודכן ${updated}` : ''}</div>`;
 }
 
+// Never claims to know whether a DEVICE needs an update - see
+// docs/app-update-check.md. This only tells the admin how much to trust
+// the cached Play data above: 'fresh' data is recent and usable, 'stale'
+// means it's old or the last check failed (shown with the reason, when we
+// have one), 'unknown' means we either never checked or Play itself
+// reported an ambiguous version (e.g. a multi-APK "Varies with device"
+// rollout) that can't be compared at all.
+function catalogFreshnessInfoHtml(a) {
+  const freshness = a.playMetadataFreshness || 'unknown';
+  const labels = {
+    fresh: 'נתוני Play עדכניים',
+    stale: 'נתוני Play ישנים - לא לסמוך עליהם לבדיקת עדכון',
+    unknown: 'אין אפשרות לדעת אם יש עדכון (לא נבדק, או שגוגל מדווחת גרסה לא חד-משמעית)',
+  };
+  const cls = freshness === 'stale' ? ' catalog-freshness-stale' : '';
+  const errorHint = freshness === 'stale' && a.playMetadataError
+    ? ` — ${escapeHtml(String(a.playMetadataError).slice(0, 80))}`
+    : '';
+  return `<div class="catalog-version-info${cls}">${labels[freshness]}${errorHint}</div>`;
+}
+
 function catalogMetaRowHtml(a) {
   const options = allCategories.map(c =>
     `<option value="${escapeHtml(c.key)}"${a.category === c.key ? ' selected' : ''}>${escapeHtml(c.label)}</option>`
@@ -1168,6 +1190,7 @@ function catalogMetaRowHtml(a) {
                min="0" max="100000" step="1" />
       </div>
       ${catalogVersionInfoHtml(a)}
+      ${catalogFreshnessInfoHtml(a)}
     </div>
   `;
 }

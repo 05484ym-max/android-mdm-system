@@ -87,6 +87,22 @@ async function waitForText(getText, expected, timeoutMs = 8000) {
   throw new Error(`timed out waiting for text "${expected}" - last seen: "${last}"`);
 }
 
+// For a control whose OWN displayed value is set synchronously by the
+// test itself (e.g. a number input's .fill()), waiting on that value proves
+// nothing about whether the server round-trip behind it has finished -
+// this polls the real, independent ground truth (a fresh read straight
+// from Postgres) instead.
+async function waitForDbValue(getValue, expected, timeoutMs = 8000) {
+  const start = Date.now();
+  let last;
+  while (Date.now() - start < timeoutMs) {
+    last = await getValue();
+    if (last === expected) return;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  throw new Error(`timed out waiting for DB value ${JSON.stringify(expected)} - last seen: ${JSON.stringify(last)}`);
+}
+
 async function waitForServer(timeoutMs = 25000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -203,9 +219,13 @@ function resolveChromiumExecutable() {
       const input = page.locator('[data-sort-order="com.smoke.legacy"]');
       await input.fill('42');
       await input.dispatchEvent('change');
-      await waitForText(async () => String(await input.inputValue()), '42');
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'com.smoke.legacy');
-      assert.strictEqual(row.sortOrder, 42);
+      // input.inputValue() would already read "42" here regardless of
+      // whether the server round-trip ever completes - .fill() sets it
+      // synchronously. The real, independent signal is the DB row itself.
+      await waitForDbValue(
+        async () => (await db.listAppsCatalog()).find(a => a.packageName === 'com.smoke.legacy').sortOrder,
+        42,
+      );
     });
 
     await test('sort-order actually reorders the rendered catalog grid', async () => {

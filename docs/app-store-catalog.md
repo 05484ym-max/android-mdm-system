@@ -323,3 +323,8 @@ a schema migration.
   sync fields are backward-compatible with the existing parser, nothing more.
 - Real production catalog volume/behavior (Render) — all tests here run
   against a disposable local `appstore_test` Postgres database.
+
+See `docs/app-update-check.md` for the follow-up work modeling how much to
+trust this cached `playVersion`/`playUpdatedAt` data (a `playMetadataFreshness`
+grade, never a fabricated "update available" signal) — branch
+`app-update-check`.

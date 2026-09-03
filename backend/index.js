@@ -16,6 +16,7 @@ const diagnostics = require('./diagnostics');
 const alerts = require('./alerts');
 const playStoreSearch = require('./playStoreSearch');
 const appCategories = require('./appCategories');
+const { PLAY_METADATA_FRESH_MS } = require('./playMetadataFreshness');
 
 const app = express();
 app.use(express.json());
@@ -664,7 +665,10 @@ const PLAY_METADATA_ERROR_MAX_LENGTH = 300;
 // Google Play lookup for Waze per window. Claims are persisted/locked in
 // Postgres (db.claimAppsForPlayMetadataRefresh), so multiple server instances
 // also avoid refreshing the same package at the same time.
-const PLAY_METADATA_FRESH_MS = 30 * 60 * 1000;
+// PLAY_METADATA_FRESH_MS itself now lives in playMetadataFreshness.js (see
+// import above) - db.js's mapCatalogRow uses the exact same constant to
+// grade a row 'stale', so there is exactly one freshness window, not two
+// copies that could silently drift apart.
 const AUTO_PLAY_REFRESH_BATCH_SIZE = 3;
 const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
 const AUTO_PLAY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -1245,17 +1249,31 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   kickAutoPlayMetadataRefresh();
 
   // Additive app-store fields (category/categoryLabel/isRecommended/
-  // sortOrder) alongside the original ones - never renamed, never removed,
-  // so an older client that only reads the fields it already knows about
-  // keeps working unchanged (see docs/app-store-catalog.md's "Device sync
-  // contract" section). isRecommended/category are only ever computed for
-  // apps that already passed the `allowed` filter above - a device can
-  // never see recommended/category metadata for an app it isn't approved
-  // for, since it never sees that app's row at all (no separate policy
-  // check needed here; filtering already happened before this .map).
+  // sortOrder/playMetadataCheckedAt/playMetadataFreshness) alongside the
+  // original ones - never renamed, never removed, so an older client that
+  // only reads the fields it already knows about keeps working unchanged
+  // (see docs/app-store-catalog.md's "Device sync contract" section).
+  // isRecommended/category are only ever computed for apps that already
+  // passed the `allowed` filter above - a device can never see recommended/
+  // category metadata for an app it isn't approved for, since it never
+  // sees that app's row at all (no separate policy check needed here;
+  // filtering already happened before this .map).
+  //
+  // playMetadataFreshness is deliberately NOT "hasUpdate"/"needsUpdate" -
+  // the backend only ever has Google Play's public listing data, never a
+  // specific device's installed version or Play's own rollout state for
+  // that device. See docs/app-update-check.md for the full reasoning and
+  // the recommended Android-side flow (show "מותקן" by default; only a
+  // real tap-through to the Play Store listing - which DOES have
+  // authoritative per-device state - can answer "does THIS device need an
+  // update"). playMetadataError (the raw scraper failure string) is
+  // deliberately admin-only, same as categorySource - never sent here.
   const catalog = (await db.listAppsCatalog())
     .filter(app => allowed.has(app.packageName))
-    .map(({ packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder }) => ({
+    .map(({
+      packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder,
+      playMetadataCheckedAt, playMetadataFreshness,
+    }) => ({
       packageName,
       name,
       iconUrl,
@@ -1265,6 +1283,8 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
       categoryLabel: appCategories.categoryLabel(category),
       isRecommended,
       sortOrder,
+      playMetadataCheckedAt,
+      playMetadataFreshness,
     }));
 
   const commands = await db.takePendingCommands(req.params.deviceId);

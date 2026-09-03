@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { computeMetadataFreshness } = require('./playMetadataFreshness');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -495,6 +496,7 @@ async function getDeviceHealth(deviceId) {
 // ---------- apps catalog ----------
 
 function mapCatalogRow(row) {
+  const playMetadataCheckedAt = row.play_metadata_checked_at != null ? Number(row.play_metadata_checked_at) : null;
   return {
     packageName: row.package_name,
     name: row.name,
@@ -515,13 +517,27 @@ function mapCatalogRow(row) {
     categorySource: row.category_source,
     isRecommended: row.is_recommended,
     sortOrder: row.sort_order,
+    // When the last Play metadata check happened (success or failure) -
+    // see playMetadataFreshness.js's own doc for why this is a 3-state
+    // freshness grade, never a device-specific "update available" boolean.
+    playMetadataCheckedAt,
+    playMetadataFreshness: computeMetadataFreshness({
+      playVersion: row.play_version,
+      playMetadataCheckedAt,
+      playMetadataError: row.play_metadata_error,
+    }),
+    // Admin-panel-only (see the /sync route's explicit field list again) -
+    // a raw scraper error string is useful for an admin to diagnose why a
+    // package keeps coming back 'stale', but not something a device needs.
+    playMetadataError: row.play_metadata_error,
   };
 }
 
 async function listAppsCatalog() {
   const { rows } = await pool.query(
     `SELECT package_name, name, icon_url, play_version, play_updated_at, added_at,
-            category, category_source, is_recommended, sort_order
+            category, category_source, is_recommended, sort_order,
+            play_metadata_checked_at, play_metadata_error
        FROM apps_catalog
       ORDER BY sort_order ASC, name ASC`,
   );
