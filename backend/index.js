@@ -22,6 +22,8 @@ const apkStorage = require('./apkStorage');
 const apkManifest = require('./apkManifest');
 const browserClassifier = require('./browserClassifier');
 const { publicBaseUrl } = require('./publicUrl');
+const safeRemoteImage = require('./safeRemoteImage');
+const imageModerator = require('./imageModerator');
 
 const app = express();
 app.use(express.json());
@@ -1855,6 +1857,134 @@ app.get('/api/browser/check', wrap(async (req, res) => {
   const saved = await db.saveBrowserDomainClassification(result);
   const status = result.reason === 'classifier_not_configured' ? 503 : 200;
   res.status(status).json({ ...saved, cached: false });
+}));
+
+// ---------- filtered browser image moderation proxy ----------
+
+const IMAGE_FILTER_POLICY_VERSION = 'HAREDI_STRICT_V1';
+const imageProxyRate = new Map();
+const IMAGE_PROXY_WINDOW_MS = 60 * 1000;
+const IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW = 240;
+
+function imageProxyRateAllowed(ip) {
+  const now = Date.now();
+  const key = String(ip || 'unknown').slice(0, 100);
+  const state = imageProxyRate.get(key);
+  if (!state || now - state.startedAt >= IMAGE_PROXY_WINDOW_MS) {
+    imageProxyRate.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (state.count >= IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW) return false;
+  state.count += 1;
+  return true;
+}
+
+function blockedImageSvg() {
+  return Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">' +
+    '<rect width="640" height="360" rx="24" fill="#f2f1e6"/>' +
+    '<rect x="18" y="18" width="604" height="324" rx="20" fill="none" stroke="#d8d4bd" stroke-width="2"/>' +
+    '<text x="320" y="172" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" fill="#4b6b45">התמונה הוסתרה</text>' +
+    '<text x="320" y="208" text-anchor="middle" font-family="Arial,sans-serif" font-size="17" fill="#77766f">לפי מדיניות הסינון</text>' +
+    '</svg>',
+    'utf8',
+  );
+}
+
+function sendBlockedImage(res, reason) {
+  const svg = blockedImageSvg();
+  res.status(200);
+  res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+  res.setHeader('Content-Length', String(svg.length));
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Stable machine-readable reason is useful for diagnostics/tests without
+  // exposing vendor details inside the visible placeholder.
+  res.setHeader('X-Filter-Decision', 'block');
+  res.setHeader('X-Filter-Reason', String(reason || 'blocked').slice(0, 80));
+  res.end(svg);
+}
+
+function imageModerationDecisionIsCacheable(result) {
+  return new Set([
+    'image_safe_haredi_strict',
+    'adult_content',
+    'racy_content',
+    'revealing_clothing',
+    'female_detected',
+    'ambiguous_person',
+  ]).has(result.reason);
+}
+
+app.get('/api/browser/image', wrap(async (req, res) => {
+  const rawUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  if (!rawUrl || rawUrl.length > 8192) {
+    return sendBlockedImage(res, 'invalid_image_url');
+  }
+
+  let parsed;
+  try {
+    parsed = safeRemoteImage.validateImageUrl(rawUrl);
+  } catch (e) {
+    return sendBlockedImage(res, e.message);
+  }
+
+  const host = browserClassifier.normalizeHost(parsed.hostname);
+  if (!host) return sendBlockedImage(res, 'invalid_image_host');
+
+  // An image host must itself have a current positive website-classification
+  // decision. This prevents the public proxy from becoming a generic fetcher
+  // for arbitrary internet hosts and keeps image delivery inside the same
+  // fail-closed trust model as normal browser subresources.
+  const hostDecision = await db.getBrowserDomainClassification(host);
+  if (!hostDecision || hostDecision.allowed !== true) {
+    return sendBlockedImage(res, 'image_host_not_approved');
+  }
+
+  if (!imageProxyRateAllowed(req.ip)) {
+    return sendBlockedImage(res, 'image_proxy_rate_limited');
+  }
+
+  let remote;
+  try {
+    remote = await safeRemoteImage.fetchSafeImage(parsed.toString());
+  } catch (e) {
+    console.warn('[browser-image] fetch blocked/failed:', e.message);
+    return sendBlockedImage(res, e.message);
+  }
+
+  const sha256Hex = crypto.createHash('sha256').update(remote.buffer).digest('hex');
+  let decision = await db.getBrowserImageModeration(sha256Hex, IMAGE_FILTER_POLICY_VERSION);
+
+  if (!decision) {
+    const moderated = await imageModerator.moderateImage(remote.buffer);
+    decision = {
+      sha256: sha256Hex,
+      policyVersion: IMAGE_FILTER_POLICY_VERSION,
+      allowed: moderated.allowed === true,
+      reason: moderated.reason,
+      details: moderated.details || {},
+      source: moderated.source || 'google_vision',
+      mimeType: remote.mimeType,
+      sizeBytes: remote.buffer.length,
+    };
+
+    if (imageModerationDecisionIsCacheable(moderated)) {
+      decision = await db.saveBrowserImageModeration(decision);
+    }
+  }
+
+  if (decision.allowed !== true) {
+    return sendBlockedImage(res, decision.reason);
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', remote.mimeType);
+  res.setHeader('Content-Length', String(remote.buffer.length));
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Filter-Decision', 'allow');
+  res.end(remote.buffer);
 }));
 
 // ---------- customer updates ("news") - device-facing ----------
