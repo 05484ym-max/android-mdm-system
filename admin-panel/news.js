@@ -17,12 +17,29 @@
   const formError = document.getElementById('newsFormError');
   const refreshBtn = document.getElementById('newsRefreshBtn');
 
+  // Attachments (images/videos/files/links) - only ever shown while editing
+  // an already-saved update (see startEdit/resetForm below), since an
+  // attachment needs a real update id to attach to.
+  const attachmentsSection = document.getElementById('newsAttachmentsSection');
+  const attachmentsList = document.getElementById('newsAttachmentsList');
+  const attachFileInput = document.getElementById('newsAttachFileInput');
+  const attachFileBtn = document.getElementById('newsAttachFileBtn');
+  const attachFileError = document.getElementById('newsAttachFileError');
+  const attachLinkUrlInput = document.getElementById('newsAttachLinkUrlInput');
+  const attachLinkLabelInput = document.getElementById('newsAttachLinkLabelInput');
+  const attachLinkBtn = document.getElementById('newsAttachLinkBtn');
+  const attachLinkError = document.getElementById('newsAttachLinkError');
+
   if (!listEl || !titleInput || !bodyInput || !pinnedInput || !publishedInput ||
-      !saveBtn || !cancelEditBtn || !formTitle || !formError) {
+      !saveBtn || !cancelEditBtn || !formTitle || !formError ||
+      !attachmentsSection || !attachmentsList || !attachFileInput || !attachFileBtn ||
+      !attachFileError || !attachLinkUrlInput || !attachLinkLabelInput || !attachLinkBtn ||
+      !attachLinkError) {
     return;
   }
 
   let editingId = null;
+  let currentNewsList = [];
 
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, c => ({
@@ -45,6 +62,13 @@
     saveBtn.textContent = 'שמור';
     cancelEditBtn.style.display = 'none';
     formError.textContent = '';
+    attachmentsSection.style.display = 'none';
+    attachmentsList.innerHTML = '';
+    attachFileInput.value = '';
+    attachFileError.textContent = '';
+    attachLinkUrlInput.value = '';
+    attachLinkLabelInput.value = '';
+    attachLinkError.textContent = '';
   }
 
   function startEdit(item) {
@@ -61,8 +85,129 @@
     saveBtn.textContent = 'עדכן';
     cancelEditBtn.style.display = '';
     formError.textContent = '';
+    attachFileError.textContent = '';
+    attachLinkError.textContent = '';
+    renderAttachmentsSection(item.attachments || []);
     titleInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
+
+  function attachmentIcon(kind) {
+    if (kind === 'VIDEO') return '🎬';
+    if (kind === 'LINK') return '🔗';
+    return '📄';
+  }
+
+  function fmtBytes(n) {
+    if (n === null || n === undefined) return '';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function attachmentItemHtml(att) {
+    const thumb = att.kind === 'IMAGE'
+      ? `<img class="news-attachment-thumb" src="${escapeHtml(att.url)}" alt="" />`
+      : `<div class="news-attachment-icon">${attachmentIcon(att.kind)}</div>`;
+    const name = att.kind === 'LINK' ? (att.label || att.url) : (att.filename || att.url);
+    const meta = att.kind === 'LINK'
+      ? att.url
+      : [att.mimeType, fmtBytes(att.sizeBytes)].filter(Boolean).join(' · ');
+    return `
+      <div class="news-attachment-item">
+        ${thumb}
+        <div class="news-attachment-info">
+          <div class="news-attachment-name">${escapeHtml(name)}</div>
+          <div class="news-attachment-meta">${escapeHtml(meta)}</div>
+        </div>
+        <button class="news-attachment-remove-btn" data-remove-attachment="${escapeHtml(att.id)}">הסר</button>
+      </div>`;
+  }
+
+  function renderAttachmentsSection(list) {
+    attachmentsSection.style.display = '';
+    attachmentsList.innerHTML = list.length
+      ? list.map(attachmentItemHtml).join('')
+      : '<div class="news-attachments-empty">אין קבצים מצורפים עדיין</div>';
+    attachmentsList.querySelectorAll('[data-remove-attachment]').forEach(btn => {
+      btn.addEventListener('click', () => removeAttachment(btn.getAttribute('data-remove-attachment')));
+    });
+  }
+
+  async function removeAttachment(attachmentId) {
+    if (!editingId) return;
+    if (!confirm('להסיר את הקובץ המצורף?')) return;
+    const res = await fetch(
+      `/api/customer-updates/${encodeURIComponent(editingId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert(body.error || 'ההסרה נכשלה');
+      return;
+    }
+    await loadNews();
+  }
+
+  attachFileBtn.addEventListener('click', async () => {
+    if (!editingId) return;
+    const file = attachFileInput.files && attachFileInput.files[0];
+    if (!file) {
+      attachFileError.textContent = 'יש לבחור קובץ';
+      return;
+    }
+    attachFileError.textContent = '';
+    attachFileBtn.disabled = true;
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/customer-updates/${encodeURIComponent(editingId)}/attachments`, {
+        method: 'POST',
+        body: form,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        attachFileError.textContent = body.error || 'העלאת הקובץ נכשלה';
+        return;
+      }
+      attachFileInput.value = '';
+      await loadNews();
+    } catch (e) {
+      attachFileError.textContent = 'שגיאת תקשורת';
+    } finally {
+      attachFileBtn.disabled = false;
+    }
+  });
+
+  attachLinkBtn.addEventListener('click', async () => {
+    if (!editingId) return;
+    const url = attachLinkUrlInput.value.trim();
+    const label = attachLinkLabelInput.value.trim();
+    if (!url) {
+      attachLinkError.textContent = 'יש להזין קישור';
+      return;
+    }
+    attachLinkError.textContent = '';
+    attachLinkBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/customer-updates/${encodeURIComponent(editingId)}/attachments/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, label: label || undefined }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        attachLinkError.textContent = body.error || 'הוספת הקישור נכשלה';
+        return;
+      }
+      attachLinkUrlInput.value = '';
+      attachLinkLabelInput.value = '';
+      await loadNews();
+    } catch (e) {
+      attachLinkError.textContent = 'שגיאת תקשורת';
+    } finally {
+      attachLinkBtn.disabled = false;
+    }
+  });
 
   cancelEditBtn.addEventListener('click', () => {
     publishedInput.disabled = false;
@@ -136,7 +281,16 @@
       listEl.innerHTML = '<div class="empty-state">שגיאה בטעינת ההודעות</div>';
       return;
     }
-    renderNews(await res.json());
+    currentNewsList = await res.json();
+    renderNews(currentNewsList);
+    // Keeps the open edit form's attachments section in sync after an
+    // upload/link-add/remove (all of which call loadNews() rather than
+    // touching the DOM directly) - the title/body/pinned fields are
+    // untouched here, only the attachments list underneath them.
+    if (editingId) {
+      const current = currentNewsList.find(item => item.id === editingId);
+      renderAttachmentsSection(current ? (current.attachments || []) : []);
+    }
   }
 
   async function setPublished(id, published) {

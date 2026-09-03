@@ -38,3 +38,40 @@
   font-size: 0.8rem; font-weight: 600;
 }
 .news-card-actions button.news-delete-btn { border-color: rgba(179,67,44,0.35); color: var(--danger); }
+
+/* Attachments (images/videos/files/links) section inside the edit form -
+   only shown once editing an already-saved update (see news.js). */
+.news-attachments-section {
+  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--card-border);
+}
+.news-attachments-section h3 {
+  font-size: 0.85rem; color: var(--text-dim); margin: 0 0 10px; font-weight: 700;
+}
+.news-attachments-empty { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 10px; }
+.news-attach-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.news-attach-row .login-input { flex: 1; min-width: 140px; margin-bottom: 0; }
+
+.news-attachment-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--card-border); border-radius: 12px; margin-bottom: 8px;
+}
+.news-attachment-thumb {
+  width: 40px; height: 40px; border-radius: 8px; object-fit: cover;
+  background: var(--card-border); flex-shrink: 0;
+}
+.news-attachment-icon {
+  width: 40px; height: 40px; border-radius: 8px; background: var(--accent-tint);
+  color: var(--accent); display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; flex-shrink: 0;
+}
+.news-attachment-info { flex: 1; min-width: 0; }
+.news-attachment-name {
+  font-size: 0.82rem; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.news-attachment-meta { font-size: 0.72rem; color: var(--text-dim); }
+.news-attachment-remove-btn {
+  background: transparent; border: 1px solid rgba(179,67,44,0.35); color: var(--danger);
+  border-radius: 8px; padding: 5px 10px; cursor: pointer; font-family: inherit; font-size: 0.75rem;
+  flex-shrink: 0;
+}

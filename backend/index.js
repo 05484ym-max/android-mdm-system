@@ -77,6 +77,39 @@ const UPDATE_TITLE_MAX_LENGTH = 200;
 const UPDATE_BODY_MAX_LENGTH = 20000;
 const UPDATE_LIST_LIMIT_FOR_DEVICE = 50;
 
+// Customer-update attachments ("חדשות ועדכונים" images/videos/files/links).
+// Deliberately no content-type restriction on the upload itself (the admin
+// can attach any file type) - only a size cap, matching the memory-buffered
+// multer pattern uploadApkField already uses above. 100MB comfortably fits
+// a short video while still bounding a single request's memory footprint on
+// a small server; a longer/larger video is expected to be linked (LINK
+// attachment) rather than uploaded.
+const ATTACHMENT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_UPDATE = 10;
+const ATTACHMENT_LINK_URL_MAX_LENGTH = 2000;
+const ATTACHMENT_LINK_LABEL_MAX_LENGTH = 200;
+
+const uploadAttachmentField = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: ATTACHMENT_UPLOAD_MAX_BYTES },
+}).single('file');
+
+function attachmentKindForMimeType(mimeType) {
+  if (typeof mimeType === 'string' && mimeType.startsWith('image/')) return 'IMAGE';
+  if (typeof mimeType === 'string' && mimeType.startsWith('video/')) return 'VIDEO';
+  return 'FILE';
+}
+
+/** Best-effort extension for the storage key, taken from the original
+ * filename the browser/client sent - purely cosmetic (it only affects the
+ * GitHub-side object name), never trusted for content-type or validation
+ * decisions, which always come from the multipart field's declared
+ * mimetype instead. */
+function extensionFromFilename(filename) {
+  const match = typeof filename === 'string' ? filename.match(/\.([a-zA-Z0-9]{1,12})$/) : null;
+  return match ? match[1] : '';
+}
+
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
    'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'OPEN_DEBUGGING_TEMP',
@@ -476,15 +509,178 @@ app.post('/api/customer-updates/:id/unpublish', requireAdmin, wrap(async (req, r
   res.json(updated);
 }));
 
+// Atomically deletes the update and its attachment rows (see
+// db.deleteCustomerUpdateAtomic), then - only once that's committed - best-
+// effort deletes any file-backed attachments' GitHub Release assets. A
+// storage cleanup failure is logged but never turns an otherwise-successful
+// delete into an error response - same fail-safe pattern as the app
+// catalog's global-delete route.
 app.delete('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
   if (!validateUpdateId(req.params.id)) {
     return res.status(400).json({ error: 'invalid id' });
   }
-  const deleted = await db.deleteCustomerUpdate(req.params.id);
-  if (!deleted) {
+  const attachmentStorageKeys = await db.deleteCustomerUpdateAtomic(req.params.id);
+  if (attachmentStorageKeys === null) {
     return res.status(404).json({ error: 'update not found' });
   }
+  if (attachmentStorageKeys.length) {
+    try {
+      const storageConfig = apkStorage.loadStorageConfig();
+      for (const storageKey of attachmentStorageKeys) {
+        await apkStorage.deleteApk(storageConfig, storageKey);
+      }
+    } catch (e) {
+      console.error(`[customer-updates] attachment storage cleanup failed for deleted update ${req.params.id}:`, e.message);
+    }
+  }
   res.json({ status: 'ok' });
+}));
+
+// ---------- customer update attachments (images/videos/files/links) ----------
+// A deliberately separate route group from the update CRUD above -
+// attachments are uploaded/removed independently of editing the update's
+// own title/body/pinned state, and always need a real, already-saved
+// update id to attach to (see admin-panel/news.js: the attachments section
+// only appears once editing an existing, saved update).
+
+app.post('/api/customer-updates/:id/attachments', requireAdmin, (req, res, next) => {
+  uploadAttachmentField(req, res, err => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: `file exceeds the ${ATTACHMENT_UPLOAD_MAX_BYTES} byte limit` });
+    }
+    return res.status(400).json({ error: 'invalid multipart upload' });
+  });
+}, wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.id)) {
+    return res.status(400).json({ error: 'invalid id' });
+  }
+  const update = await db.getCustomerUpdateById(req.params.id);
+  if (!update) {
+    return res.status(404).json({ error: 'update not found' });
+  }
+  const file = req.file;
+  if (!file || !file.buffer || !file.buffer.length) {
+    return res.status(400).json({ error: 'file is required' });
+  }
+  const existingCount = await db.countAttachmentsForUpdate(req.params.id);
+  if (existingCount >= MAX_ATTACHMENTS_PER_UPDATE) {
+    return res.status(400).json({ error: `an update may have at most ${MAX_ATTACHMENTS_PER_UPDATE} attachments` });
+  }
+
+  const storageConfig = apkStorage.loadStorageConfig();
+  const kind = attachmentKindForMimeType(file.mimetype);
+  const storageKey = apkStorage.generateAttachmentStorageKey(extensionFromFilename(file.originalname));
+  const uploaded = await apkStorage.uploadAttachment(
+    storageConfig, storageKey, file.buffer, file.mimetype || 'application/octet-stream',
+  );
+
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+  const attachmentId = crypto.randomUUID();
+  const fileUrl = `${publicBaseUrl}/api/customer-updates/attachments/${attachmentId}/download`;
+
+  let created;
+  try {
+    created = await db.addCustomerUpdateFileAttachment(attachmentId, req.params.id, {
+      kind,
+      sortOrder: existingCount,
+      storageKey: uploaded.assetId,
+      fileUrl,
+      filename: (file.originalname || '').slice(0, 255) || null,
+      mimeType: file.mimetype || null,
+      sizeBytes: file.buffer.length,
+    });
+  } catch (e) {
+    await apkStorage.deleteApk(storageConfig, uploaded.assetId);
+    throw e;
+  }
+  res.json(created);
+}));
+
+app.post('/api/customer-updates/:id/attachments/link', requireAdmin, wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.id)) {
+    return res.status(400).json({ error: 'invalid id' });
+  }
+  const update = await db.getCustomerUpdateById(req.params.id);
+  if (!update) {
+    return res.status(404).json({ error: 'update not found' });
+  }
+  const { url, label } = req.body || {};
+  if (typeof url !== 'string' || !/^https?:\/\/\S+$/.test(url.trim())) {
+    return res.status(400).json({ error: 'url must be a valid http(s) link' });
+  }
+  if (url.trim().length > ATTACHMENT_LINK_URL_MAX_LENGTH) {
+    return res.status(400).json({ error: `url must be at most ${ATTACHMENT_LINK_URL_MAX_LENGTH} characters` });
+  }
+  if (label !== undefined && label !== null) {
+    if (typeof label !== 'string') {
+      return res.status(400).json({ error: 'label must be a string' });
+    }
+    if (label.trim().length > ATTACHMENT_LINK_LABEL_MAX_LENGTH) {
+      return res.status(400).json({ error: `label must be at most ${ATTACHMENT_LINK_LABEL_MAX_LENGTH} characters` });
+    }
+  }
+  const existingCount = await db.countAttachmentsForUpdate(req.params.id);
+  if (existingCount >= MAX_ATTACHMENTS_PER_UPDATE) {
+    return res.status(400).json({ error: `an update may have at most ${MAX_ATTACHMENTS_PER_UPDATE} attachments` });
+  }
+
+  const created = await db.addCustomerUpdateLinkAttachment(crypto.randomUUID(), req.params.id, {
+    sortOrder: existingCount,
+    url: url.trim(),
+    label: label && label.trim() ? label.trim() : null,
+  });
+  res.json(created);
+}));
+
+app.delete('/api/customer-updates/:id/attachments/:attachmentId', requireAdmin, wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.id) || !validateUpdateId(req.params.attachmentId)) {
+    return res.status(400).json({ error: 'invalid id' });
+  }
+  const deleted = await db.deleteCustomerUpdateAttachment(req.params.attachmentId, req.params.id);
+  if (!deleted) {
+    return res.status(404).json({ error: 'attachment not found' });
+  }
+  if (deleted.storageKey) {
+    try {
+      const storageConfig = apkStorage.loadStorageConfig();
+      await apkStorage.deleteApk(storageConfig, deleted.storageKey);
+    } catch (e) {
+      console.error(`[customer-updates] attachment asset cleanup failed for ${req.params.attachmentId}:`, e.message);
+    }
+  }
+  res.json({ status: 'ok' });
+}));
+
+// Streams a file-backed attachment (IMAGE/VIDEO/FILE) from GitHub Releases -
+// deliberately unauthenticated, same precedent as GET /api/apps/icon/:assetId
+// and /api/apps/apk/:assetId: an admin-authored attachment isn't secret, and
+// it needs to be directly loadable by a plain <img>/<video> tag or an
+// Android ImageView/VideoView, none of which can attach an Authorization
+// header. A LINK attachment (no file at all) 404s here - the client already
+// has its `url` straight from the update payload and never needs this route.
+app.get('/api/customer-updates/attachments/:attachmentId/download', wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.attachmentId)) {
+    return res.status(400).json({ error: 'invalid attachment id' });
+  }
+  const attachment = await db.getCustomerUpdateAttachmentById(req.params.attachmentId);
+  if (!attachment || attachment.kind === 'LINK' || !attachment.storageKey) {
+    return res.status(404).json({ error: 'attachment not found' });
+  }
+  const storageConfig = apkStorage.loadStorageConfig();
+  const upstream = await apkStorage.downloadApk(storageConfig, attachment.storageKey);
+  res.setHeader('Content-Type', attachment.mimeType || 'application/octet-stream');
+  const length = upstream.headers.get('content-length');
+  if (length) res.setHeader('Content-Length', length);
+  // IMAGE/VIDEO render inline (a message's media should show in place); a
+  // generic FILE downloads instead, since there's no general expectation an
+  // arbitrary file type can be rendered in a browser/WebView.
+  const disposition = attachment.kind === 'FILE' ? 'attachment' : 'inline';
+  const safeName = (attachment.filename || 'attachment').replace(/[\r\n"]/g, '_');
+  res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  if (!upstream.body) throw new Error('GitHub attachment download returned an empty body');
+  Readable.fromWeb(upstream.body).pipe(res);
 }));
 
 // ---------- device health dashboard (admin, read-only) ----------

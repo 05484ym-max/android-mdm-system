@@ -431,6 +431,26 @@
       <button class="toggle-btn" id="newsCancelEditBtn" style="display:none;">ביטול עריכה</button>
     </div>
     <div id="newsFormError" class="login-error"></div>
+
+    <!-- Attachments only appear once editing an already-saved update - they
+         need a real update id to attach to (see news.js). Any file type is
+         accepted (images/videos render inline on the device, everything
+         else downloads); links are added separately, no file involved. -->
+    <div id="newsAttachmentsSection" class="news-attachments-section" style="display:none;">
+      <h3>קבצים מצורפים ותמונות/סרטונים/קישורים</h3>
+      <div id="newsAttachmentsList"></div>
+      <div class="news-attach-row">
+        <input type="file" id="newsAttachFileInput" />
+        <button class="add-app-btn" id="newsAttachFileBtn">הוסף קובץ</button>
+      </div>
+      <div id="newsAttachFileError" class="login-error"></div>
+      <div class="news-attach-row">
+        <input class="login-input" id="newsAttachLinkUrlInput" placeholder="קישור (https://...)" />
+        <input class="login-input" id="newsAttachLinkLabelInput" placeholder="תיאור הקישור (לא חובה)" />
+        <button class="add-app-btn" id="newsAttachLinkBtn">הוסף קישור</button>
+      </div>
+      <div id="newsAttachLinkError" class="login-error"></div>
+    </div>
   </div>
   <div class="news-toolbar">
     <button class="alerts-refresh-btn" id="newsRefreshBtn">⟳ רענן</button>

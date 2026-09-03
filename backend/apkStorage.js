@@ -93,6 +93,19 @@ function generateIconStorageKey(extension = 'png') {
   return `${crypto.randomUUID()}.${safe}`;
 }
 
+/**
+ * Storage key for a customer-update attachment (image/video/any other
+ * file - see backend/index.js's POST /api/customer-updates/:id/attachments).
+ * Unlike generateIconStorageKey, the extension isn't restricted to a small
+ * allowlist - customer-update attachments are deliberately "any file type",
+ * so this only strips anything that isn't a safe filename character and
+ * caps its length, rather than validating it against a fixed set.
+ */
+function generateAttachmentStorageKey(extension) {
+  const safe = String(extension || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12);
+  return safe ? `${crypto.randomUUID()}.${safe}` : crypto.randomUUID();
+}
+
 async function uploadAsset(config, key, buffer, contentType) {
   const release = await ensureRelease(config);
   const uploadUrl = new URL(
@@ -147,6 +160,17 @@ async function uploadIcon(config, key, buffer, contentType) {
   return uploadAsset(config, key, buffer, contentType);
 }
 
+/**
+ * Uploads a customer-update attachment - deliberately no content-type
+ * restriction (unlike uploadIcon): images, videos, and any other file type
+ * are all valid attachments here. uploadAsset itself is already fully
+ * generic; this is a thin, intention-revealing wrapper, same relationship
+ * uploadApk/uploadIcon already have to it.
+ */
+async function uploadAttachment(config, key, buffer, contentType) {
+  return uploadAsset(config, key, buffer, contentType || 'application/octet-stream');
+}
+
 async function deleteApk(config, assetId) {
   try {
     const response = await fetch(
@@ -181,8 +205,10 @@ module.exports = {
   loadStorageConfig,
   generateApkStorageKey,
   generateIconStorageKey,
+  generateAttachmentStorageKey,
   uploadApk,
   uploadIcon,
+  uploadAttachment,
   deleteApk,
   downloadApk,
 };

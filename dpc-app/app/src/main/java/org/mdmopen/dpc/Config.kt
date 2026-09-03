@@ -154,6 +154,23 @@ object Config {
                 body = item.getString("body"),
                 pinned = item.optBoolean("pinned", false),
                 publishedAt = item.getString("publishedAt"),
+                attachments = readCachedAttachments(item.optJSONArray("attachments")),
+            )
+        }
+    }
+
+    private fun readCachedAttachments(array: JSONArray?): List<UpdateAttachment> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            UpdateAttachment(
+                id = item.getString("id"),
+                kind = item.optString("kind", "FILE"),
+                url = item.getString("url"),
+                filename = if (item.isNull("filename")) null else item.optString("filename", null),
+                mimeType = if (item.isNull("mimeType")) null else item.optString("mimeType", null),
+                sizeBytes = if (item.isNull("sizeBytes")) null else item.optLong("sizeBytes"),
+                label = if (item.isNull("label")) null else item.optString("label", null),
             )
         }
     }
@@ -161,6 +178,19 @@ object Config {
     fun setNewsCache(context: Context, items: List<UpdateItem>) {
         val array = JSONArray()
         items.forEach { item ->
+            val attachmentsArray = JSONArray()
+            item.attachments.forEach { att ->
+                attachmentsArray.put(
+                    JSONObject()
+                        .put("id", att.id)
+                        .put("kind", att.kind)
+                        .put("url", att.url)
+                        .put("filename", att.filename)
+                        .put("mimeType", att.mimeType)
+                        .put("sizeBytes", att.sizeBytes)
+                        .put("label", att.label)
+                )
+            }
             array.put(
                 JSONObject()
                     .put("id", item.id)
@@ -168,6 +198,7 @@ object Config {
                     .put("body", item.body)
                     .put("pinned", item.pinned)
                     .put("publishedAt", item.publishedAt)
+                    .put("attachments", attachmentsArray)
             )
         }
         prefs(context).edit().putString(KEY_NEWS_CACHE, array.toString()).apply()

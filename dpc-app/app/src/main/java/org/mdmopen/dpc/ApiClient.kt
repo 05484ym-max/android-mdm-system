@@ -60,6 +60,25 @@ data class SyncResult(
 
 data class EnrollResult(val deviceId: String, val deviceToken: String)
 
+/** One image/video/file/link attached to an UpdateItem - see
+ * backend/db.js's mapAttachmentRow. `url` means different things depending
+ * on `kind`: for IMAGE/VIDEO/FILE it's this server's own streaming route
+ * (GET /api/customer-updates/attachments/:id/download, no auth needed - see
+ * that route's own comment), already loadable directly by an ImageView/
+ * VideoView/browser Intent; for LINK it's the external URL an admin typed
+ * in, meant to be opened as-is. filename/mimeType/sizeBytes/label are only
+ * ever populated for the kind they're relevant to (see the server's CHECK
+ * constraint on customer_update_attachments). */
+data class UpdateAttachment(
+    val id: String,
+    val kind: String,
+    val url: String,
+    val filename: String? = null,
+    val mimeType: String? = null,
+    val sizeBytes: Long? = null,
+    val label: String? = null,
+)
+
 /** One "חדשות ועדכונים" item. publishedAt is an ISO-8601 string (unlike
  * every epoch-millis timestamp elsewhere in this file) because it comes
  * straight from the server's Postgres TIMESTAMPTZ via toISOString() - see
@@ -70,6 +89,7 @@ data class UpdateItem(
     val body: String,
     val pinned: Boolean,
     val publishedAt: String,
+    val attachments: List<UpdateAttachment> = emptyList(),
 )
 
 class ApiException(message: String) : Exception(message)
@@ -191,6 +211,23 @@ class ApiClient(
                 body = item.getString("body"),
                 pinned = item.optBoolean("pinned", false),
                 publishedAt = item.getString("publishedAt"),
+                attachments = parseAttachments(item.optJSONArray("attachments")),
+            )
+        }
+    }
+
+    private fun parseAttachments(array: JSONArray?): List<UpdateAttachment> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            UpdateAttachment(
+                id = item.getString("id"),
+                kind = item.optString("kind", "FILE"),
+                url = item.getString("url"),
+                filename = if (item.isNull("filename")) null else item.optString("filename", null),
+                mimeType = if (item.isNull("mimeType")) null else item.optString("mimeType", null),
+                sizeBytes = if (item.isNull("sizeBytes")) null else item.optLong("sizeBytes"),
+                label = if (item.isNull("label")) null else item.optString("label", null),
             )
         }
     }

@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
@@ -1128,6 +1129,112 @@ class CustomerActivity : Activity() {
                 setLineSpacing(dp(4).toFloat(), 1f)
             })
         })
+
+        // Images render inline (a real ImageView, loaded the same
+        // async/best-effort way app icons already are - see loadRemoteImage).
+        // Video/file/link attachments instead hand off to whatever app the
+        // device already has for that content (its video player, browser,
+        // etc.) via a plain ACTION_VIEW Intent - simpler and safer than
+        // embedding a video player/downloader pipeline of our own, and still
+        // fully "the customer can see/open it".
+        if (item.attachments.isNotEmpty()) {
+            contentArea.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(16), 0, 0)
+                item.attachments.forEach { addView(attachmentView(it)) }
+            })
+        }
+    }
+
+    private fun loadRemoteImage(url: String, target: ImageView) {
+        Thread {
+            val bitmap: Bitmap? = try {
+                URL(url).openStream().use { BitmapFactory.decodeStream(it) }
+            } catch (_: Exception) {
+                null
+            }
+            if (bitmap != null && !isFinishing) {
+                runOnUiThread { target.setImageBitmap(bitmap) }
+            }
+        }.start()
+    }
+
+    private fun openAttachmentExternally(att: UpdateAttachment) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                val uri = Uri.parse(att.url)
+                if (att.mimeType != null) setDataAndType(uri, att.mimeType) else data = uri
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(this, "לא נמצאה אפליקציה שיכולה לפתוח את הקובץ", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun attachmentIconEmoji(kind: String): String = when (kind) {
+        "VIDEO" -> "🎬"
+        "LINK" -> "🔗"
+        else -> "📄"
+    }
+
+    private fun attachmentLabel(att: UpdateAttachment): String = when (att.kind) {
+        "LINK" -> att.label ?: att.url
+        else -> att.filename ?: "קובץ מצורף"
+    }
+
+    /** One attached item in the update-detail view - a real inline image
+     * for IMAGE, or a tappable row (icon + name + "פתח") that opens
+     * externally for VIDEO/FILE/LINK. */
+    private fun attachmentView(att: UpdateAttachment): View {
+        if (att.kind == "IMAGE") {
+            return ImageView(this).apply {
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                background = flatRounded(CARD, dp(14).toFloat())
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(220)
+                ).apply { bottomMargin = dp(10) }
+                loadRemoteImage(att.url, this)
+            }
+        }
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = roundedCardWithBorder()
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            isFocusable = true
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10) }
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = attachmentIconEmoji(att.kind)
+                textSize = 20f
+                setPadding(0, 0, dp(10), 0)
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = attachmentLabel(att)
+                textSize = 13.5f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.RIGHT
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@CustomerActivity).apply {
+                text = if (att.kind == "LINK") "פתח ↗" else "פתח"
+                textSize = 12.5f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(ACCENT))
+            })
+
+            setOnClickListener { openAttachmentExternally(att) }
+        }
     }
 
     private fun newsCard(item: UpdateItem): LinearLayout {
@@ -1192,6 +1299,19 @@ class CustomerActivity : Activity() {
                 gravity = Gravity.RIGHT
                 setPadding(0, dp(8), 0, 0)
             })
+
+            // Just a lightweight hint here (full attachments render in
+            // showNewsDetail) - keeps the list card itself simple/fast.
+            if (item.attachments.isNotEmpty()) {
+                addView(TextView(this@CustomerActivity).apply {
+                    text = "📎 ${item.attachments.size} קבצים מצורפים"
+                    textSize = 11f
+                    typeface = mediumFont
+                    setTextColor(Color.parseColor(ACCENT))
+                    gravity = Gravity.RIGHT
+                    setPadding(0, dp(4), 0, 0)
+                })
+            }
 
             setOnClickListener { showNewsDetail(item) }
         }
