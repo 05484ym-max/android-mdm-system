@@ -5,6 +5,7 @@ on:
     branches:
       - feature/automatic-browser-filtering
       - feature/haredi-image-filter
+      - fix/haredi-ai-v3-review
       - main
     paths:
       - 'backend/browserClassifier.js'
