@@ -5,15 +5,12 @@ on:
     branches:
       - feature/automatic-browser-filtering
       - feature/haredi-image-filter
+      - fix/local-ai-runtime
       - main
     paths:
       - 'backend/browserClassifier.js'
       - 'backend/publicUrl.js'
-      - 'ai-service/Dockerfile'
-      - 'ai-service/requirements.txt'
-      - 'ai-service/app.py'
-      - 'ai-service/test_policy.py'
-      - 'ai-service/policy.py'
+      - 'ai-service/**'
       - 'backend/test-browser-image-cache-integration.js'
       - 'backend/test-image-moderator.js'
       - 'backend/test-safe-remote-image.js'
@@ -29,12 +26,20 @@ on:
   pull_request:
     branches: [ main ]
     paths:
+      - 'ai-service/**'
       - 'backend/browserClassifier.js'
       - 'backend/publicUrl.js'
       - 'backend/db.js'
       - 'backend/index.js'
       - 'backend/test-browser-classifier.js'
       - 'backend/test-public-url.js'
+      - 'backend/test-browser-image-cache-integration.js'
+      - 'backend/test-image-moderator.js'
+      - 'backend/test-safe-remote-image.js'
+      - 'backend/imageModerator.js'
+      - 'backend/safeRemoteImage.js'
+      - 'backend/singleFlight.js'
+      - 'backend/test-single-flight.js'
       - '.github/workflows/browser-filter-tests.yml'
   workflow_dispatch:
 
@@ -61,6 +66,8 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci
+      - name: Install lightweight Python lint dependency
+        run: python -m pip install --disable-pip-version-check pyflakes==3.4.0
       - name: Test category policy
         working-directory: backend
         run: node test-browser-classifier.js
@@ -70,12 +77,15 @@ jobs:
       - name: Test HAREDI_STRICT image moderation client
         working-directory: backend
         run: node test-image-moderator.js
-      - name: Test local HAREDI_STRICT AI policy
+      - name: Test local HAREDI_STRICT AI policy and runtime layout
         working-directory: ai-service
-        run: python -m unittest -v test_policy.py
+        run: python -m unittest -v test_policy.py test_runtime_layout.py
       - name: Compile local AI service
         working-directory: ai-service
         run: python -m py_compile app.py policy.py
+      - name: Lint local AI runtime for undefined names
+        working-directory: ai-service
+        run: pyflakes app.py policy.py test_policy.py test_runtime_layout.py
       - name: Test SSRF-safe image validation
         working-directory: backend
         run: node test-safe-remote-image.js
@@ -143,7 +153,8 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          code=$(curl -sS -o /tmp/result.json -w '%{http_code}'             'http://127.0.0.1:4555/api/browser/check?host=example.com')
+          code=$(curl -sS -o /tmp/result.json -w '%{http_code}' \
+            'http://127.0.0.1:4555/api/browser/check?host=example.com')
           cat /tmp/result.json
           test "$code" = "503"
           node -e "const j=require('/tmp/result.json'); if(j.allowed!==false||j.reason!=='classifier_not_configured') process.exit(1)"

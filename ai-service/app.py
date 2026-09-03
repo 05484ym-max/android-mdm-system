@@ -1,18 +1,22 @@
+import hmac
 import io
 import os
-import hmac
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from PIL import Image
 from nudenet import NudeDetector
 from transformers import pipeline
+
 from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="1.0.0")
+MAX_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_PIXELS = 25_000_000
 
 _nudenet: NudeDetector | None = None
 _siglip: Any = None
+_models_ready = False
 
 
 def _token_ok(value: str | None) -> bool:
@@ -52,14 +56,88 @@ def _load_siglip():
     return _siglip
 
 
+def _siglip_scores(image: Image.Image) -> dict[str, float]:
+    """Run the fixed prompt set and return a validated prompt->score map."""
+    raw = _load_siglip()(
+        image,
+        candidate_labels=SIGLIP_PROMPTS,
+        # Our labels are already complete natural-language prompts. The
+        # Transformers pipeline otherwise wraps them in its default template.
+        hypothesis_template="{}",
+    )
+    if not isinstance(raw, list):
+        raise RuntimeError("siglip_invalid_result")
+
+    scores: dict[str, float] = {}
+    allowed_prompts = set(SIGLIP_PROMPTS)
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", ""))
+        if label not in allowed_prompts:
+            continue
+        try:
+            score = float(item.get("score", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= score <= 1.0:
+            scores[label] = score
+
+    # A partial/malformed response must never silently turn into an allow.
+    if set(scores) != allowed_prompts:
+        raise RuntimeError("siglip_incomplete_result")
+    return scores
+
+
+def _decode_image(body: bytes) -> Image.Image:
+    if not body or len(body) > MAX_BYTES:
+        raise ValueError("invalid_image_size")
+
+    probe = Image.open(io.BytesIO(body))
+    width, height = probe.size
+    if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+        raise ValueError("image_dimensions_rejected")
+    probe.verify()
+
+    image = Image.open(io.BytesIO(body)).convert("RGB")
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        raise ValueError("image_dimensions_rejected")
+    return image
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global _models_ready
+    preload = os.environ.get("LOCAL_AI_PRELOAD_MODELS", "1") == "1"
+    if preload:
+        # Fail deployment/startup instead of accepting traffic before both
+        # models are actually available. This avoids first-request timeouts.
+        _load_nudenet()
+        _load_siglip()
+        _models_ready = True
+    try:
+        yield
+    finally:
+        _models_ready = False
+
+
+app = FastAPI(
+    title="Yehudi Kasher Local Image AI",
+    version="1.0.2",
+    lifespan=lifespan,
+)
+
+
 @app.get("/health")
 def health():
     model_path = os.environ.get("NUDENET_MODEL_PATH")
     require_640 = os.environ.get("NUDENET_REQUIRE_640", "0") == "1"
+    model_guard_ok = (not require_640) or bool(model_path)
     return {
-        "status": "ok",
+        "status": "ok" if _models_ready else "warming",
+        "ready": _models_ready,
         "policyVersion": POLICY_VERSION,
-        "productionReady": (not require_640) or bool(model_path),
+        "productionReady": _models_ready and model_guard_ok,
         "nudenetModel": model_path or "bundled-320n",
         "siglipModel": os.environ.get(
             "SIGLIP_MODEL",
@@ -77,16 +155,12 @@ async def moderate(
         raise HTTPException(status_code=401, detail="unauthorized")
 
     body = await request.body()
-    if not body or len(body) > MAX_BYTES:
-        raise HTTPException(status_code=413, detail="invalid_image_size")
-
     try:
-        probe = Image.open(io.BytesIO(body))
-        width, height = probe.size
-        if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
-            raise ValueError("image_dimensions_rejected")
-        probe.verify()
-        image = Image.open(io.BytesIO(body)).convert("RGB")
+        image = _decode_image(body)
+    except ValueError as exc:
+        if str(exc) == "invalid_image_size":
+            raise HTTPException(status_code=413, detail="invalid_image_size") from exc
+        raise HTTPException(status_code=400, detail="invalid_image") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid_image") from exc
 
