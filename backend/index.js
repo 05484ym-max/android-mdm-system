@@ -17,6 +17,7 @@ const alerts = require('./alerts');
 const playStoreSearch = require('./playStoreSearch');
 const browserPolicy = require('./browserPolicy');
 const policySigning = require('./policySigning');
+const appCategories = require('./appCategories');
 
 const app = express();
 app.use(express.json());
@@ -57,8 +58,8 @@ if (!AUTH_ENABLED && !ALLOW_INSECURE_ADMIN) {
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
-   'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'RELEASE_DEVICE_OWNER',
-   'ENABLE_DNS_FILTERING', 'DISABLE_DNS_FILTERING'];
+   'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'OPEN_DEBUGGING_TEMP',
+   'RELEASE_DEVICE_OWNER', 'ENABLE_DNS_FILTERING', 'DISABLE_DNS_FILTERING'];
 // Pre-installed system components OPEN_PLAY_STORE_SYSTEM_COMPONENT is allowed
 // to target - deliberately separate from the customer app catalog, since
 // these are never something a customer "installs" or an admin assigns via
@@ -582,6 +583,55 @@ app.post('/api/apps', requireAdmin, wrap(async (req, res) => {
   res.json(await db.listAppsCatalog());
 }));
 
+app.get('/api/apps/categories', requireAdmin, wrap(async (req, res) => {
+  res.json(appCategories.CATEGORIES);
+}));
+
+const MAX_SORT_ORDER = 100000;
+
+// Admin-only catalog organization write path (category/recommended/sort) -
+// deliberately separate from POST /api/apps (which only ever touches
+// name/icon/version, see addAppToCatalog): a category/recommended/sort
+// change is never allowed to accidentally trigger a Play re-fetch or touch
+// unrelated fields, and vice versa. All three fields are optional and
+// independent so the admin panel can fire one small request per control
+// (a dropdown change, a toggle click) without resending the others.
+// Category values are validated against the fixed server-side list -
+// never trust an arbitrary string from the browser (see appCategories.js).
+app.post('/api/apps/:packageName/catalog-meta', requireAdmin, wrap(async (req, res) => {
+  const { packageName } = req.params;
+  if (!PACKAGE_NAME_REGEX.test(packageName)) {
+    return res.status(400).json({ error: 'invalid packageName format' });
+  }
+  const patch = {};
+  if (req.body.category !== undefined) {
+    if (!appCategories.isValidCategoryKey(req.body.category)) {
+      return res.status(400).json({ error: 'invalid category' });
+    }
+    patch.category = req.body.category;
+  }
+  if (req.body.isRecommended !== undefined) {
+    if (typeof req.body.isRecommended !== 'boolean') {
+      return res.status(400).json({ error: 'isRecommended must be a boolean' });
+    }
+    patch.isRecommended = req.body.isRecommended;
+  }
+  if (req.body.sortOrder !== undefined) {
+    if (!Number.isInteger(req.body.sortOrder) || req.body.sortOrder < 0 || req.body.sortOrder > MAX_SORT_ORDER) {
+      return res.status(400).json({ error: `sortOrder must be an integer between 0 and ${MAX_SORT_ORDER}` });
+    }
+    patch.sortOrder = req.body.sortOrder;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'at least one of category, isRecommended, sortOrder is required' });
+  }
+  const updated = await db.updateAppCatalogMeta(packageName, patch);
+  if (!updated) {
+    return res.status(404).json({ error: 'app not found in catalog' });
+  }
+  res.json(updated);
+}));
+
 app.get('/api/apps/play-search', requireAdmin, wrap(async (req, res) => {
   const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
   if (query.length < 2 || query.length > 80) {
@@ -604,6 +654,7 @@ app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
     const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
     await db.addAppToCatalog(
       appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+      appInfo.category,
     );
     res.json({ status: 'ok', app: appInfo, catalog: await db.listAppsCatalog() });
   } catch (e) {
@@ -614,6 +665,67 @@ app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
 
 const REFRESH_PLAY_METADATA_BATCH_SIZE = 5;
 const PLAY_METADATA_ERROR_MAX_LENGTH = 300;
+
+// Fleet-wide automatic Play metadata cache. The freshness window is per
+// package, not per device: 1,000 devices using Waze still cause at most one
+// Google Play lookup for Waze per window. Claims are persisted/locked in
+// Postgres (db.claimAppsForPlayMetadataRefresh), so multiple server instances
+// also avoid refreshing the same package at the same time.
+const PLAY_METADATA_FRESH_MS = 30 * 60 * 1000;
+const AUTO_PLAY_REFRESH_BATCH_SIZE = 3;
+const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
+const AUTO_PLAY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+let autoPlayRefreshRunning = false;
+let lastAutoPlayRefreshKickAt = 0;
+
+async function refreshOnePlayPackage(packageName) {
+  try {
+    const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
+    await db.addAppToCatalog(
+      appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+      appInfo.category,
+    );
+    await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
+    return true;
+  } catch (e) {
+    const message = String(e.message || 'unknown error').slice(0, PLAY_METADATA_ERROR_MAX_LENGTH);
+    console.warn(`[auto-play-metadata] ${packageName} failed:`, e.message);
+    await db.recordPlayMetadataCheckFailure(packageName, message);
+    return false;
+  }
+}
+
+async function runAutoPlayMetadataRefresh() {
+  if (autoPlayRefreshRunning) return;
+  autoPlayRefreshRunning = true;
+  try {
+    const cutoff = Date.now() - PLAY_METADATA_FRESH_MS;
+    const packages = await db.claimAppsForPlayMetadataRefresh(
+      cutoff,
+      AUTO_PLAY_REFRESH_BATCH_SIZE,
+    );
+    for (const packageName of packages) {
+      // Deliberately sequential: a catalog refresh must never become a burst
+      // against Google Play just because thousands of devices synced together.
+      await refreshOnePlayPackage(packageName);
+    }
+  } finally {
+    autoPlayRefreshRunning = false;
+  }
+}
+
+function kickAutoPlayMetadataRefresh() {
+  const now = Date.now();
+  if (autoPlayRefreshRunning || now - lastAutoPlayRefreshKickAt < AUTO_PLAY_REFRESH_MIN_KICK_MS) {
+    return;
+  }
+  lastAutoPlayRefreshKickAt = now;
+  setImmediate(() => {
+    runAutoPlayMetadataRefresh().catch(e => {
+      console.warn('[auto-play-metadata] refresh pass failed:', e.message);
+    });
+  });
+}
 
 /**
  * Backfills play_version/play_updated_at for existing catalog apps that
@@ -651,6 +763,7 @@ app.post('/api/apps/refresh-play-metadata', requireAdmin, wrap(async (req, res) 
       const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
       await db.addAppToCatalog(
         appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+        appInfo.category,
       );
       await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
       const status = appInfo.updated != null ? 'updated' : 'checked_no_update_timestamp';
@@ -1132,9 +1245,34 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
 
   const policy = normalizePolicy(req.device.policy);
   const allowed = new Set(policy.allowedApps);
+
+  // Opportunistic only and globally throttled. Device sync never waits for
+  // Google Play; it serves the shared cached metadata immediately and one
+  // background worker refreshes stale catalog rows for the whole fleet.
+  kickAutoPlayMetadataRefresh();
+
+  // Additive app-store fields (category/categoryLabel/isRecommended/
+  // sortOrder) alongside the original ones - never renamed, never removed,
+  // so an older client that only reads the fields it already knows about
+  // keeps working unchanged (see docs/app-store-catalog.md's "Device sync
+  // contract" section). isRecommended/category are only ever computed for
+  // apps that already passed the `allowed` filter above - a device can
+  // never see recommended/category metadata for an app it isn't approved
+  // for, since it never sees that app's row at all (no separate policy
+  // check needed here; filtering already happened before this .map).
   const catalog = (await db.listAppsCatalog())
     .filter(app => allowed.has(app.packageName))
-    .map(({ packageName, name, iconUrl }) => ({ packageName, name, iconUrl }));
+    .map(({ packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder }) => ({
+      packageName,
+      name,
+      iconUrl,
+      playVersion,
+      playUpdatedAt,
+      category,
+      categoryLabel: appCategories.categoryLabel(category),
+      isRecommended,
+      sortOrder,
+    }));
 
   const commands = await db.takePendingCommands(req.params.deviceId);
 
@@ -1463,6 +1601,13 @@ db.init()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Backend listening on port ${PORT}`);
+
+      // Warm/maintain the shared Play metadata cache independently of device
+      // count. A sleeping host simply resumes on its next wake; sync traffic
+      // also calls kickAutoPlayMetadataRefresh(), so no separate worker is
+      // required for correctness.
+      kickAutoPlayMetadataRefresh();
+      setInterval(kickAutoPlayMetadataRefresh, AUTO_PLAY_REFRESH_INTERVAL_MS).unref();
       if (!AUTH_ENABLED) {
         console.warn('WARNING: admin panel is UNPROTECTED.');
         console.warn('Run "node setup-admin.js <user> <password>" before exposing this server.');

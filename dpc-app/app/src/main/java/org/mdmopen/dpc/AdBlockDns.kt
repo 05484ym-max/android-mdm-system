@@ -83,6 +83,11 @@ object AdBlockDns {
     // Thresholds from the fail-safe design round - named constants only,
     // never re-derived elsewhere.
     private const val CONSECUTIVE_FAILURES_TO_ROLLBACK = 4
+    // A strict-DNS outage makes the whole phone look offline even when Wi-Fi
+    // itself is healthy. On an active check, confirm the failure quickly
+    // before waiting for the long periodic streak.
+    private const val RAPID_CONFIRM_ATTEMPTS = 3
+    private const val RAPID_CONFIRM_DELAY_MS = 3_000L
     private const val CONSECUTIVE_SUCCESSES_TO_RECOVER = 3
     private const val ROLLBACK_COOLDOWN_MS = 30 * 60 * 1000L
     private const val RECOVERY_RETRY_INTERVAL_MS = 10 * 60 * 1000L
@@ -365,6 +370,57 @@ object AdBlockDns {
             return "בדיקת DNS: תקין"
         }
 
+        // IP connectivity is healthy but strict DNS failed. Confirm rapidly so
+        // a transient Wi-Fi association blip gets a few seconds to settle, while
+        // a genuinely broken DoT provider cannot strand the device for the
+        // 15-minute periodic cadence. Any successful retry cancels rollback.
+        var rapidRecovered = false
+        for (attempt in 1 until RAPID_CONFIRM_ATTEMPTS) {
+            try {
+                Thread.sleep(RAPID_CONFIRM_DELAY_MS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return "בדיקת DNS: הופסקה"
+            }
+
+            // Re-check basic connectivity on every rapid attempt. Network
+            // hand-offs can change underneath us between the first probe and
+            // this retry; if IP connectivity vanished, that is a network-loss
+            // event, not evidence against the DNS provider.
+            val retryIpOk = checkIpConnectivity()
+            if (!retryIpOk) {
+                p.edit()
+                    .putLong(KEY_LAST_CHECK_AT, System.currentTimeMillis())
+                    .putBoolean(KEY_LAST_DNS_OK, false)
+                    .putBoolean(KEY_LAST_DOT_OK, false)
+                    .apply()
+                return "בדיקת DNS: הקישוריות הבסיסית נעלמה בזמן האימות, לא נספר ככשל DNS"
+            }
+
+            if (checkDnsResolution(ourControlledDomain(context))) {
+                rapidRecovered = true
+                break
+            }
+        }
+
+        if (rapidRecovered) {
+            p.edit()
+                .putLong(KEY_LAST_CHECK_AT, System.currentTimeMillis())
+                .putBoolean(KEY_LAST_DNS_OK, true)
+                .putString(KEY_FAIL_SAFE_STATE, DnsFailSafeState.NORMAL.name)
+                .putInt(KEY_CONSECUTIVE_FAILURES, 0)
+                .remove(KEY_FAILURE_REASON)
+                .apply()
+            return "בדיקת DNS: התאושש לאחר אימות מהיר"
+        }
+
+        // One last IP probe immediately before treating the failure as DNS.
+        // This closes the race where connectivity disappears just after the
+        // final rapid retry but before rollback.
+        if (!checkIpConnectivity()) {
+            return "בדיקת DNS: אין עוד קישוריות בסיסית, rollback בוטל"
+        }
+
         val failures = p.getInt(KEY_CONSECUTIVE_FAILURES, 0) + 1
         val reason = if (dotOk) "dns_failed_provider_healthy" else "provider_down_or_blocked"
         p.edit()
@@ -373,8 +429,14 @@ object AdBlockDns {
             .putString(KEY_FAILURE_REASON, reason)
             .apply()
 
+        // A rapidly-confirmed DNS failure with healthy IP is enough to
+        // rollback now: staying in Strict buys no security if the configured
+        // resolver is unreachable, it only removes connectivity. The persisted
+        // streak is still kept for diagnostics and the slower watchdog path.
         if (failures < CONSECUTIVE_FAILURES_TO_ROLLBACK) {
-            return "בדיקת DNS: כשל $failures/$CONSECUTIVE_FAILURES_TO_ROLLBACK ($reason)"
+            val disableResult = disable(context)
+            recordRollback(context, p, System.currentTimeMillis(), reason)
+            return "Fail-safe מהיר: rollback ל-Opportunistic אחרי כשל DNS מאומת. $disableResult"
         }
 
         if (!withinRollbackRateLimit(p, now)) {

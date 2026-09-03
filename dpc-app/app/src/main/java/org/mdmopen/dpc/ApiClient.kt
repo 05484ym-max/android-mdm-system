@@ -41,6 +41,10 @@ data class CatalogApp(
     val iconUrl: String?,
     val playVersion: String? = null,
     val playUpdatedAt: Long? = null,
+    val category: String = "other",
+    val categoryLabel: String = "אחר",
+    val isRecommended: Boolean = false,
+    val sortOrder: Int = 0,
 )
 
 data class SyncResult(
@@ -108,6 +112,10 @@ class ApiClient(
                 iconUrl = if (item.isNull("iconUrl")) null else item.optString("iconUrl", null),
                 playVersion = if (item.isNull("playVersion")) null else item.optString("playVersion", null),
                 playUpdatedAt = if (item.isNull("playUpdatedAt")) null else item.optLong("playUpdatedAt"),
+                category = item.optString("category", "other").ifBlank { "other" },
+                categoryLabel = item.optString("categoryLabel", "אחר").ifBlank { "אחר" },
+                isRecommended = item.optBoolean("isRecommended", false),
+                sortOrder = item.optInt("sortOrder", 0).coerceIn(0, 100000),
             )
         }
 

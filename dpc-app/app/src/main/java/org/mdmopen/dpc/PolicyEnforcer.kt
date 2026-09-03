@@ -70,6 +70,52 @@ class PolicyEnforcer(private val context: Context) {
         val noLauncherCandidates = mutableListOf<NoLauncherCandidate>()
         var systemSkipped = 0
 
+        // Migration cleanup: older DPC builds blocked apps with
+        // setPackagesSuspended(). Newer builds use setApplicationHidden(), but
+        // Android keeps the old suspended bit until it is explicitly cleared.
+        // That leaves recovered apps visible but greyed out. Clear legacy
+        // suspension for every currently-approved and essential package before
+        // applying today's hidden-state policy.
+        val legacyRecovered = mutableSetOf<String>()
+        val recoveryPackages = (allowed + essential)
+            .filter { it != context.packageName }
+            .distinct()
+        if (recoveryPackages.isNotEmpty()) {
+            try {
+                val failedRecovery = dpm.setPackagesSuspended(
+                    admin,
+                    recoveryPackages.toTypedArray(),
+                    false
+                ).toSet()
+                legacyRecovered += recoveryPackages.filter { it !in failedRecovery }
+            } catch (_: Exception) {
+                // Hidden-state enforcement below still runs. A package that
+                // cannot be addressed here will simply remain reported by the
+                // normal enforcement result instead of crashing the sync.
+            }
+        }
+
+        // Recover approved packages directly from DevicePolicyManager before
+        // relying on PackageManager enumeration. On some Samsung builds a
+        // package hidden by Device Owner can disappear from
+        // getInstalledApplications(), which previously meant an approved
+        // preinstalled app (for example YouTube) was never seen and therefore
+        // never unhidden.
+        val directlyUnhidden = mutableSetOf<String>()
+        for (pkg in allowed) {
+            if (pkg == context.packageName) continue
+            try {
+                if (dpm.isApplicationHidden(admin, pkg)) {
+                    if (dpm.setApplicationHidden(admin, pkg, false)) {
+                        directlyUnhidden += pkg
+                    }
+                }
+            } catch (_: Exception) {
+                // A package that is not installed (or not addressable on this
+                // OEM build) is simply left for the normal install flow.
+            }
+        }
+
         for (app in context.packageManager.getInstalledApplications(0)) {
             if (app.packageName == context.packageName) continue
             if (app.packageName in essential) {
@@ -80,6 +126,15 @@ class PolicyEnforcer(private val context: Context) {
                 toUnsuspend += app.packageName
                 continue
             }
+            // An approved installed app must always be explicitly unhidden first.
+            // Hidden packages can stop resolving a launcher intent on some OEM builds
+            // (notably Samsung), so checking getLaunchIntentForPackage() before the
+            // allowlist can strand an already-installed approved app in the hidden state.
+            if (app.packageName in allowed) {
+                toUnsuspend += app.packageName
+                continue
+            }
+
             // Apps with no launcher entry are never visible to the customer either way -
             // suspending them only risks breaking a background system service for no gain.
             if (context.packageManager.getLaunchIntentForPackage(app.packageName) == null) {
@@ -91,13 +146,13 @@ class PolicyEnforcer(private val context: Context) {
                 // reported, since hiding either carries a much bigger blast radius than
                 // this dry-run is meant to size up.
                 val isSystemApp = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                if (!isSystemApp && app.packageName != currentImePackage && app.packageName !in allowed) {
+                if (!isSystemApp && app.packageName != currentImePackage) {
                     noLauncherCandidates += NoLauncherCandidate(app.packageName, labelFor(app))
                 }
                 continue
             }
-            if (app.packageName in allowed) toUnsuspend += app.packageName
-            else toSuspend += app.packageName
+
+            toSuspend += app.packageName
         }
 
         // Hidden (not merely suspended) so unapproved apps disappear from the
@@ -114,7 +169,7 @@ class PolicyEnforcer(private val context: Context) {
 
         return EnforcementResult(
             suspended = toSuspend - failed.toSet(),
-            unsuspended = toUnsuspend - failed.toSet(),
+            unsuspended = (toUnsuspend + directlyUnhidden + legacyRecovered).distinct() - failed.toSet(),
             failed = failed,
             systemAppsSkipped = systemSkipped,
             kioskEnabled = policy.kioskEnabled,
@@ -241,6 +296,18 @@ class PolicyEnforcer(private val context: Context) {
             homeFilter,
             ComponentName(context, KioskLauncherActivity::class.java),
         )
+    }
+
+    /**
+     * Temporarily opens Developer options / ADB by clearing only the debugging
+     * restriction. No other policy is changed and Device Owner remains active.
+     *
+     * This is intentionally temporary: apply() always re-adds
+     * DISALLOW_DEBUGGING_FEATURES on the next normal policy sync.
+     */
+    fun openDebuggingUntilNextSync() {
+        check(isDeviceOwner()) { "Not device owner" }
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
     }
 
     /** Also used as a local escape hatch from the admin screen. */

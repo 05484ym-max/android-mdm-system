@@ -143,6 +143,26 @@
     width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--card-border);
     background: var(--bg); color: var(--text); font-family: inherit; margin-bottom: 14px;
   }
+  .quick-search-card {
+    position: relative; max-width: 720px; margin: 0 auto 18px;
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 20px; padding: 14px 16px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+  }
+  .quick-search-card .search-input { margin-bottom: 0; }
+  .quick-search-results {
+    display: none; position: absolute; top: calc(100% - 6px); right: 16px; left: 16px;
+    z-index: 18; background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); overflow: hidden;
+  }
+  .quick-search-result {
+    width: 100%; border: 0; border-bottom: 1px solid var(--card-border);
+    background: var(--card-bg); color: var(--text); padding: 11px 12px;
+    text-align: right; cursor: pointer; font-family: inherit;
+  }
+  .quick-search-result:last-child { border-bottom: none; }
+  .quick-search-result .main { font-weight: 700; }
+  .quick-search-result .sub { color: var(--text-dim); font-size: 0.76rem; margin-top: 3px; direction: ltr; text-align: right; }
   .customer-row { display: flex; gap: 8px; margin-bottom: 4px; }
   .customer-input {
     padding: 6px 8px; border-radius: 10px; border: 1px solid var(--card-border);
@@ -182,6 +202,51 @@
     font-family: inherit; font-size: 0.85rem;
   }
   .sub-tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .category-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .category-chip {
+    background: var(--accent-tint); border: 1px solid var(--card-border); color: var(--accent);
+    border-radius: 20px; padding: 6px 12px; font-size: 0.78rem; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+  }
+  .category-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .catalog-meta-row {
+    width: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 6px;
+    padding-top: 8px; border-top: 1px solid var(--card-border);
+  }
+  .catalog-select {
+    width: 100%; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--card-border);
+    background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.78rem;
+  }
+  .recommended-toggle {
+    width: 100%; background: transparent; border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 10px; padding: 6px 8px; cursor: pointer; font-family: inherit;
+    font-size: 0.75rem; font-weight: 700;
+  }
+  .recommended-toggle.active { background: var(--accent); color: #fff; }
+  .catalog-sort-row {
+    width: 100%; display: flex; align-items: center; justify-content: center;
+    gap: 6px; font-size: 0.72rem; color: var(--text-dim);
+  }
+  .catalog-sort-input {
+    width: 64px; padding: 5px 6px; border-radius: 8px; border: 1px solid var(--card-border);
+    background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.75rem; text-align: center;
+  }
+  .catalog-version-info { color: var(--text-dim); font-size: 0.68rem; line-height: 1.5; }
+  .catalog-source-badge {
+    display: inline-block; color: var(--text-dim); font-size: 0.65rem;
+    background: var(--bg); border: 1px solid var(--card-border); border-radius: 8px;
+    padding: 1px 6px; margin-inline-start: 4px;
+  }
+  .appstore-preview {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 10px; margin-bottom: 14px;
+  }
+  .appstore-preview .stat-card { padding: 12px; }
+  .appstore-preview .stat-card .value { font-size: 1.4rem; }
+  .appstore-preview-categories {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px;
+  }
+  .appstore-preview-categories .app-chip { cursor: default; }
   .customer-picker {
     width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--card-border);
     background: var(--bg); color: var(--text); font-family: inherit; margin-bottom: 14px;
@@ -257,6 +322,12 @@
   <button class="refresh-btn" onclick="loadDevices()">⟳</button>
 </header>
 
+<div class="quick-search-card">
+  <input class="search-input" id="quickCustomerSearch"
+         placeholder="חיפוש מהיר — שם לקוח, מספר לקוח או מזהה מכשיר..." autocomplete="off" />
+  <div id="quickCustomerResults" class="quick-search-results"></div>
+</div>
+
 <div class="tab-content active" data-tab-content="customers">
   <div class="stats">
     <div class="stat-card">
@@ -282,7 +353,9 @@
 
 <div class="tab-content" data-tab-content="catalog">
   <div class="enroll-card">
-    <h2>חנות אפליקציות</h2>
+    <h2>קטלוג אפליקציות</h2>
+    <div class="appstore-preview" id="appstorePreview"></div>
+    <div class="appstore-preview-categories" id="appstorePreviewCategories"></div>
     <div class="sub-tabs">
       <button class="sub-tab-btn active" data-catalog-mode="all">אפליקציות לכולם</button>
       <button class="sub-tab-btn" data-catalog-mode="customer">הוספה ללקוח</button>
@@ -294,7 +367,8 @@
               style="display:none; margin-bottom:10px;">
         עדכן Google Play Services
       </button>
-    <input class="search-input" id="catalogSearch" placeholder="חיפוש בקטלוג לפי שם..." />
+    <input class="search-input" id="catalogSearch" placeholder="חפש אפליקציה (שם, חבילה או קטגוריה)" />
+    <div class="category-chips" id="catalogCategoryChips"></div>
     <div id="catalogList"><div class="empty-state">טוען...</div></div>
     <div class="add-app-row" id="appImportActions" style="margin-top:10px;">
       <button class="add-app-btn" id="openPlaySearchBtn">חפש ב-Google Play</button>
@@ -475,6 +549,7 @@ function commandLabel(cmd) {
     WIPE: 'מחיקת מכשיר', INSTALL_APP: 'התקנת אפליקציה', UNINSTALL_APP: 'הסרת אפליקציה',
     OPEN_PLAY_STORE_INSTALL: 'התקנה דרך Play Store',
     OPEN_PLAY_STORE_SYSTEM_COMPONENT: 'עדכון רכיב מערכת (Google Play Services)',
+    OPEN_DEBUGGING_TEMP: 'פתח ניפוי באגים זמנית',
   }[cmd] || cmd;
 }
 
@@ -588,6 +663,7 @@ async function loadDevices() {
   document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('he-IL');
 
   renderDeviceList(filterDevices(document.getElementById('deviceSearch').value));
+  renderQuickCustomerSearch();
   populateCatalogCustomerSelect();
   loadAppsCatalog();
 
@@ -609,6 +685,62 @@ function filterDevices(query) {
     d.deviceId.toLowerCase().includes(q)
   );
 }
+
+function renderQuickCustomerSearch() {
+  const input = document.getElementById('quickCustomerSearch');
+  const results = document.getElementById('quickCustomerResults');
+  if (!input || !results) return;
+
+  const matches = filterDevices(input.value).slice(0, 6);
+  if (!input.value.trim()) {
+    results.style.display = 'none';
+    results.innerHTML = '';
+    return;
+  }
+
+  if (!matches.length) {
+    results.innerHTML = '<div class="empty-state" style="padding:14px;">לא נמצא לקוח או מכשיר</div>';
+    results.style.display = 'block';
+    return;
+  }
+
+  results.innerHTML = matches.map(d => {
+    const title = d.customerName || 'לקוח ללא שם';
+    const number = d.customerNumber ? ' · #' + d.customerNumber : '';
+    return `
+      <button class="quick-search-result" data-quick-device="${escapeHtml(d.deviceId)}">
+        <div class="main">${escapeHtml(title + number)}</div>
+        <div class="sub">${escapeHtml(d.deviceId)}</div>
+      </button>`;
+  }).join('');
+  results.style.display = 'block';
+
+  results.querySelectorAll('[data-quick-device]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      input.value = '';
+      results.style.display = 'none';
+      openDeviceDetail(btn.getAttribute('data-quick-device'));
+    });
+  });
+}
+
+document.getElementById('quickCustomerSearch').addEventListener('input', renderQuickCustomerSearch);
+document.getElementById('quickCustomerSearch').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const matches = filterDevices(e.target.value);
+  if (matches.length === 1) {
+    e.preventDefault();
+    e.target.value = '';
+    document.getElementById('quickCustomerResults').style.display = 'none';
+    openDeviceDetail(matches[0].deviceId);
+  }
+});
+document.addEventListener('click', e => {
+  const card = document.querySelector('.quick-search-card');
+  if (card && !card.contains(e.target)) {
+    document.getElementById('quickCustomerResults').style.display = 'none';
+  }
+});
 
 function renderDeviceList(devices) {
   const listEl = document.getElementById('devicesList');
@@ -774,6 +906,13 @@ function renderDeviceDetail(deviceId) {
     </div>
 
     <div class="detail-section">
+      <h3>אבחון ובדיקות</h3>
+      <div class="field-row">
+        <button class="open-detail-btn" id="detailDiagnostics">פתח אבחון מלא</button>
+      </div>
+    </div>
+
+    <div class="detail-section">
       <h3>פרטי לקוח</h3>
       <div class="field-row">
         <input class="customer-input" id="detailCustomerName" placeholder="שם לקוח" value="${escapeHtml(d.customerName || '')}" />
@@ -817,6 +956,7 @@ function renderDeviceDetail(deviceId) {
         <button class="cmd-btn" data-cmd="LOCK">נעילה</button>
         <button class="cmd-btn" data-cmd="SYNC_POLICY">סנכרון מדיניות</button>
         <button class="cmd-btn" data-cmd="REBOOT">הפעלה מחדש</button>
+        <button class="cmd-btn" data-cmd="OPEN_DEBUGGING_TEMP">פתח ניפוי באגים זמנית</button>
         <button class="cmd-btn cmd-danger" data-cmd="WIPE">מחיקת מכשיר</button>
       </div>
       <div class="add-app-row">
@@ -836,6 +976,14 @@ function renderDeviceDetail(deviceId) {
 
 function bindDetailHandlers(d) {
   const deviceId = d.deviceId;
+
+  document.getElementById('detailDiagnostics').addEventListener('click', () => {
+    if (window.openDeviceDiagnostics) {
+      window.openDeviceDiagnostics(deviceId);
+    } else {
+      alert('האבחון עדיין נטען - נסה שוב בעוד רגע');
+    }
+  });
 
   document.getElementById('detailSaveCustomer').addEventListener('click', async () => {
     const name = document.getElementById('detailCustomerName').value.trim();
@@ -909,7 +1057,20 @@ function bindDetailHandlers(d) {
         openWipeConfirm(deviceId);
         return;
       }
-      if (await queueCommand(deviceId, command, {})) loadDevices();
+      if (command === 'OPEN_DEBUGGING_TEMP') {
+        if (!confirm(
+          'לפתוח זמנית את אפשרויות המפתחים וניפוי הבאגים במכשיר?\n' +
+          'Device Owner ושאר החסימות יישארו פעילים. החסימה תחזור בסנכרון המדיניות הבא.'
+        )) {
+          return;
+        }
+      }
+      if (await queueCommand(deviceId, command, {})) {
+        if (command === 'OPEN_DEBUGGING_TEMP') {
+          alert('הפקודה נשלחה. בצע סנכרון אחד במכשיר כדי לקבל אותה, ואז אל תסנכרן שוב עד סיום חיבור ה-ADB.');
+        }
+        loadDevices();
+      }
     });
   });
 
@@ -953,19 +1114,79 @@ document.getElementById('genCodeBtn').addEventListener('click', async () => {
   box.textContent = data.token;
 });
 
+let allCategories = [];
+let selectedCategory = 'all';
+
+async function loadCategories() {
+  if (allCategories.length) return;
+  const res = await fetch('/api/apps/categories');
+  if (!res.ok) return;
+  allCategories = await res.json();
+  renderCategoryChips();
+}
+
+function categoryLabelFor(key) {
+  const found = allCategories.find(c => c.key === key);
+  return found ? found.label : 'אחר';
+}
+
+function renderCategoryChips() {
+  const el = document.getElementById('catalogCategoryChips');
+  const chips = [{ key: 'all', label: 'הכל' }, ...allCategories];
+  el.innerHTML = chips.map(c => `
+    <button type="button" class="category-chip${selectedCategory === c.key ? ' active' : ''}" data-category-chip="${escapeHtml(c.key)}">${escapeHtml(c.label)}</button>
+  `).join('');
+  el.querySelectorAll('[data-category-chip]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedCategory = btn.getAttribute('data-category-chip');
+      renderCategoryChips();
+      renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
+    });
+  });
+}
+
+function renderAppstorePreview() {
+  const previewEl = document.getElementById('appstorePreview');
+  const categoriesEl = document.getElementById('appstorePreviewCategories');
+  if (!allApps.length) {
+    previewEl.innerHTML = '';
+    categoriesEl.innerHTML = '';
+    return;
+  }
+  const withPlayData = allApps.filter(a => a.playVersion).length;
+  const recommended = allApps.filter(a => a.isRecommended).length;
+  const byCategory = new Map();
+  for (const a of allApps) {
+    byCategory.set(a.category, (byCategory.get(a.category) || 0) + 1);
+  }
+  previewEl.innerHTML = `
+    <div class="stat-card"><div class="label">נתוני גרסה זמינים</div><div class="value">${withPlayData}</div></div>
+    <div class="stat-card"><div class="label">מומלצות</div><div class="value">${recommended}</div></div>
+    <div class="stat-card"><div class="label">כל האפליקציות</div><div class="value">${allApps.length}</div></div>
+  `;
+  categoriesEl.innerHTML = [...byCategory.entries()].map(([key, count]) =>
+    `<span class="app-chip">${escapeHtml(categoryLabelFor(key))}: ${count}</span>`
+  ).join('');
+}
+
 async function loadAppsCatalog() {
   const res = await fetch('/api/apps');
   if (!res.ok) return;
   allApps = await res.json();
+  await loadCategories();
+  renderAppstorePreview();
   renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
 }
 
 function filterCatalog(query) {
   const q = (query || '').trim().toLowerCase();
-  if (!q) return allApps;
-  return allApps.filter(a =>
-    a.name.toLowerCase().includes(q) || a.packageName.toLowerCase().includes(q)
-  );
+  return allApps.filter(a => {
+    if (selectedCategory !== 'all' && a.category !== selectedCategory) return false;
+    if (!q) return true;
+    return a.name.toLowerCase().includes(q) ||
+      a.packageName.toLowerCase().includes(q) ||
+      categoryLabelFor(a.category).toLowerCase().includes(q);
+  });
 }
 
 let catalogMode = 'all';
@@ -976,6 +1197,33 @@ function catalogIconHtml(a) {
     ? `<img class="catalog-icon" src="${escapeHtml(a.iconUrl)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'catalog-icon-placeholder',textContent:'${escapeHtml((a.name || '?')[0])}'}))" />`
     : `<div class="catalog-icon-placeholder">${escapeHtml((a.name || '?')[0])}</div>`;
   return `<div class="catalog-icon-frame">${inner}</div>`;
+}
+
+function catalogVersionInfoHtml(a) {
+  if (!a.playVersion) return '<div class="catalog-version-info">אין נתוני גרסה מ-Play</div>';
+  const updated = a.playUpdatedAt ? new Date(a.playUpdatedAt).toLocaleDateString('he-IL') : null;
+  return `<div class="catalog-version-info">גרסה: ${escapeHtml(a.playVersion)}${updated ? ` · עודכן ${updated}` : ''}</div>`;
+}
+
+function catalogMetaRowHtml(a) {
+  const options = allCategories.map(c =>
+    `<option value="${escapeHtml(c.key)}"${a.category === c.key ? ' selected' : ''}>${escapeHtml(c.label)}</option>`
+  ).join('');
+  const sourceLabel = a.categorySource === 'MANUAL' ? 'ידני' : a.categorySource === 'PLAY' ? 'מ-Play' : 'ברירת מחדל';
+  return `
+    <div class="catalog-meta-row">
+      <select class="catalog-select" data-category-select="${escapeHtml(a.packageName)}">${options}</select>
+      <span class="catalog-source-badge">${sourceLabel}</span>
+      <button type="button" class="recommended-toggle${a.isRecommended ? ' active' : ''}" data-recommended-toggle="${escapeHtml(a.packageName)}">${a.isRecommended ? '★ מומלצת' : '☆ סמן כמומלצת'}</button>
+      <div class="catalog-sort-row">
+        <label for="sort-${escapeHtml(a.packageName)}">סדר תצוגה</label>
+        <input type="number" id="sort-${escapeHtml(a.packageName)}" class="catalog-sort-input"
+               data-sort-order="${escapeHtml(a.packageName)}" value="${Number(a.sortOrder) || 0}"
+               min="0" max="100000" step="1" />
+      </div>
+      ${catalogVersionInfoHtml(a)}
+    </div>
+  `;
 }
 
 function populateCatalogCustomerSelect() {
@@ -1030,6 +1278,7 @@ function renderCatalog(apps) {
           <button class="add-app-btn" data-refresh-icon="${escapeHtml(a.packageName)}" data-refresh-name="${escapeHtml(a.name)}" title="רענן אייקון">↻</button>
           <button class="add-app-btn" data-assign-all="${escapeHtml(a.packageName)}">הוסף לכולם</button>
         </div>
+        ${catalogMetaRowHtml(a)}
       </div>
     `).join('')}</div>`;
 
@@ -1054,6 +1303,64 @@ function renderCatalog(apps) {
         btn.textContent = 'מוסיף...';
         await fetch(`/api/apps/${encodeURIComponent(packageName)}/assign-all`, { method: 'POST' });
         loadDevices();
+      });
+    });
+
+    document.querySelectorAll('[data-category-select]').forEach(select => {
+      select.addEventListener('change', async () => {
+        const packageName = select.getAttribute('data-category-select');
+        select.disabled = true;
+        try {
+          const res = await fetch(`/api/apps/${encodeURIComponent(packageName)}/catalog-meta`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category: select.value }),
+          });
+          if (!res.ok) { alert('עדכון הקטגוריה נכשל'); }
+        } finally {
+          await loadAppsCatalog();
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-recommended-toggle]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const packageName = btn.getAttribute('data-recommended-toggle');
+        const nextValue = !btn.classList.contains('active');
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/apps/${encodeURIComponent(packageName)}/catalog-meta`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ isRecommended: nextValue }),
+          });
+          if (!res.ok) { alert('עדכון הסימון כמומלצת נכשל'); }
+        } finally {
+          await loadAppsCatalog();
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-sort-order]').forEach(input => {
+      input.addEventListener('change', async () => {
+        const packageName = input.getAttribute('data-sort-order');
+        const sortOrder = Number(input.value);
+        if (!Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 100000) {
+          alert('סדר תצוגה חייב להיות מספר שלם בין 0 ל-100000');
+          await loadAppsCatalog();
+          return;
+        }
+        input.disabled = true;
+        try {
+          const res = await fetch(`/api/apps/${encodeURIComponent(packageName)}/catalog-meta`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sortOrder }),
+          });
+          if (!res.ok) { alert('עדכון סדר התצוגה נכשל'); }
+        } finally {
+          await loadAppsCatalog();
+        }
       });
     });
     return;

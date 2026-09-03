@@ -98,6 +98,12 @@ object Config {
                 packageName = item.getString("packageName"),
                 name = item.getString("name"),
                 iconUrl = if (item.isNull("iconUrl")) null else item.optString("iconUrl", null),
+                playVersion = if (item.isNull("playVersion")) null else item.optString("playVersion", null),
+                playUpdatedAt = if (item.isNull("playUpdatedAt")) null else item.optLong("playUpdatedAt"),
+                category = item.optString("category", "other").ifBlank { "other" },
+                categoryLabel = item.optString("categoryLabel", "אחר").ifBlank { "אחר" },
+                isRecommended = item.optBoolean("isRecommended", false),
+                sortOrder = item.optInt("sortOrder", 0).coerceIn(0, 100000),
             )
         }
     }
@@ -110,6 +116,12 @@ object Config {
                     .put("packageName", app.packageName)
                     .put("name", app.name)
                     .put("iconUrl", app.iconUrl)
+                    .put("playVersion", app.playVersion)
+                    .put("playUpdatedAt", app.playUpdatedAt)
+                    .put("category", app.category)
+                    .put("categoryLabel", app.categoryLabel)
+                    .put("isRecommended", app.isRecommended)
+                    .put("sortOrder", app.sortOrder)
             )
         }
         prefs(context).edit().putString(KEY_APP_CATALOG, array.toString()).apply()

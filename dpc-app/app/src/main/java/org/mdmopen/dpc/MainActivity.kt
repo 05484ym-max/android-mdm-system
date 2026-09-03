@@ -278,6 +278,10 @@ root.addView(sectionLabel("יומן"))
         Thread {
             try {
                 postLog(PolicySync.run(this@MainActivity))
+                // Manual "sync now" also checks for a newer signed DPC build.
+                // AutoUpdater performs its own version/signature validation and
+                // returns immediately while the update check runs in background.
+                AutoUpdater.check(applicationContext)
                 SyncScheduler.schedule(this@MainActivity)
                 postLog("סנכרון אוטומטי מתוזמן כל 15 דקות")
                 postLog("--- הושלם ---")

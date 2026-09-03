@@ -11,5 +11,6 @@ class BootReceiver : BroadcastReceiver() {
         if (Config.serverUrl(context).isEmpty()) return
         SyncScheduler.schedule(context)
         DnsFailSafeScheduler.scheduleIfNeeded(context)
+        DnsFailSafeScheduler.scheduleImmediateCheck(context)
     }
 }

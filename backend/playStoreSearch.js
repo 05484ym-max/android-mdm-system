@@ -1,5 +1,6 @@
 const https = require('https');
 const googlePlayScraper = require('google-play-scraper').default;
+const { categoryFromPlayGenreId } = require('./appCategories');
 
 const PLAY_HOST = 'play.google.com';
 const MAX_SEARCH_BYTES = 2 * 1024 * 1024;
@@ -133,6 +134,12 @@ async function getPlayStoreApp(packageName) {
     iconUrl: iconUrl || null,
     version: playMetadata?.version || null,
     updated: Number.isFinite(playMetadata?.updated) ? playMetadata.updated : null,
+    // Best-effort initial category suggestion from Play's own genreId - null
+    // when playMetadata itself failed to load (see the try/catch above) or
+    // when its genre has no confident mapping (see appCategories.js). The
+    // caller (db.addAppToCatalog) treats null as "no suggestion" and falls
+    // back to the default category, never invents one here.
+    category: categoryFromPlayGenreId(playMetadata?.genreId),
     playUrl: `https://${PLAY_HOST}/store/apps/details?id=${encodeURIComponent(packageName)}`,
   };
 }
