@@ -32,6 +32,8 @@ import android.widget.VideoView
 import android.widget.MediaController
 import android.net.Uri
 import java.net.URL
+import java.net.HttpURLConnection
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Locale
@@ -1222,11 +1224,7 @@ class CustomerActivity : Activity() {
                     ).apply { topMargin = dp(14) }
                 )
                 Thread {
-                    val bitmap = try {
-                        URL(mediaUrl).openStream().use { BitmapFactory.decodeStream(it) }
-                    } catch (_: Exception) {
-                        null
-                    }
+                    val bitmap = loadNewsImageSafely(mediaUrl)
                     if (bitmap != null && !isFinishing) {
                         runOnUiThread { image.setImageBitmap(bitmap) }
                     }
@@ -1294,9 +1292,49 @@ class CustomerActivity : Activity() {
                         dp(240)
                     ).apply { topMargin = dp(10) })
                     video.requestFocus()
-                    video.start()
                 }
             }
+        }
+    }
+
+    private fun loadNewsImageSafely(url: String): Bitmap? {
+        val conn = (URL(url).openConnection() as? HttpURLConnection) ?: return null
+        return try {
+            conn.connectTimeout = 12_000
+            conn.readTimeout = 20_000
+            conn.instanceFollowRedirects = true
+            val length = conn.contentLengthLong
+            if (length > 10L * 1024 * 1024) return null
+            val bytes = conn.inputStream.use { input ->
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > 10 * 1024 * 1024) return null
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            }
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+            var sample = 1
+            while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) {
+                sample *= 2
+            }
+            BitmapFactory.decodeByteArray(
+                bytes, 0, bytes.size,
+                BitmapFactory.Options().apply { inSampleSize = sample }
+            )
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn.disconnect()
         }
     }
 
