@@ -5,11 +5,11 @@ import android.net.http.SslError
 import android.webkit.ClientCertRequest
 import android.webkit.HttpAuthHandler
 import android.webkit.SslErrorHandler
-import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import androidx.webkit.SafeBrowsingResponseCompat
+import androidx.webkit.WebResourceErrorCompat
 import androidx.webkit.WebViewClientCompat
 
 class SecureWebViewClient(
@@ -18,7 +18,7 @@ class SecureWebViewClient(
     private val onTechnicalError: (String, String) -> Unit
 ) : WebViewClientCompat() {
 
-    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         return enforceNavigation(view, request?.url?.toString())
     }
 
@@ -30,7 +30,7 @@ class SecureWebViewClient(
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         val result = policy.evaluate(url)
         if (result.decision != LocalDecision.ALLOW) {
-            view?.stopLoading()
+            view.stopLoading()
             onBlocked(url.orEmpty(), result.reason)
             return
         }
@@ -50,17 +50,17 @@ class SecureWebViewClient(
     }
 
     override fun onSafeBrowsingHit(
-        view: WebView?,
-        request: WebResourceRequest?,
+        view: WebView,
+        request: WebResourceRequest,
         threatType: Int,
-        callback: SafeBrowsingResponseCompat?
+        callback: SafeBrowsingResponseCompat
     ) {
         // Never allow WebView's default/interstitial behavior to become a
         // policy bypass. A Safe Browsing hit is an unconditional fail-closed
         // result for this managed browser.
-        callback?.backToSafety(true)
+        callback.backToSafety(true)
         view?.stopLoading()
-        onBlocked(request?.url?.toString().orEmpty(), "safe_browsing_threat")
+        onBlocked(request.url.toString(), "safe_browsing_threat")
     }
 
     override fun onReceivedSslError(
@@ -88,15 +88,15 @@ class SecureWebViewClient(
     }
 
     override fun onReceivedHttpError(
-        view: WebView?,
-        request: WebResourceRequest?,
-        errorResponse: WebResourceResponse?
+        view: WebView,
+        request: WebResourceRequest,
+        errorResponse: WebResourceResponse
     ) {
-        if (request?.isForMainFrame == true) {
+        if (request.isForMainFrame) {
             view?.stopLoading()
             onTechnicalError(
                 request.url?.toString().orEmpty(),
-                "main_frame_http_${errorResponse?.statusCode ?: 0}"
+                "main_frame_http_${errorResponse.statusCode}"
             )
             return
         }
@@ -104,9 +104,9 @@ class SecureWebViewClient(
     }
 
     override fun onReceivedError(
-        view: WebView?,
-        request: WebResourceRequest?,
-        error: WebResourceError?
+        view: WebView,
+        request: WebResourceRequest,
+        error: WebResourceErrorCompat
     ) {
         if (request?.isForMainFrame == true) {
             view?.stopLoading()
