@@ -12,7 +12,9 @@ class UpdateInstallReceiver : BroadcastReceiver() {
 
         if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             AutoUpdater.restoreInstallBlock(context)
-            AutoUpdater.check(context)
+            // Re-establish the normal staggered cadence after an MDM upgrade.
+            // Do not immediately hammer version.json again right after install.
+            UpdateCheckScheduler.scheduleIfNeeded(context)
             return
         }
 
