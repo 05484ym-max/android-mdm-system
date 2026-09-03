@@ -99,7 +99,7 @@ jobs:
       - name: Checkout filtered browser client
         uses: actions/checkout@v6
         with:
-          ref: fix/browser-codeql-build
+          ref: filtered-browser-client
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
