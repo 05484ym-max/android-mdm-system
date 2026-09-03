@@ -134,23 +134,28 @@ async function upload(baseUrl, cookie, opts) {
     GITHUB_APK_TOKEN: 'test-token',
     APK_STORAGE_TEST_BASE_URL: github.baseUrl,
   });
-  const broken = spawnServer(brokenPort, {
-    GITHUB_APK_TOKEN: 'test-token',
-    APK_STORAGE_TEST_BASE_URL: 'http://127.0.0.1:1',
-  });
-  const noToken = spawnServer(noTokenPort, {
-    GITHUB_APK_TOKEN: '',
-    APK_STORAGE_TEST_BASE_URL: github.baseUrl,
-  });
+  let broken = null;
+  let noToken = null;
 
   try {
-    await Promise.all([
-      waitForHealth(mainBase, main),
-      waitForHealth(brokenBase, broken),
-      waitForHealth(noTokenBase, noToken),
-    ]);
-
+    // Initialise the shared test schema through one backend first. Starting
+    // three db.init() calls against a brand-new PostgreSQL schema at the
+    // exact same instant can race inside CREATE TABLE IF NOT EXISTS itself.
+    await waitForHealth(mainBase, main);
     await db.init();
+
+    broken = spawnServer(brokenPort, {
+      GITHUB_APK_TOKEN: 'test-token',
+      APK_STORAGE_TEST_BASE_URL: 'http://127.0.0.1:1',
+    });
+    await waitForHealth(brokenBase, broken);
+
+    noToken = spawnServer(noTokenPort, {
+      GITHUB_APK_TOKEN: '',
+      APK_STORAGE_TEST_BASE_URL: github.baseUrl,
+    });
+    await waitForHealth(noTokenBase, noToken);
+
     await rawPool.query(
       'TRUNCATE apps_catalog, commands, alerts, enrollments, devices RESTART IDENTITY CASCADE'
     );
