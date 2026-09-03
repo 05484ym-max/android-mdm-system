@@ -386,6 +386,8 @@ class AppStoreActivity : Activity() {
 
         val status = TextView(this).apply {
             text = when {
+                app.appSource == "APK" && installed -> "התקן/עדכן"
+                app.appSource == "APK" -> "התקנה"
                 !installed -> "התקנה"
                 updateAvailable -> "עדכן"
                 else -> "בדוק עדכון"
@@ -408,7 +410,10 @@ class AppStoreActivity : Activity() {
             // for this exact device. Do not infer it from public metadata.
             isClickable = true
             isFocusable = true
-            setOnClickListener { openPlayStoreForInstall(app.packageName) }
+            setOnClickListener {
+                if (app.appSource == "APK") installCustomApk(app)
+                else openPlayStoreForInstall(app.packageName)
+            }
         }
 
         val open = TextView(this).apply {
@@ -453,11 +458,11 @@ class AppStoreActivity : Activity() {
             addView(open)
             addView(remove)
             setOnClickListener {
-                // For an installed app, tapping the tile checks the app's
-                // real Google Play page. Play Store itself decides whether
-                // this exact device is eligible for "עדכון" or only "פתח".
-                // This avoids our previous false-update heuristics.
-                openPlayStoreForInstall(app.packageName)
+                if (app.appSource == "APK") {
+                    installCustomApk(app)
+                } else {
+                    openPlayStoreForInstall(app.packageName)
+                }
             }
         }
     }
@@ -526,6 +531,33 @@ class AppStoreActivity : Activity() {
             .show()
     }
 
+    private fun installCustomApk(app: CatalogApp) {
+        val apkUrl = app.apkUrl
+        val apkSha256 = app.apkSha256
+        if (apkUrl.isNullOrBlank() || apkSha256.isNullOrBlank()) {
+            Toast.makeText(this, "קובץ ההתקנה אינו זמין כרגע", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        Toast.makeText(this, "מתחיל התקנה של " + app.name, Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
+                runOnUiThread {
+                    Toast.makeText(this@AppStoreActivity, "ההתקנה נשלחה למכשיר", Toast.LENGTH_LONG).show()
+                    mainHandler.postDelayed({ setContentView(buildUi()) }, 1500)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(
+                        this@AppStoreActivity,
+                        "ההתקנה נכשלה: " + (e.message ?: "שגיאה לא ידועה"),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
+    }
     private fun openInstalledApp(packageName: String) {
         // approvedApps() already guarantees this package is server-approved.
         // Recover from a stale hidden state before resolving its launcher.
