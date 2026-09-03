@@ -154,6 +154,10 @@ object Config {
                 body = item.getString("body"),
                 pinned = item.optBoolean("pinned", false),
                 publishedAt = item.getString("publishedAt"),
+                mediaType = if (item.isNull("mediaType")) null else item.optString("mediaType", null),
+                mediaUrl = if (item.isNull("mediaUrl")) null else item.optString("mediaUrl", null),
+                mediaMimeType = if (item.isNull("mediaMimeType")) null else item.optString("mediaMimeType", null),
+                mediaSizeBytes = if (item.isNull("mediaSizeBytes")) null else item.optLong("mediaSizeBytes"),
             )
         }
     }
@@ -168,6 +172,10 @@ object Config {
                     .put("body", item.body)
                     .put("pinned", item.pinned)
                     .put("publishedAt", item.publishedAt)
+                    .put("mediaType", item.mediaType)
+                    .put("mediaUrl", item.mediaUrl)
+                    .put("mediaMimeType", item.mediaMimeType)
+                    .put("mediaSizeBytes", item.mediaSizeBytes)
             )
         }
         prefs(context).edit().putString(KEY_NEWS_CACHE, array.toString()).apply()

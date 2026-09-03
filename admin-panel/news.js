@@ -16,13 +16,50 @@
   const formTitle = document.getElementById('newsFormTitle');
   const formError = document.getElementById('newsFormError');
   const refreshBtn = document.getElementById('newsRefreshBtn');
+  const mediaInput = document.getElementById('newsMediaInput');
+  const mediaPreview = document.getElementById('newsMediaPreview');
+  const removeMediaRow = document.getElementById('newsRemoveMediaRow');
+  const removeMediaInput = document.getElementById('newsRemoveMediaInput');
 
   if (!listEl || !titleInput || !bodyInput || !pinnedInput || !publishedInput ||
-      !saveBtn || !cancelEditBtn || !formTitle || !formError) {
+      !saveBtn || !cancelEditBtn || !formTitle || !formError || !mediaInput ||
+      !mediaPreview || !removeMediaRow || !removeMediaInput) {
     return;
   }
 
   let editingId = null;
+  let editingItem = null;
+  let localPreviewUrl = null;
+
+  function clearLocalPreviewUrl() {
+    if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl);
+    localPreviewUrl = null;
+  }
+
+  function mediaMarkup(mediaType, mediaUrl, controls = true) {
+    if (!mediaUrl) return '';
+    const safeUrl = escapeHtml(mediaUrl);
+    if (mediaType === 'IMAGE') {
+      return `<img src="${safeUrl}" alt="מדיה מצורפת" loading="lazy" />`;
+    }
+    if (mediaType === 'VIDEO') {
+      return `<video src="${safeUrl}" ${controls ? 'controls' : ''} preload="metadata" playsinline></video>`;
+    }
+    return '';
+  }
+
+  function showFormMediaPreview(item) {
+    clearLocalPreviewUrl();
+    mediaPreview.innerHTML = '';
+    if (item && item.mediaUrl) {
+      mediaPreview.innerHTML = mediaMarkup(item.mediaType, item.mediaUrl);
+      mediaPreview.style.display = '';
+      removeMediaRow.style.display = '';
+    } else {
+      mediaPreview.style.display = 'none';
+      removeMediaRow.style.display = 'none';
+    }
+  }
 
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, c => ({
@@ -37,6 +74,13 @@
 
   function resetForm() {
     editingId = null;
+    editingItem = null;
+    clearLocalPreviewUrl();
+    mediaInput.value = '';
+    removeMediaInput.checked = false;
+    mediaPreview.innerHTML = '';
+    mediaPreview.style.display = 'none';
+    removeMediaRow.style.display = 'none';
     titleInput.value = '';
     bodyInput.value = '';
     pinnedInput.checked = false;
@@ -49,6 +93,10 @@
 
   function startEdit(item) {
     editingId = item.id;
+    editingItem = item;
+    mediaInput.value = '';
+    removeMediaInput.checked = false;
+    showFormMediaPreview(item);
     titleInput.value = item.title;
     bodyInput.value = item.body;
     pinnedInput.checked = item.pinned;
@@ -64,6 +112,32 @@
     titleInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
+  mediaInput.addEventListener('change', () => {
+    clearLocalPreviewUrl();
+    const file = mediaInput.files && mediaInput.files[0];
+    if (!file) {
+      showFormMediaPreview(editingItem);
+      return;
+    }
+    removeMediaInput.checked = false;
+    removeMediaRow.style.display = editingItem && editingItem.mediaUrl ? '' : 'none';
+    localPreviewUrl = URL.createObjectURL(file);
+    const type = file.type.startsWith('image/') ? 'IMAGE' : 'VIDEO';
+    mediaPreview.innerHTML = mediaMarkup(type, localPreviewUrl);
+    mediaPreview.style.display = '';
+  });
+
+  removeMediaInput.addEventListener('change', () => {
+    if (removeMediaInput.checked) {
+      mediaInput.value = '';
+      clearLocalPreviewUrl();
+      mediaPreview.innerHTML = '<div class="news-media-help">המדיה הקיימת תוסר בשמירה</div>';
+      mediaPreview.style.display = '';
+    } else {
+      showFormMediaPreview(editingItem);
+    }
+  });
+
   cancelEditBtn.addEventListener('click', () => {
     publishedInput.disabled = false;
     resetForm();
@@ -78,6 +152,10 @@
     const metaParts = [`נוצר: ${escapeHtml(fmtDateTime(item.createdAt))}`];
     if (item.publishedAt) metaParts.push(`פורסם: ${escapeHtml(fmtDateTime(item.publishedAt))}`);
 
+    const media = item.mediaUrl
+      ? `<div class="news-card-media">${mediaMarkup(item.mediaType, item.mediaUrl)}</div>`
+      : '';
+
     return `
       <div class="news-card${item.pinned ? ' pinned' : ''}">
         <div class="news-card-header">
@@ -85,6 +163,7 @@
           <div class="news-card-badges">${badges.join('')}</div>
         </div>
         <div class="news-card-body-preview">${escapeHtml(item.body)}</div>
+        ${media}
         <div class="news-card-meta">${metaParts.join(' · ')}</div>
         <div class="news-card-actions">
           <button data-edit="${escapeHtml(item.id)}">ערוך</button>
@@ -177,28 +256,37 @@
       formError.textContent = 'יש להזין תוכן';
       return;
     }
+
+    const file = mediaInput.files && mediaInput.files[0];
+    if (file) {
+      const image = file.type.startsWith('image/');
+      const video = file.type.startsWith('video/');
+      if (!image && !video) {
+        formError.textContent = 'יש לבחור תמונה או סרטון נתמכים';
+        return;
+      }
+      const limit = image ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+      if (file.size > limit) {
+        formError.textContent = image ? 'התמונה גדולה מ-10MB' : 'הסרטון גדול מ-50MB';
+        return;
+      }
+    }
+
     formError.textContent = '';
     saveBtn.disabled = true;
+    const form = new FormData();
+    form.append('title', title);
+    form.append('body', body);
+    form.append('pinned', String(pinnedInput.checked));
+    if (!editingId) form.append('published', String(publishedInput.checked));
+    if (editingId && removeMediaInput.checked) form.append('removeMedia', 'true');
+    if (file) form.append('media', file, file.name);
 
     try {
-      let res;
-      if (editingId) {
-        res = await fetch(`/api/customer-updates/${encodeURIComponent(editingId)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, body, pinned: pinnedInput.checked }),
-        });
-      } else {
-        res = await fetch('/api/customer-updates', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title, body,
-            pinned: pinnedInput.checked,
-            published: publishedInput.checked,
-          }),
-        });
-      }
+      const res = await fetch(
+        editingId ? `/api/customer-updates/${encodeURIComponent(editingId)}` : '/api/customer-updates',
+        { method: editingId ? 'PUT' : 'POST', body: form },
+      );
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
         formError.textContent = errBody.error || 'השמירה נכשלה';
@@ -213,7 +301,6 @@
       saveBtn.disabled = false;
     }
   });
-
   document.querySelectorAll('.nav-btn').forEach(btn => {
     if (btn.getAttribute('data-tab') === 'news') {
       btn.addEventListener('click', loadNews);

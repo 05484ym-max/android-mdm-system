@@ -28,7 +28,12 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.VideoView
+import android.widget.MediaController
+import android.net.Uri
 import java.net.URL
+import java.net.HttpURLConnection
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Locale
@@ -1115,7 +1120,7 @@ class CustomerActivity : Activity() {
         // exactly what the server stores (see backend/index.js's
         // customer-updates validation: title/body are stored/returned as
         // plain strings, no markup interpretation anywhere in this pipeline).
-        contentArea.addView(LinearLayout(this).apply {
+        val detailCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = roundedCardWithBorder()
             setPadding(dp(20), dp(20), dp(20), dp(20))
@@ -1127,7 +1132,9 @@ class CustomerActivity : Activity() {
                 gravity = Gravity.RIGHT
                 setLineSpacing(dp(4).toFloat(), 1f)
             })
-        })
+        }
+        addNewsMedia(detailCard, item, detail = true)
+        contentArea.addView(detailCard)
     }
 
     private fun newsCard(item: UpdateItem): LinearLayout {
@@ -1184,6 +1191,8 @@ class CustomerActivity : Activity() {
                 setPadding(0, dp(6), 0, 0)
             })
 
+            addNewsMedia(this, item, detail = false)
+
             addView(TextView(this@CustomerActivity).apply {
                 text = formatUpdateDate(item.publishedAt)
                 textSize = 11f
@@ -1194,6 +1203,138 @@ class CustomerActivity : Activity() {
             })
 
             setOnClickListener { showNewsDetail(item) }
+        }
+    }
+
+    private fun addNewsMedia(container: LinearLayout, item: UpdateItem, detail: Boolean) {
+        val mediaUrl = item.mediaUrl?.takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: return
+        when (item.mediaType) {
+            "IMAGE" -> {
+                val image = ImageView(this).apply {
+                    adjustViewBounds = true
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    setBackgroundColor(Color.parseColor("#F7F7F4"))
+                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                }
+                container.addView(
+                    image,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(14) }
+                )
+                Thread {
+                    val bitmap = loadNewsImageSafely(mediaUrl)
+                    if (bitmap != null && !isFinishing) {
+                        runOnUiThread { image.setImageBitmap(bitmap) }
+                    }
+                }.start()
+            }
+            "VIDEO" -> {
+                if (!detail) {
+                    container.addView(TextView(this).apply {
+                        text = "🎬 סרטון מצורף · לחץ לצפייה"
+                        textSize = 12.5f
+                        typeface = mediumFont
+                        setTextColor(Color.parseColor(ACCENT))
+                        gravity = Gravity.RIGHT
+                        background = flatRounded(ACCENT_TINT, dp(12).toFloat())
+                        setPadding(dp(12), dp(9), dp(12), dp(9))
+                    }, LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(12) })
+                    return
+                }
+
+                val play = TextView(this).apply {
+                    text = "▶ נגן סרטון"
+                    textSize = 13.5f
+                    typeface = heavyFont
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                    background = flatRounded(ACCENT, dp(12).toFloat())
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    isClickable = true
+                    isFocusable = true
+                }
+                container.addView(play, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(14) })
+
+                play.setOnClickListener {
+                    play.isEnabled = false
+                    play.text = "טוען סרטון..."
+                    val video = VideoView(this@CustomerActivity).apply {
+                        val controller = MediaController(this@CustomerActivity)
+                        controller.setAnchorView(this)
+                        setMediaController(controller)
+                        setVideoURI(Uri.parse(mediaUrl))
+                        setOnPreparedListener {
+                            play.visibility = View.GONE
+                            start()
+                        }
+                        setOnErrorListener { _, _, _ ->
+                            play.isEnabled = true
+                            play.visibility = View.VISIBLE
+                            play.text = "▶ נסה שוב"
+                            Toast.makeText(
+                                this@CustomerActivity,
+                                "לא ניתן לנגן את הסרטון כרגע",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            true
+                        }
+                    }
+                    container.addView(video, LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(240)
+                    ).apply { topMargin = dp(10) })
+                    video.requestFocus()
+                }
+            }
+        }
+    }
+
+    private fun loadNewsImageSafely(url: String): Bitmap? {
+        val conn = (URL(url).openConnection() as? HttpURLConnection) ?: return null
+        return try {
+            conn.connectTimeout = 12_000
+            conn.readTimeout = 20_000
+            conn.instanceFollowRedirects = true
+            val length = conn.contentLengthLong
+            if (length > 10L * 1024 * 1024) return null
+            val bytes = conn.inputStream.use { input ->
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > 10 * 1024 * 1024) return null
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            }
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+            var sample = 1
+            while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) {
+                sample *= 2
+            }
+            BitmapFactory.decodeByteArray(
+                bytes, 0, bytes.size,
+                BitmapFactory.Options().apply { inSampleSize = sample }
+            )
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn.disconnect()
         }
     }
 

@@ -390,3 +390,43 @@ jobs:
           if [ -f server.pid ]; then
             kill "$(cat server.pid)" 2>/dev/null || true
           fi
+
+
+  customer-updates-media-integration:
+    name: Customer updates media (real PostgreSQL + fake GitHub Releases)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: newsupdates_test_user
+          POSTGRES_PASSWORD: newsupdates_test_pw
+          POSTGRES_DB: newsupdates_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsupdates_test_user -d newsupdates_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run customer updates media integration tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+        run: node test-customer-updates-media-integration.js

@@ -76,6 +76,89 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const UPDATE_TITLE_MAX_LENGTH = 200;
 const UPDATE_BODY_MAX_LENGTH = 20000;
 const UPDATE_LIST_LIMIT_FOR_DEVICE = 50;
+const NEWS_MEDIA_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+const NEWS_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+const uploadNewsMediaField = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: NEWS_MEDIA_UPLOAD_MAX_BYTES },
+}).single('media');
+
+function optionalNewsMediaUpload(req, res, next) {
+  if (!req.is('multipart/form-data')) return next();
+  uploadNewsMediaField(req, res, err => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'media file is too large (maximum 50 MB)' });
+    }
+    return res.status(400).json({ error: 'invalid media multipart upload' });
+  });
+}
+
+function detectNewsMedia(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+  if (buffer.length >= 8 &&
+      buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+      buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a) {
+    return { mediaType: 'IMAGE', mimeType: 'image/png' };
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { mediaType: 'IMAGE', mimeType: 'image/jpeg' };
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return { mediaType: 'IMAGE', mimeType: 'image/webp' };
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
+    return { mediaType: 'VIDEO', mimeType: 'video/mp4' };
+  }
+  if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
+    return { mediaType: 'VIDEO', mimeType: 'video/webm' };
+  }
+  return null;
+}
+
+function parseNewsBoolean(value, fallback) {
+  if (value === undefined) return fallback;
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+}
+
+async function uploadNewsMedia(req, file) {
+  if (!file || !file.buffer || file.buffer.length === 0) return null;
+  const detected = detectNewsMedia(file.buffer);
+  if (!detected) {
+    const error = new Error('unsupported media file; use PNG/JPEG/WebP or MP4/WebM');
+    error.status = 400;
+    throw error;
+  }
+  if (detected.mediaType === 'IMAGE' && file.buffer.length > NEWS_IMAGE_MAX_BYTES) {
+    const error = new Error('image is too large (maximum 10 MB)');
+    error.status = 413;
+    throw error;
+  }
+  const storageConfig = apkStorage.loadStorageConfig();
+  const storageName = apkStorage.generateMediaStorageKey(detected.mimeType);
+  const uploaded = await apkStorage.uploadMedia(storageConfig, storageName, file.buffer, detected.mimeType);
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || (req.protocol + '://' + req.get('host'))).replace(/\/$/, '');
+  return {
+    mediaType: detected.mediaType,
+    mediaUrl: publicBaseUrl + '/api/customer-updates/media/' + encodeURIComponent(uploaded.assetId),
+    mediaStorageKey: uploaded.assetId,
+    mediaMimeType: detected.mimeType,
+    mediaSizeBytes: file.buffer.length,
+  };
+}
+
+async function deleteNewsMediaAsset(storageKey) {
+  if (!storageKey) return;
+  try {
+    await apkStorage.deleteApk(apkStorage.loadStorageConfig(), storageKey);
+  } catch (e) {
+    console.error('[customer-updates] media cleanup failed:', e.message);
+  }
+}
 
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
@@ -382,12 +465,40 @@ function validateUpdateId(id) {
   return typeof id === 'string' && UUID_REGEX.test(id);
 }
 
+app.get('/api/customer-updates/media/:assetId', wrap(async (req, res) => {
+  if (!/^\d+$/.test(req.params.assetId)) {
+    return res.status(400).json({ error: 'invalid media asset id' });
+  }
+  const storageConfig = apkStorage.loadStorageConfig();
+  const range = req.get('range');
+  const upstream = await apkStorage.downloadApk(
+    storageConfig,
+    req.params.assetId,
+    range ? { Range: range } : {},
+  );
+  const contentType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm'].includes(contentType)) {
+    throw new Error('GitHub media asset returned an invalid content type');
+  }
+  if (upstream.status === 206) res.status(206);
+  res.setHeader('Content-Type', contentType);
+  for (const header of ['content-length', 'content-range', 'accept-ranges']) {
+    const value = upstream.headers.get(header);
+    if (value) res.setHeader(header, value);
+  }
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  if (!upstream.body) throw new Error('GitHub media download returned an empty body');
+  Readable.fromWeb(upstream.body).pipe(res);
+}));
+
 app.get('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
   res.json(await db.listCustomerUpdatesForAdmin());
 }));
 
-app.post('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
-  const { title, body, pinned, published } = req.body || {};
+app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(async (req, res) => {
+  const { title, body } = req.body || {};
+  const pinned = parseNewsBoolean(req.body && req.body.pinned, false);
+  const published = parseNewsBoolean(req.body && req.body.published, false);
   if (typeof title !== 'string' || !title.trim()) {
     return res.status(400).json({ error: 'title is required' });
   }
@@ -400,25 +511,38 @@ app.post('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
   if (body.trim().length > UPDATE_BODY_MAX_LENGTH) {
     return res.status(400).json({ error: `body must be at most ${UPDATE_BODY_MAX_LENGTH} characters` });
   }
-  if (pinned !== undefined && typeof pinned !== 'boolean') {
-    return res.status(400).json({ error: 'pinned must be a boolean' });
+  if (pinned === null) return res.status(400).json({ error: 'pinned must be a boolean' });
+  if (published === null) return res.status(400).json({ error: 'published must be a boolean' });
+
+  let media = null;
+  try {
+    media = await uploadNewsMedia(req, req.file);
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
   }
-  if (published !== undefined && typeof published !== 'boolean') {
-    return res.status(400).json({ error: 'published must be a boolean' });
+
+  try {
+    const created = await db.createCustomerUpdate(crypto.randomUUID(), {
+      title: title.trim(),
+      body: body.trim(),
+      pinned,
+      published,
+      ...(media || {}),
+    });
+    res.json(created);
+  } catch (e) {
+    if (media) await deleteNewsMediaAsset(media.mediaStorageKey);
+    throw e;
   }
-  const created = await db.createCustomerUpdate(crypto.randomUUID(), {
-    title: title.trim(),
-    body: body.trim(),
-    pinned: pinned === true,
-    published: published === true,
-  });
-  res.json(created);
 }));
 
-app.put('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/customer-updates/:id', requireAdmin, optionalNewsMediaUpload, wrap(async (req, res) => {
   if (!validateUpdateId(req.params.id)) {
     return res.status(400).json({ error: 'invalid id' });
   }
+  const existing = await db.getCustomerUpdateById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'update not found' });
+
   const patch = {};
   if (req.body.title !== undefined) {
     if (typeof req.body.title !== 'string' || !req.body.title.trim()) {
@@ -439,51 +563,72 @@ app.put('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
     patch.body = req.body.body.trim();
   }
   if (req.body.pinned !== undefined) {
-    if (typeof req.body.pinned !== 'boolean') {
-      return res.status(400).json({ error: 'pinned must be a boolean' });
+    const pinned = parseNewsBoolean(req.body.pinned, false);
+    if (pinned === null) return res.status(400).json({ error: 'pinned must be a boolean' });
+    patch.pinned = pinned;
+  }
+  const removeMedia = parseNewsBoolean(req.body.removeMedia, false);
+  if (removeMedia === null) return res.status(400).json({ error: 'removeMedia must be a boolean' });
+  if (removeMedia && req.file) {
+    return res.status(400).json({ error: 'cannot upload new media and remove media in the same request' });
+  }
+
+  let newMedia = null;
+  if (req.file) {
+    try {
+      newMedia = await uploadNewsMedia(req, req.file);
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
     }
-    patch.pinned = req.body.pinned;
+    Object.assign(patch, newMedia);
+  } else if (removeMedia) {
+    Object.assign(patch, {
+      mediaType: null, mediaUrl: null, mediaStorageKey: null,
+      mediaMimeType: null, mediaSizeBytes: null,
+    });
   }
+
   if (Object.keys(patch).length === 0) {
-    return res.status(400).json({ error: 'at least one of title, body, pinned is required' });
+    return res.status(400).json({ error: 'at least one editable field or media change is required' });
   }
-  const updated = await db.updateCustomerUpdate(req.params.id, patch);
+
+  let updated;
+  try {
+    updated = await db.updateCustomerUpdate(req.params.id, patch);
+  } catch (e) {
+    if (newMedia) await deleteNewsMediaAsset(newMedia.mediaStorageKey);
+    throw e;
+  }
   if (!updated) {
+    if (newMedia) await deleteNewsMediaAsset(newMedia.mediaStorageKey);
     return res.status(404).json({ error: 'update not found' });
+  }
+  if ((newMedia || removeMedia) && existing.mediaStorageKey &&
+      existing.mediaStorageKey !== (newMedia && newMedia.mediaStorageKey)) {
+    await deleteNewsMediaAsset(existing.mediaStorageKey);
   }
   res.json(updated);
 }));
 
 app.post('/api/customer-updates/:id/publish', requireAdmin, wrap(async (req, res) => {
-  if (!validateUpdateId(req.params.id)) {
-    return res.status(400).json({ error: 'invalid id' });
-  }
+  if (!validateUpdateId(req.params.id)) return res.status(400).json({ error: 'invalid id' });
   const updated = await db.setCustomerUpdatePublished(req.params.id, true);
-  if (!updated) {
-    return res.status(404).json({ error: 'update not found' });
-  }
+  if (!updated) return res.status(404).json({ error: 'update not found' });
   res.json(updated);
 }));
 
 app.post('/api/customer-updates/:id/unpublish', requireAdmin, wrap(async (req, res) => {
-  if (!validateUpdateId(req.params.id)) {
-    return res.status(400).json({ error: 'invalid id' });
-  }
+  if (!validateUpdateId(req.params.id)) return res.status(400).json({ error: 'invalid id' });
   const updated = await db.setCustomerUpdatePublished(req.params.id, false);
-  if (!updated) {
-    return res.status(404).json({ error: 'update not found' });
-  }
+  if (!updated) return res.status(404).json({ error: 'update not found' });
   res.json(updated);
 }));
 
 app.delete('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
-  if (!validateUpdateId(req.params.id)) {
-    return res.status(400).json({ error: 'invalid id' });
-  }
+  if (!validateUpdateId(req.params.id)) return res.status(400).json({ error: 'invalid id' });
   const deleted = await db.deleteCustomerUpdate(req.params.id);
-  if (!deleted) {
-    return res.status(404).json({ error: 'update not found' });
-  }
+  if (!deleted) return res.status(404).json({ error: 'update not found' });
+  if (deleted.mediaStorageKey) await deleteNewsMediaAsset(deleted.mediaStorageKey);
   res.json({ status: 'ok' });
 }));
 
