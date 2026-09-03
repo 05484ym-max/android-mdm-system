@@ -58,7 +58,13 @@ def _load_siglip():
 
 def _siglip_scores(image: Image.Image) -> dict[str, float]:
     """Run the fixed prompt set and return a validated prompt->score map."""
-    raw = _load_siglip()(image, candidate_labels=SIGLIP_PROMPTS)
+    raw = _load_siglip()(
+        image,
+        candidate_labels=SIGLIP_PROMPTS,
+        # Our labels are already complete natural-language prompts. The
+        # Transformers pipeline otherwise wraps them in its default template.
+        hypothesis_template="{}",
+    )
     if not isinstance(raw, list):
         raise RuntimeError("siglip_invalid_result")
 
