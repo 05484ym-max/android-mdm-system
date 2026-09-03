@@ -1,31 +1,3 @@
-// Real browser smoke test for the APK upload admin UI (openApkUploadBtn /
-// apk-upload.js). Real headless Chromium (pre-installed under
-// PLAYWRIGHT_BROWSERS_PATH in this sandbox, same setup as the other UI
-// smoke suites), a real running backend/index.js, a real local PostgreSQL
-// database, and a real local fake-S3 HTTP server standing in for R2 (see
-// fakeS3Server.js - this sandbox has no real R2 credentials/network
-// reachability). Scoped to the upload modal only, not a full admin-panel
-// regression sweep.
-//
-// ---------------------------------------------------------------------
-// One-time setup: same apkupload_test / apkupload_test_user database as
-// test-apk-upload-integration.js (see that file's header for the exact
-// commands).
-//
-// From backend/, this file starts its own fake-S3 server and its own
-// backend/index.js child process (it needs to inject APK_STORAGE_ENDPOINT
-// pointing at that fake server, which an externally-launched fixture
-// server couldn't know in advance):
-//
-//   (
-//     export DATABASE_URL="postgresql://apkupload_test_user:apkupload_test_pw@127.0.0.1:5432/apkupload_test"
-//     export DATABASE_SSL=disable
-//     export ADMIN_USERNAME=itest_admin ADMIN_PASSWORD=itest_password_123
-//     export JWT_SECRET=itest-jwt-secret-not-for-prod SECURE_COOKIES=0
-//     node test-apk-upload-ui-smoke.js
-//     exit $?
-//   )
-// ---------------------------------------------------------------------
 'use strict';
 
 const assert = require('assert');
@@ -35,14 +7,14 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Pool } = require('pg');
-const { startFakeS3Server } = require('./fakeS3Server');
+const { startFakeGitHubServer } = require('./fakeGitHubServer');
 const { buildTestApk } = require('./testApkFixture');
 
 const PORT = 4354;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL is required to run this suite - refusing to fall back to a mock.');
+  console.error('DATABASE_URL is required');
   process.exit(1);
 }
 
@@ -50,8 +22,7 @@ let chromium;
 try {
   ({ chromium } = require('playwright'));
 } catch (e) {
-  console.error('playwright is not installed/usable in this environment:', e.message);
-  console.error('APK UPLOAD ADMIN UI SMOKE NOT VERIFIED');
+  console.error('playwright unavailable:', e.message);
   process.exit(1);
 }
 
@@ -72,49 +43,58 @@ async function test(name, fn) {
     failed++;
     failures.push({ name, error: e });
     console.log(`FAIL - ${name}`);
-    console.log(`  ${e.stack ? e.stack.split('\n').slice(0, 3).join('\n  ') : e.message}`);
+    console.log(`  ${e.stack || e.message}`);
   }
 }
 
-async function waitForServer(timeoutMs = 25000) {
+async function waitForServer(proc, timeoutMs = 20000) {
   const start = Date.now();
+  let stderr = '';
+  proc.stderr.on('data', d => { stderr += d.toString(); });
   while (Date.now() - start < timeoutMs) {
+    if (proc.exitCode !== null) throw new Error(`backend exited: ${stderr}`);
     try {
       const res = await fetch(`${BASE_URL}/health`);
       if (res.ok) return;
-    } catch { /* not up yet */ }
-    await new Promise(r => setTimeout(r, 300));
+    } catch {}
+    await new Promise(r => setTimeout(r, 200));
   }
-  throw new Error(`server at ${BASE_URL} did not become ready within ${timeoutMs}ms`);
-}
-
-async function resetTestDatabase() {
-  await rawPool.query(`TRUNCATE apps_catalog, commands, alerts, enrollments, devices RESTART IDENTITY CASCADE`);
+  throw new Error(`backend did not become healthy: ${stderr}`);
 }
 
 function resolveChromiumExecutable() {
   const base = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), '.cache', 'ms-playwright');
-  const dirs = fs.readdirSync(base).filter(d => /^chromium-\d+$/.test(d));
-  if (!dirs.length) throw new Error(`no chromium-* directory found under ${base}`);
-  return path.join(base, dirs.sort().pop(), 'chrome-linux', 'chrome');
+  const candidates = fs.readdirSync(base)
+    .filter(name => /^chromium(?:_headless_shell)?-\d+$/.test(name))
+    .sort()
+    .reverse();
+
+  for (const dir of candidates) {
+    for (const rel of [
+      'chrome-linux/chrome',
+      'chrome-linux64/chrome',
+      'chrome-headless-shell-linux64/chrome-headless-shell',
+    ]) {
+      const candidate = path.join(base, dir, rel);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  throw new Error(`no Chromium executable found under ${base}`);
 }
 
-// Same "waits for the actual re-render's real signal, not a coarser one
-// that already matched pre-action" discipline used by the other UI smoke
-// suites in this project (see test-app-catalog-ui-smoke.js's waitForText).
-async function waitForText(getText, expected, timeoutMs = 8000) {
+async function waitForText(locator, predicate, timeoutMs = 15000) {
   const start = Date.now();
-  let last = null;
+  let last = '';
   while (Date.now() - start < timeoutMs) {
-    last = (await getText()).trim();
-    if (last === expected) return;
+    last = (await locator.textContent() || '').trim();
+    if (predicate(last)) return last;
     await new Promise(r => setTimeout(r, 100));
   }
-  throw new Error(`timed out waiting for text "${expected}" - last seen: "${last}"`);
+  throw new Error(`timed out waiting for status; last="${last}"`);
 }
 
 (async () => {
-  const s3 = await startFakeS3Server();
+  const github = await startFakeGitHubServer();
   const serverProc = spawn(process.execPath, [path.join(__dirname, 'index.js')], {
     cwd: __dirname,
     env: {
@@ -122,31 +102,32 @@ async function waitForText(getText, expected, timeoutMs = 8000) {
       PORT: String(PORT),
       DATABASE_SSL: 'disable',
       SECURE_COOKIES: '0',
-      APK_STORAGE_ENDPOINT: s3.baseUrl,
-      APK_STORAGE_REGION: 'auto',
-      APK_STORAGE_BUCKET: 'apk-ui-smoke-bucket',
-      APK_STORAGE_ACCESS_KEY_ID: 'fake-access-key',
-      APK_STORAGE_SECRET_ACCESS_KEY: 'fake-secret-key',
-      APK_STORAGE_PUBLIC_BASE_URL: 'https://cdn.example.com/apks',
+      NODE_ENV: 'test',
+      GITHUB_APK_TOKEN: 'test-token',
+      GITHUB_APK_REPOSITORY: 'test-owner/test-repo',
+      GITHUB_APK_RELEASE_TAG: 'app-store-assets',
+      APK_STORAGE_TEST_BASE_URL: github.baseUrl,
     },
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  const fixtureApkPath = path.join(os.tmpdir(), `apk-upload-ui-smoke-${crypto.randomUUID()}.apk`);
+  const fixturePath = path.join(os.tmpdir(), `apk-upload-ui-${crypto.randomUUID()}.apk`);
   let browser;
+
   try {
-    await waitForServer();
+    await waitForServer(serverProc);
     await db.init();
-    await resetTestDatabase();
+    await rawPool.query(
+      'TRUNCATE apps_catalog, commands, alerts, enrollments, devices RESTART IDENTITY CASCADE'
+    );
 
-    const apkBuffer = buildTestApk('com.uismoke.apk', 4096);
-    fs.writeFileSync(fixtureApkPath, apkBuffer);
+    fs.writeFileSync(fixturePath, buildTestApk('org.yehudikasher.browser', 4096));
 
-    const executablePath = resolveChromiumExecutable();
     browser = await chromium.launch({
-      executablePath,
-      args: ['--disable-background-networking', '--disable-sync', '--disable-client-side-phishing-detection'],
+      executablePath: resolveChromiumExecutable(),
+      args: ['--disable-background-networking', '--disable-sync'],
     });
+
     const page = await browser.newPage();
     const pageErrors = [];
     page.on('pageerror', err => pageErrors.push(String(err)));
@@ -160,68 +141,72 @@ async function waitForText(getText, expected, timeoutMs = 8000) {
     await page.click('[data-tab="catalog"]');
     await page.waitForSelector('#catalogList', { timeout: 10000 });
 
-    await test('the APK upload button is enabled (no longer the disabled placeholder)', async () => {
-      const disabled = await page.locator('#openApkUploadBtn').isDisabled();
-      assert.strictEqual(disabled, false);
+    await test('APK upload button is enabled', async () => {
+      assert.strictEqual(await page.locator('#openApkUploadBtn').isDisabled(), false);
     });
 
-    await test('clicking it opens the upload modal with an empty form', async () => {
+    await test('upload modal opens and package field is readonly/automatic', async () => {
       await page.click('#openApkUploadBtn');
-      await page.waitForSelector('#apkUploadModal', { state: 'visible', timeout: 5000 });
-      assert.strictEqual(await page.inputValue('#apkAppName'), '');
+      await page.waitForSelector('#apkUploadModal', { state: 'visible' });
       assert.strictEqual(await page.inputValue('#apkPackageName'), '');
-      const categoryOptionCount = await page.locator('#apkCategorySelect option').count();
-      assert.ok(categoryOptionCount > 0, 'category options should be populated');
+      assert.strictEqual(await page.locator('#apkPackageName').isEditable(), false);
+      const placeholder = await page.locator('#apkPackageName').getAttribute('placeholder');
+      assert.ok(placeholder.includes('אוטומטית'));
     });
 
-    await test('submitting with an invalid package name shows a Hebrew validation error and uploads nothing', async () => {
-      await page.setInputFiles('#apkFileInput', fixtureApkPath);
-      await page.fill('#apkAppName', 'בדיקת UI');
-      await page.fill('#apkPackageName', 'not-a-valid-package-name');
-      await page.click('#apkUploadSubmitBtn');
-      await waitForText(() => page.locator('#apkUploadStatus').textContent(), 'שם חבילה לא תקין (לדוגמה: com.example.app)');
-      const row = (await db.listAppsCatalog()).find(a => a.packageName === 'not-a-valid-package-name');
-      assert.strictEqual(row, undefined);
+    await test('selecting APK requires no manual package input', async () => {
+      await page.setInputFiles('#apkFileInput', fixturePath);
+      await page.fill('#apkAppName', 'דפדפן כשר');
+      assert.strictEqual(await page.inputValue('#apkPackageName'), '');
     });
 
-    await test('a real upload through the UI succeeds, shows a Hebrew success message, and refreshes the catalog with an APK badge', async () => {
+    await test('real UI upload succeeds and shows auto-detected package name', async () => {
       await page.click('#apkUploadSubmitBtn');
-      await waitForText(
-        () => page.locator('#apkUploadStatus').textContent(),
-        'הועלה בהצלחה: בדיקת UI',
-        15000,
+      const status = await waitForText(
+        page.locator('#apkUploadStatus'),
+        text => text.includes('הועלה בהצלחה') && text.includes('org.yehudikasher.browser'),
       );
-      await page.waitForSelector('#apkUploadModal', { state: 'hidden', timeout: 5000 });
+      assert.ok(status.includes('דפדפן כשר'));
+      assert.strictEqual(await page.inputValue('#apkPackageName'), 'org.yehudikasher.browser');
 
-      const row = await db.listAppsCatalog();
-      const uploaded = row.find(a => a.packageName === 'com.uismoke.apk');
-      assert.ok(uploaded, 'catalog row must exist after the UI upload');
-      assert.strictEqual(uploaded.appSource, 'APK');
-
-      await page.waitForSelector('#catalogList .catalog-tile .apk-source-badge', { timeout: 10000 });
-      const badgeCount = await page.locator('#catalogList .apk-source-badge').count();
-      assert.strictEqual(badgeCount, 1, 'exactly one tile should show the APK badge');
+      const row = (await db.listAppsCatalog()).find(x => x.packageName === 'org.yehudikasher.browser');
+      assert.ok(row);
+      assert.strictEqual(row.appSource, 'APK');
+      assert.ok(github.assets.size >= 1);
     });
 
-    await test('no uncaught page errors occurred during the whole flow', () => {
+    await test('catalog refresh shows exactly one APK source badge', async () => {
+      await page.waitForSelector('#catalogList .apk-source-badge', { timeout: 10000 });
+      assert.strictEqual(await page.locator('#catalogList .apk-source-badge').count(), 1);
+    });
+
+    await test('no uncaught page errors occurred', async () => {
       assert.deepStrictEqual(pageErrors, []);
     });
 
     console.log(`\n${passed} passed, ${failed} failed`);
-    if (failed > 0) {
-      console.log('\nFailures:');
-      for (const f of failures) console.log(`  - ${f.name}: ${f.error.message}`);
+    if (failed) {
+      for (const failure of failures) {
+        console.log(`- ${failure.name}: ${failure.error.message}`);
+      }
     }
   } finally {
     if (browser) await browser.close();
-    try { fs.unlinkSync(fixtureApkPath); } catch { /* best-effort cleanup */ }
-    serverProc.kill('SIGTERM');
-    await new Promise(r => serverProc.once('exit', r));
-    await s3.close();
+    try { fs.unlinkSync(fixturePath); } catch {}
+    if (serverProc.exitCode === null) {
+      serverProc.kill('SIGTERM');
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, 5000);
+        serverProc.once('exit', () => { clearTimeout(timer); resolve(); });
+      });
+    }
+    await github.close();
     await rawPool.end();
   }
+
   process.exit(failed ? 1 : 0);
 })().catch(async e => {
-  console.error('FATAL (suite could not complete):', e);
+  console.error('FATAL:', e);
+  try { await rawPool.end(); } catch {}
   process.exit(1);
 });
