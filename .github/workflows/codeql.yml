@@ -9,7 +9,6 @@ on:
       - 'client/**'
       - 'browser-worker/**'
       - 'ai-service/**'
-      - 'ai-service/**'
       - '!admin-panel/downloads/**'
       - '.github/workflows/codeql.yml'
   pull_request:
@@ -20,6 +19,7 @@ on:
       - 'admin-panel/**'
       - 'client/**'
       - 'browser-worker/**'
+      - 'ai-service/**'
       - '!admin-panel/downloads/**'
       - '.github/workflows/codeql.yml'
   workflow_dispatch:
@@ -76,13 +76,18 @@ jobs:
           languages: python
           queries: security-extended
 
-      - name: Test local HAREDI_STRICT policy
-        working-directory: ai-service
-        run: python -m unittest -v test_policy.py
+      - name: Install lightweight Python lint dependency
+        run: python -m pip install --disable-pip-version-check pyflakes==3.4.0
 
-      - name: Compile local AI service
+      - name: Test local HAREDI_STRICT policy and runtime layout
         working-directory: ai-service
-        run: python -m py_compile app.py policy.py
+        run: python -m unittest -v test_policy.py test_runtime_layout.py
+
+      - name: Compile and lint local AI service
+        working-directory: ai-service
+        run: |
+          python -m py_compile app.py policy.py
+          pyflakes app.py policy.py test_policy.py test_runtime_layout.py
 
       - name: Analyze Python
         uses: github/codeql-action/analyze@v4
