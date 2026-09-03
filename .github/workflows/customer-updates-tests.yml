@@ -275,3 +275,118 @@ jobs:
         env:
           DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
         run: node test-apk-upload-ui-smoke.js
+
+  app-delete-integration:
+    name: App catalog global/per-device delete (real PostgreSQL + fake GitHub Releases)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: newsupdates_test_user
+          POSTGRES_PASSWORD: newsupdates_test_pw
+          POSTGRES_DB: newsupdates_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsupdates_test_user -d newsupdates_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run app catalog delete integration tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+        run: node test-app-delete-integration.js
+
+  app-catalog-management-ui-smoke:
+    name: App catalog management UI smoke (real Chromium)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: newsupdates_test_user
+          POSTGRES_PASSWORD: newsupdates_test_pw
+          POSTGRES_DB: newsupdates_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsupdates_test_user -d newsupdates_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: backend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start backend server against the ephemeral Postgres service
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+          PORT: '4343'
+        run: |
+          node index.js > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4343/health >/dev/null 2>&1; then
+              echo "server is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::server did not become healthy in time"
+          cat server.log
+          exit 1
+
+      - name: Run app catalog management UI smoke test
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+          TEST_BASE_URL: http://127.0.0.1:4343
+        run: node test-app-catalog-management-ui-smoke.js
+
+      - name: Show server log on failure
+        if: failure()
+        working-directory: backend
+        run: cat server.log || true
+
+      - name: Stop backend server
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" 2>/dev/null || true
+          fi

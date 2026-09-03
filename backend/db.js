@@ -683,6 +683,92 @@ async function updateAppCatalogMeta(packageName, { category, isRecommended, sort
 }
 
 /**
+ * Global removal of a catalog app (see DELETE /api/apps/:packageName) - the
+ * entire PostgreSQL side of that operation (reading the row's storage
+ * metadata, stripping the package from every device policy that has it
+ * allowed, and deleting the catalog row) happens inside ONE transaction, so
+ * a crash or error partway through can never leave the database in a mixed
+ * state (e.g. removed from some devices' policies but not the catalog, or
+ * vice versa).
+ *
+ * `SELECT ... FOR UPDATE` locks the catalog row for the duration of the
+ * transaction, so a concurrent delete of the same package blocks until this
+ * one commits (and then correctly finds nothing left to delete) rather than
+ * racing to read stale metadata. The devices UPDATE uses jsonb operators
+ * (`?` to find only devices that actually have this package allowed, `-` to
+ * remove it from the array) so the affected-devices set and the write are
+ * the same query - no separate read-then-write gap there either.
+ *
+ * Returns null if no such package existed (caller 404s, nothing at all is
+ * touched). On success, returns:
+ *   - deletedApp: the removed row's full metadata (appSource/apkStorageKey/
+ *     apkIconStorageKey/...), needed for GitHub Release asset cleanup
+ *   - affectedDevices: [{ deviceId, pushToken }] for every device whose
+ *     policy had this package allowed - already stripped and committed
+ *   - devicesUpdated: affectedDevices.length
+ *
+ * Waking those devices and any GitHub Release cleanup are deliberately NOT
+ * part of this transaction (neither is something Postgres can roll back,
+ * and a push failure must never undo an already-committed deletion) - see
+ * the caller in index.js, which only does that work after this resolves.
+ */
+// Test-only injection point for deleteAppFromCatalogAtomic (see its own
+// comment) - defaults to null (no-op). Only ever set by
+// setDeleteAppFromCatalogAtomicTestHook, itself only ever called from test
+// files, never from application code.
+let deleteAppFromCatalogAtomicTestHook = null;
+function setDeleteAppFromCatalogAtomicTestHook(fn) {
+  deleteAppFromCatalogAtomicTestHook = fn;
+}
+
+async function deleteAppFromCatalogAtomic(packageName) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: catalogRows } = await client.query(
+      `SELECT * FROM apps_catalog WHERE package_name = $1 FOR UPDATE`,
+      [packageName],
+    );
+    if (!catalogRows.length) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    const { rows: deviceRows } = await client.query(
+      `UPDATE devices
+          SET policy = jsonb_set(policy, '{allowedApps}', (policy->'allowedApps') - $1::text)
+        WHERE policy->'allowedApps' ? $1::text
+        RETURNING device_id, push_token`,
+      [packageName],
+    );
+
+    // Test-only injection point (see setDeleteAppFromCatalogAtomicTestHook
+    // below) - lets the integration suite prove a genuine failure landing
+    // between the devices UPDATE and the catalog DELETE really rolls back
+    // the whole transaction, without mocking any of the SQL/transaction
+    // logic above or below. A no-op in every real (non-test-configured)
+    // call.
+    if (deleteAppFromCatalogAtomicTestHook) await deleteAppFromCatalogAtomicTestHook();
+
+    await client.query(`DELETE FROM apps_catalog WHERE package_name = $1`, [packageName]);
+
+    await client.query('COMMIT');
+
+    return {
+      deletedApp: mapCatalogRow(catalogRows[0]),
+      affectedDevices: deviceRows.map(r => ({ deviceId: r.device_id, pushToken: r.push_token })),
+      devicesUpdated: deviceRows.length,
+    };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Starvation-safe candidate list for the refresh-play-metadata backfill:
  * apps that have never been checked sort first (NULLS FIRST), then whichever
  * was checked longest ago. Every attempt - success or failure, and a success
@@ -1118,6 +1204,8 @@ module.exports = {
   addAppToCatalog,
   insertUploadedApp,
   updateAppCatalogMeta,
+  deleteAppFromCatalogAtomic,
+  setDeleteAppFromCatalogAtomicTestHook,
   listAppsPendingPlayMetadataRefresh,
   claimAppsForPlayMetadataRefresh,
   recordPlayMetadataCheckSuccess,
