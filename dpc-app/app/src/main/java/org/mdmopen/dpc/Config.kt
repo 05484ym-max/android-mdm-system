@@ -104,6 +104,10 @@ object Config {
                 categoryLabel = item.optString("categoryLabel", "אחר").ifBlank { "אחר" },
                 isRecommended = item.optBoolean("isRecommended", false),
                 sortOrder = item.optInt("sortOrder", 0).coerceIn(0, 100000),
+                appSource = item.optString("appSource", "PLAY").ifBlank { "PLAY" },
+                apkUrl = if (item.isNull("apkUrl")) null else item.optString("apkUrl", null),
+                apkSha256 = if (item.isNull("apkSha256")) null else item.optString("apkSha256", null),
+                apkSizeBytes = if (item.isNull("apkSizeBytes")) null else item.optLong("apkSizeBytes"),
             )
         }
     }
@@ -122,6 +126,10 @@ object Config {
                     .put("categoryLabel", app.categoryLabel)
                     .put("isRecommended", app.isRecommended)
                     .put("sortOrder", app.sortOrder)
+                    .put("appSource", app.appSource)
+                    .put("apkUrl", app.apkUrl)
+                    .put("apkSha256", app.apkSha256)
+                    .put("apkSizeBytes", app.apkSizeBytes)
             )
         }
         prefs(context).edit().putString(KEY_APP_CATALOG, array.toString()).apply()
