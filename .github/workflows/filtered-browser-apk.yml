@@ -5,6 +5,7 @@ on:
     branches:
       - filtered-browser-client
       - fix/filtered-browser-raster-icon
+      - feature/automatic-browser-filtering-client
     paths:
       - 'client/**'
       - '.github/workflows/filtered-browser-apk.yml'

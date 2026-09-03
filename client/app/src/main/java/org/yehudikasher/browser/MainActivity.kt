@@ -27,6 +27,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import java.util.concurrent.ConcurrentHashMap
 
 class MainActivity : AppCompatActivity() {
 
@@ -38,6 +39,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statePanel: LinearLayout
 
     private val policy by lazy { LocalPolicyStore.createPolicy() }
+    private val remotePolicy by lazy { RemotePolicyClient() }
+    private val classificationInFlight = ConcurrentHashMap.newKeySet<String>()
 
     private val bgColor = Color.parseColor("#F2F1E6")
     private val cardColor = Color.parseColor("#FFFFFF")
@@ -283,6 +286,8 @@ class MainActivity : AppCompatActivity() {
 
         view.webViewClient = SecureWebViewClient(
             policy,
+            remotePolicy,
+            ::classifyAndNavigate,
             ::showBlocked,
             { _, reason -> showTechnicalError(reason) }
         )
@@ -313,13 +318,75 @@ class MainActivity : AppCompatActivity() {
 
     private fun navigateToCandidate(candidate: String) {
         val result = policy.evaluate(candidate)
-        if (result.decision == LocalDecision.ALLOW) {
-            addressBar.setText(candidate)
-            showLoading()
-            webView.loadUrl(candidate)
-        } else {
-            showBlocked(candidate, result.reason)
+        when {
+            result.decision == LocalDecision.ALLOW -> {
+                addressBar.setText(candidate)
+                showLoading()
+                webView.loadUrl(candidate)
+            }
+            result.reason == "not_in_local_policy" && result.normalizedHost != null ->
+                classifyAndNavigate(candidate)
+            else -> showBlocked(candidate, result.reason)
         }
+    }
+
+    private fun classifyAndNavigate(candidate: String) {
+        val local = policy.evaluate(candidate)
+        val host = local.normalizedHost
+        if (local.decision == LocalDecision.ALLOW) {
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    addressBar.setText(candidate)
+                    showLoading()
+                    webView.loadUrl(candidate)
+                }
+            }
+            return
+        }
+        if (local.reason != "not_in_local_policy" || host == null) {
+            showBlocked(candidate, local.reason)
+            return
+        }
+
+        if (!classificationInFlight.add(host)) return
+        runOnUiThread {
+            if (!isFinishing && !isDestroyed) showChecking(host)
+        }
+
+        Thread {
+            val remote = remotePolicy.checkHost(host)
+            classificationInFlight.remove(host)
+
+            if (remote.allowed) {
+                policy.rememberRemoteAllow(host)
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        addressBar.setText(candidate)
+                        showLoading()
+                        webView.loadUrl(candidate)
+                    }
+                }
+            } else {
+                val technical = remote.reason.startsWith("classifier_") ||
+                    remote.reason == "rate_limited"
+                if (technical) showTechnicalError(remote.reason)
+                else showBlocked(candidate, remote.reason)
+            }
+        }.start()
+    }
+
+    private fun showChecking(host: String) {
+        progressBar.visibility = View.VISIBLE
+        webView.visibility = View.GONE
+        statusChip.visibility = View.GONE
+        showStateCard(
+            tintColor = accentTintColor,
+            icon = "⌛",
+            iconColor = accentColor,
+            title = "בודק את האתר",
+            domain = host,
+            body = "האתר נבדק אוטומטית לפני פתיחה.",
+        )
     }
 
     private fun showHome() {
@@ -527,7 +594,9 @@ class MainActivity : AppCompatActivity() {
             "ssl_error" -> "החיבור המאובטח לאתר נכשל ולכן האתר נחסם."
             "http_auth_blocked", "client_cert_request_blocked" ->
                 "האתר ביקש מנגנון אימות שאינו מאושר בדפדפן המאובטח."
-            else -> "האתר הזה אינו ברשימת האתרים המאושרים למכשיר שלך."
+            "category_not_allowed", "classification_not_confident", "classification_missing" ->
+                "האתר לא סווג בקטגוריה בטוחה מספיק ולכן נחסם."
+            else -> "האתר הזה אינו מאושר לפי מדיניות הסינון."
         }
     }
 

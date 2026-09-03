@@ -136,6 +136,38 @@ class UrlPolicyTest {
     }
 
     @Test
+    fun remoteApprovedHost_isAllowedAfterExplicitApproval() {
+        val dynamic = UrlPolicy(emptyList())
+        val before = dynamic.evaluate("https://safe.example.net/path")
+        assertEquals(LocalDecision.BLOCK, before.decision)
+        assertEquals("not_in_local_policy", before.reason)
+
+        dynamic.rememberRemoteAllow("safe.example.net")
+
+        val after = dynamic.evaluate("https://safe.example.net/path")
+        assertEquals(LocalDecision.ALLOW, after.decision)
+        assertEquals("remote_allow", after.reason)
+    }
+
+    @Test
+    fun remoteApprovalDoesNotBypassHttpsOrPortRestrictions() {
+        val dynamic = UrlPolicy(emptyList())
+        dynamic.rememberRemoteAllow("safe.example.net")
+
+        assertEquals(LocalDecision.BLOCK, dynamic.evaluate("http://safe.example.net").decision)
+        assertEquals(LocalDecision.BLOCK, dynamic.evaluate("https://safe.example.net:8443").decision)
+    }
+
+    @Test
+    fun remoteApprovalIsExactHostOnly() {
+        val dynamic = UrlPolicy(emptyList())
+        dynamic.rememberRemoteAllow("safe.example.net")
+
+        assertEquals(LocalDecision.ALLOW, dynamic.evaluate("https://safe.example.net").decision)
+        assertEquals(LocalDecision.BLOCK, dynamic.evaluate("https://cdn.safe.example.net").decision)
+    }
+
+    @Test
     fun overlyLongUrl_isBlocked() {
         val url = "https://example.com/" + "a".repeat(9000)
         assertEquals(LocalDecision.BLOCK, policy.evaluate(url).decision)
