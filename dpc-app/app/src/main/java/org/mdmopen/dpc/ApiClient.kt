@@ -60,6 +60,18 @@ data class SyncResult(
 
 data class EnrollResult(val deviceId: String, val deviceToken: String)
 
+/** One "חדשות ועדכונים" item. publishedAt is an ISO-8601 string (unlike
+ * every epoch-millis timestamp elsewhere in this file) because it comes
+ * straight from the server's Postgres TIMESTAMPTZ via toISOString() - see
+ * backend/db.js's listPublishedCustomerUpdatesForDevice. */
+data class UpdateItem(
+    val id: String,
+    val title: String,
+    val body: String,
+    val pinned: Boolean,
+    val publishedAt: String,
+)
+
 class ApiException(message: String) : Exception(message)
 
 class ApiClient(
@@ -162,6 +174,25 @@ class ApiClient(
             "/api/devices/${segment(deviceId)}/push-token",
             JSONObject().put("pushToken", pushToken),
         )
+    }
+
+    /** "חדשות ועדכונים" - a dedicated, lightweight GET, deliberately not
+     * folded into sync()'s payload (see backend/index.js's comment on the
+     * device-facing /updates route). Already published-only, pinned-first,
+     * newest-first, capped server-side - nothing to filter/sort here. */
+    fun fetchUpdates(deviceId: String): List<UpdateItem> {
+        val body = request("GET", "/api/devices/${segment(deviceId)}/updates", null)
+        val array = JSONArray(body)
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            UpdateItem(
+                id = item.getString("id"),
+                title = item.getString("title"),
+                body = item.getString("body"),
+                pinned = item.optBoolean("pinned", false),
+                publishedAt = item.getString("publishedAt"),
+            )
+        }
     }
 
     private fun segment(value: String): String =

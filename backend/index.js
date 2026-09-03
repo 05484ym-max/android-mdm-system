@@ -70,6 +70,12 @@ const uploadApkField = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: APK_UPLOAD_MAX_BYTES },
 }).single('apk');
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UPDATE_TITLE_MAX_LENGTH = 200;
+const UPDATE_BODY_MAX_LENGTH = 20000;
+const UPDATE_LIST_LIMIT_FOR_DEVICE = 50;
+
 const ALLOWED_COMMANDS =
   ['LOCK', 'SYNC_POLICY', 'REBOOT', 'WIPE', 'INSTALL_APP', 'UNINSTALL_APP',
    'OPEN_PLAY_STORE_INSTALL', 'OPEN_PLAY_STORE_SYSTEM_COMPONENT', 'OPEN_DEBUGGING_TEMP',
@@ -354,6 +360,130 @@ app.get('/api/alerts', requireAdmin, wrap(async (req, res) => {
   // can't reach them.
   await alerts.reconcileAllDevices();
   res.json(await alerts.listActiveAlerts());
+}));
+
+// ---------- customer updates ("news", admin CRUD) ----------
+//
+// Plain text only, never HTML - title/body are stored and returned as-is,
+// with no markup interpretation anywhere in this pipeline. The admin panel
+// is responsible for escaping them on render (see news.js's escapeHtml
+// usage) rather than this server sanitizing/stripping tags, since nothing
+// here ever treats the content as HTML in the first place - the risk this
+// guards against is the admin panel accidentally rendering admin-authored
+// text as markup, not a hostile external submitter (there is no
+// unauthenticated write path to this table at all).
+//
+// Deliberately separate from the app catalog's endpoints even though both
+// are admin-managed lists - a different resource, different table, no
+// shared code beyond requireAdmin/wrap.
+
+function validateUpdateId(id) {
+  return typeof id === 'string' && UUID_REGEX.test(id);
+}
+
+app.get('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
+  res.json(await db.listCustomerUpdatesForAdmin());
+}));
+
+app.post('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
+  const { title, body, pinned, published } = req.body || {};
+  if (typeof title !== 'string' || !title.trim()) {
+    return res.status(400).json({ error: 'title is required' });
+  }
+  if (title.trim().length > UPDATE_TITLE_MAX_LENGTH) {
+    return res.status(400).json({ error: `title must be at most ${UPDATE_TITLE_MAX_LENGTH} characters` });
+  }
+  if (typeof body !== 'string' || !body.trim()) {
+    return res.status(400).json({ error: 'body is required' });
+  }
+  if (body.trim().length > UPDATE_BODY_MAX_LENGTH) {
+    return res.status(400).json({ error: `body must be at most ${UPDATE_BODY_MAX_LENGTH} characters` });
+  }
+  if (pinned !== undefined && typeof pinned !== 'boolean') {
+    return res.status(400).json({ error: 'pinned must be a boolean' });
+  }
+  if (published !== undefined && typeof published !== 'boolean') {
+    return res.status(400).json({ error: 'published must be a boolean' });
+  }
+  const created = await db.createCustomerUpdate(crypto.randomUUID(), {
+    title: title.trim(),
+    body: body.trim(),
+    pinned: pinned === true,
+    published: published === true,
+  });
+  res.json(created);
+}));
+
+app.put('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.id)) {
+    return res.status(400).json({ error: 'invalid id' });
+  }
+  const patch = {};
+  if (req.body.title !== undefined) {
+    if (typeof req.body.title !== 'string' || !req.body.title.trim()) {
+      return res.status(400).json({ error: 'title must be a non-empty string' });
+    }
+    if (req.body.title.trim().length > UPDATE_TITLE_MAX_LENGTH) {
+      return res.status(400).json({ error: `title must be at most ${UPDATE_TITLE_MAX_LENGTH} characters` });
+    }
+    patch.title = req.body.title.trim();
+  }
+  if (req.body.body !== undefined) {
+    if (typeof req.body.body !== 'string' || !req.body.body.trim()) {
+      return res.status(400).json({ error: 'body must be a non-empty string' });
+    }
+    if (req.body.body.trim().length > UPDATE_BODY_MAX_LENGTH) {
+      return res.status(400).json({ error: `body must be at most ${UPDATE_BODY_MAX_LENGTH} characters` });
+    }
+    patch.body = req.body.body.trim();
+  }
+  if (req.body.pinned !== undefined) {
+    if (typeof req.body.pinned !== 'boolean') {
+      return res.status(400).json({ error: 'pinned must be a boolean' });
+    }
+    patch.pinned = req.body.pinned;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'at least one of title, body, pinned is required' });
+  }
+  const updated = await db.updateCustomerUpdate(req.params.id, patch);
+  if (!updated) {
+    return res.status(404).json({ error: 'update not found' });
+  }
+  res.json(updated);
+}));
+
+app.post('/api/customer-updates/:id/publish', requireAdmin, wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.id)) {
+    return res.status(400).json({ error: 'invalid id' });
+  }
+  const updated = await db.setCustomerUpdatePublished(req.params.id, true);
+  if (!updated) {
+    return res.status(404).json({ error: 'update not found' });
+  }
+  res.json(updated);
+}));
+
+app.post('/api/customer-updates/:id/unpublish', requireAdmin, wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.id)) {
+    return res.status(400).json({ error: 'invalid id' });
+  }
+  const updated = await db.setCustomerUpdatePublished(req.params.id, false);
+  if (!updated) {
+    return res.status(404).json({ error: 'update not found' });
+  }
+  res.json(updated);
+}));
+
+app.delete('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
+  if (!validateUpdateId(req.params.id)) {
+    return res.status(400).json({ error: 'invalid id' });
+  }
+  const deleted = await db.deleteCustomerUpdate(req.params.id);
+  if (!deleted) {
+    return res.status(404).json({ error: 'update not found' });
+  }
+  res.json({ status: 'ok' });
 }));
 
 // ---------- device health dashboard (admin, read-only) ----------
@@ -1408,6 +1538,21 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   };
 
   res.json({ policy, catalog, commands, dns });
+}));
+
+// ---------- customer updates ("news") - device-facing ----------
+//
+// Deliberately a separate, lightweight endpoint rather than a field on
+// /sync's response: /sync already runs on every device's regular check-in
+// (potentially thousands of devices), and a growing news history has no
+// reason to ride along on that hot path. A device only calls this when its
+// own "חדשות ועדכונים" screen is actually opened. Read-state (which
+// updates a given device has already seen) is tracked entirely on-device -
+// this response carries no per-device state at all, so the same response
+// is valid for every device and safely cacheable at any layer in front of
+// this server.
+app.get('/api/devices/:deviceId/updates', requireDevice, wrap(async (req, res) => {
+  res.json(await db.listPublishedCustomerUpdatesForDevice(UPDATE_LIST_LIMIT_FOR_DEVICE));
 }));
 
 app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,

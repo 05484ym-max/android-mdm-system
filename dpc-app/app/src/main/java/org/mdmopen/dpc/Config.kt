@@ -46,6 +46,8 @@ object Config {
     private const val KEY_DNS_ALLOW_CUSTOMER_TOGGLE = "dns_allow_customer_toggle"
     private const val KEY_DNS_PROVIDER_FILTERS = "dns_provider_filters"
     private const val KEY_DNS_PENDING_CUSTOMER_REQUEST = "dns_pending_customer_request"
+    private const val KEY_NEWS_CACHE = "news_cache"
+    private const val KEY_READ_UPDATE_IDS = "read_update_ids"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -133,6 +135,64 @@ object Config {
             )
         }
         prefs(context).edit().putString(KEY_APP_CATALOG, array.toString()).apply()
+    }
+
+    /** Last fetch of "חדשות ועדכונים" (see ApiClient.fetchUpdates), cached so
+     * the tab has something real to show immediately (and the unread badge
+     * can be computed) before a fresh network round trip completes - same
+     * "last known good, not a hard requirement of being online" idea as
+     * appCatalog above. Never the source of truth for what's actually
+     * published; a background refresh always follows. */
+    fun newsCache(context: Context): List<UpdateItem> {
+        val raw = prefs(context).getString(KEY_NEWS_CACHE, null) ?: return emptyList()
+        val array = JSONArray(raw)
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            UpdateItem(
+                id = item.getString("id"),
+                title = item.getString("title"),
+                body = item.getString("body"),
+                pinned = item.optBoolean("pinned", false),
+                publishedAt = item.getString("publishedAt"),
+            )
+        }
+    }
+
+    fun setNewsCache(context: Context, items: List<UpdateItem>) {
+        val array = JSONArray()
+        items.forEach { item ->
+            array.put(
+                JSONObject()
+                    .put("id", item.id)
+                    .put("title", item.title)
+                    .put("body", item.body)
+                    .put("pinned", item.pinned)
+                    .put("publishedAt", item.publishedAt)
+            )
+        }
+        prefs(context).edit().putString(KEY_NEWS_CACHE, array.toString()).apply()
+    }
+
+    /**
+     * Read-state for "חדשות ועדכונים" - tracked entirely on this device,
+     * per the task's own instruction that no per-customer read-state needs
+     * to exist server-side yet. A Set<String> of update ids the customer
+     * has actually opened (see CustomerActivity.showNewsDetail) - an id
+     * that never arrived from the server (deleted, or from a future
+     * reinstall) simply never matches anything and costs nothing to keep.
+     */
+    fun readUpdateIds(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_READ_UPDATE_IDS, emptySet()).orEmpty()
+
+    fun isUpdateRead(context: Context, id: String): Boolean =
+        id in readUpdateIds(context)
+
+    fun markUpdateRead(context: Context, id: String) {
+        val current = readUpdateIds(context)
+        if (id in current) return
+        // getStringSet's returned Set must be treated as immutable (its own
+        // docs warn against mutating it in place) - copy before adding.
+        prefs(context).edit().putStringSet(KEY_READ_UPDATE_IDS, current + id).apply()
     }
 
     fun kioskEnabled(context: Context): Boolean =

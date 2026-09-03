@@ -310,6 +310,7 @@
 <link rel="stylesheet" href="health.css">
 <link rel="stylesheet" href="diagnostics.css">
 <link rel="stylesheet" href="alerts.css">
+<link rel="stylesheet" href="news.css">
 </head>
 <body>
 
@@ -404,6 +405,31 @@
   <div id="alertsList"></div>
 </div>
 
+<div class="tab-content" data-tab-content="news">
+  <div class="enroll-card">
+    <h2 id="newsFormTitle">הודעה חדשה</h2>
+    <input class="login-input" id="newsTitleInput" placeholder="כותרת" maxlength="200" />
+    <textarea class="login-input news-textarea" id="newsBodyInput" placeholder="תוכן ההודעה (טקסט רגיל בלבד)" maxlength="20000"></textarea>
+    <label class="news-checkbox-row">
+      <input type="checkbox" id="newsPinnedInput" />
+      הצמד / סמן כחשובה
+    </label>
+    <label class="news-checkbox-row">
+      <input type="checkbox" id="newsPublishedInput" />
+      פרסם ללקוחות
+    </label>
+    <div class="add-app-row">
+      <button class="add-app-btn" id="newsSaveBtn">שמור</button>
+      <button class="toggle-btn" id="newsCancelEditBtn" style="display:none;">ביטול עריכה</button>
+    </div>
+    <div id="newsFormError" class="login-error"></div>
+  </div>
+  <div class="news-toolbar">
+    <button class="alerts-refresh-btn" id="newsRefreshBtn">⟳ רענן</button>
+  </div>
+  <div id="newsList"></div>
+</div>
+
 <div class="tab-content" data-tab-content="enroll">
   <div class="enroll-card">
     <h2>רישום מכשיר חדש</h2>
@@ -432,6 +458,10 @@
   <button class="nav-btn" data-tab="alerts">
     <span class="nav-icon">🔔</span>
     <span class="nav-label">התראות</span>
+  </button>
+  <button class="nav-btn" data-tab="news">
+    <span class="nav-icon">📰</span>
+    <span class="nav-label">חדשות ועדכונים</span>
   </button>
 </nav>
 
@@ -1462,5 +1492,6 @@ loadDevices();
 <script src="health.js"></script>
 <script src="diagnostics.js"></script>
 <script src="alerts.js"></script>
+<script src="news.js"></script>
 </body>
 </html>

@@ -20,6 +20,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -28,19 +29,33 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.time.Instant
+import java.util.Locale
 
 class CustomerActivity : Activity() {
 
-    private data class NavItem(val container: LinearLayout, val icon: TextView, val label: TextView)
+    private data class NavItem(
+        val container: LinearLayout,
+        val icon: TextView,
+        val label: TextView,
+        val badge: View,
+    )
 
     private lateinit var contentArea: LinearLayout
     private lateinit var headerLabelView: TextView
     private lateinit var personalNavItem: NavItem
     private lateinit var storeNavItem: NavItem
     private lateinit var adminNavItem: NavItem
+    private lateinit var newsNavItem: NavItem
     private var isPersonalAreaActive = false
+    private var isNewsActive = false
     private var selectedStoreCategory = "all"
     private var storeSearchQuery = ""
+    // Cache-first: showNews()/onCreate's badge check both read this rather
+    // than re-fetching - a background refresh (refreshNews) is what keeps
+    // it current and is also the only thing allowed to write it.
+    private var newsItems: List<UpdateItem> = emptyList()
 
     private val BG = "#F2F1E6"
     private val CARD = "#FFFFFF"
@@ -56,8 +71,11 @@ class CustomerActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        newsItems = Config.newsCache(this)
         setContentView(buildUi())
         showAppStore()
+        updateNewsBadge()
+        refreshNews()
     }
 
     private fun buildUi(): View {
@@ -197,6 +215,7 @@ class CustomerActivity : Activity() {
 
         personalNavItem = navButton("👤", "אזור אישי") { showPersonalArea() }
         storeNavItem = navButton("▦", "חנות אפליקציות") { showAppStore() }
+        newsNavItem = navButton("📰", "חדשות ועדכונים") { showNews() }
         adminNavItem = navButton("🔒", "כניסת מנהל") { showAdminLogin() }
 
         row.addView(
@@ -205,6 +224,10 @@ class CustomerActivity : Activity() {
         )
         row.addView(
             storeNavItem.container,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        row.addView(
+            newsNavItem.container,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
         row.addView(
@@ -222,6 +245,21 @@ class CustomerActivity : Activity() {
             textSize = 18f
             gravity = Gravity.CENTER
         }
+        // Small unread-indicator dot, top-end of the icon - GONE by default,
+        // only news's badge is ever actually shown (see updateNewsBadge()),
+        // but every nav item gets one for a uniform, reusable NavItem shape.
+        val badgeDot = View(this).apply {
+            background = flatCircle("#B3432C")
+            visibility = View.GONE
+        }
+        val iconFrame = FrameLayout(this).apply {
+            addView(iconView, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.CENTER })
+            addView(badgeDot, FrameLayout.LayoutParams(dp(9), dp(9)).apply {
+                gravity = Gravity.TOP or Gravity.END
+            })
+        }
         val labelView = TextView(this).apply {
             text = label
             textSize = 11f
@@ -236,15 +274,15 @@ class CustomerActivity : Activity() {
             setPadding(dp(10), dp(10), dp(10), dp(6))
             isClickable = true
             isFocusable = true
-            addView(iconView)
+            addView(iconFrame)
             addView(labelView)
             setOnClickListener { action() }
         }
-        return NavItem(container, iconView, labelView)
+        return NavItem(container, iconView, labelView, badgeDot)
     }
 
     private fun setActiveNav(active: NavItem) {
-        for (item in listOf(personalNavItem, storeNavItem, adminNavItem)) {
+        for (item in listOf(personalNavItem, storeNavItem, newsNavItem, adminNavItem)) {
             val isActive = item === active
             item.icon.alpha = if (isActive) 1f else 0.5f
             item.label.typeface = if (isActive) heavyFont else mediumFont
@@ -258,6 +296,7 @@ class CustomerActivity : Activity() {
      * tap into first, matching the other two tabs. */
     private fun showAppStore() {
         isPersonalAreaActive = false
+        isNewsActive = false
         headerLabelView.text = "חנות אפליקציות"
         setActiveNav(storeNavItem)
         contentArea.removeAllViews()
@@ -612,6 +651,7 @@ class CustomerActivity : Activity() {
      * PIN setup vs. checking an existing one) is unchanged from the old dialog. */
     private fun showAdminLogin() {
         isPersonalAreaActive = false
+        isNewsActive = false
         headerLabelView.text = "כניסת מנהל"
         setActiveNav(adminNavItem)
         contentArea.removeAllViews()
@@ -709,6 +749,7 @@ class CustomerActivity : Activity() {
 
     private fun showPersonalArea() {
         isPersonalAreaActive = true
+        isNewsActive = false
         headerLabelView.text = "אזור אישי"
         setActiveNav(personalNavItem)
         contentArea.removeAllViews()
@@ -908,6 +949,229 @@ class CustomerActivity : Activity() {
      * if some other tab is showing when the DNS toggle's own action finishes. */
     private fun refreshPersonalAreaIfShown() {
         if (isPersonalAreaActive) showPersonalArea()
+    }
+
+    // ---------- "חדשות ועדכונים" ----------
+
+    /** Renders whatever is currently cached in newsItems immediately (so
+     * opening this tab never shows a blank/loading screen), then kicks a
+     * background refresh - same cache-first pattern as the app store tab's
+     * approvedApps()/Config.appCatalog(). */
+    private fun showNews() {
+        isPersonalAreaActive = false
+        isNewsActive = true
+        headerLabelView.text = "חדשות ועדכונים"
+        setActiveNav(newsNavItem)
+        renderNewsList()
+        refreshNews()
+    }
+
+    private fun renderNewsList() {
+        contentArea.removeAllViews()
+        // Requirement: the screen must work with zero updates too - a plain
+        // empty state, never an error, same MUTED-centered-text convention
+        // as "עדיין לא אושרו אפליקציות למכשיר זה" elsewhere in this file.
+        if (newsItems.isEmpty()) {
+            contentArea.addView(TextView(this).apply {
+                text = "אין עדכונים כרגע"
+                textSize = 14f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(40), 0, 0)
+            })
+            return
+        }
+        newsItems.forEach { item -> contentArea.addView(newsCard(item)) }
+    }
+
+    /** Background GET against the dedicated /updates endpoint (never folded
+     * into PolicySync's main sync - see ApiClient.fetchUpdates). Best-effort:
+     * a failed refresh silently keeps showing whatever was already cached/
+     * rendered rather than replacing it with an error - the cache (or the
+     * empty state above) is always a valid thing to show offline. */
+    private fun refreshNews() {
+        val deviceId = Config.deviceId(this)
+        val serverUrl = Config.serverUrl(this)
+        val deviceToken = Config.deviceToken(this)
+        Thread {
+            try {
+                val fetched = ApiClient(serverUrl, deviceToken).fetchUpdates(deviceId)
+                Config.setNewsCache(applicationContext, fetched)
+                runOnUiThread {
+                    newsItems = fetched
+                    updateNewsBadge()
+                    if (isNewsActive) renderNewsList()
+                }
+            } catch (e: Exception) {
+                // Offline/server error - the tab already shows the last
+                // known-good cache (or the empty state), which stays as-is.
+            }
+        }.start()
+    }
+
+    /** Small red dot on the bottom-nav icon, visible whenever at least one
+     * cached update hasn't been opened yet (see Config.isUpdateRead). */
+    private fun updateNewsBadge() {
+        val hasUnread = newsItems.any { !Config.isUpdateRead(this, it.id) }
+        newsNavItem.badge.visibility = if (hasUnread) View.VISIBLE else View.GONE
+    }
+
+    /** Marking as read happens here - the moment the customer actually opens
+     * an update for full reading, not merely from it appearing in the list
+     * (which would make the "new" indicator disappear before it was ever
+     * actually seen). Read-state is local-only, per this feature's own
+     * scope - see Config.markUpdateRead. */
+    private fun showNewsDetail(item: UpdateItem) {
+        Config.markUpdateRead(this, item.id)
+        updateNewsBadge()
+        contentArea.removeAllViews()
+
+        contentArea.addView(TextView(this).apply {
+            text = "→ חזרה"
+            textSize = 13f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(ACCENT))
+            gravity = Gravity.RIGHT
+            setPadding(dp(2), 0, dp(2), dp(18))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showNews() }
+        })
+
+        if (item.pinned) {
+            contentArea.addView(
+                newsBadge("★ חשוב", "#FBEEDD", "#A5661D"),
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(10) }
+            )
+        }
+
+        contentArea.addView(TextView(this).apply {
+            text = item.title
+            textSize = 19f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.RIGHT
+            setPadding(0, 0, 0, dp(6))
+        })
+
+        contentArea.addView(TextView(this).apply {
+            text = formatUpdateDate(item.publishedAt)
+            textSize = 12f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.RIGHT
+            setPadding(0, 0, 0, dp(18))
+        })
+
+        // Plain TextView.text assignment - never Html.fromHtml or a WebView -
+        // so admin-authored body content is always rendered as literal text,
+        // exactly what the server stores (see backend/index.js's
+        // customer-updates validation: title/body are stored/returned as
+        // plain strings, no markup interpretation anywhere in this pipeline).
+        contentArea.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedCardWithBorder()
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            addView(TextView(this@CustomerActivity).apply {
+                text = item.body
+                textSize = 15f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.RIGHT
+                setLineSpacing(dp(4).toFloat(), 1f)
+            })
+        })
+    }
+
+    private fun newsCard(item: UpdateItem): LinearLayout {
+        val isRead = Config.isUpdateRead(this, item.id)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            background = roundedCardWithBorder()
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(14) }
+            isClickable = true
+            isFocusable = true
+
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(TextView(this@CustomerActivity).apply {
+                    text = item.title
+                    textSize = 15f
+                    typeface = heavyFont
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                    maxLines = 2
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+                if (!isRead) {
+                    addView(
+                        newsBadge("חדש", ACCENT_TINT, ACCENT),
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { marginStart = dp(6) }
+                    )
+                }
+                if (item.pinned) {
+                    addView(
+                        newsBadge("★", "#FBEEDD", "#A5661D"),
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { marginStart = dp(6) }
+                    )
+                }
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = item.body
+                textSize = 13f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.RIGHT
+                maxLines = 3
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(6), 0, 0)
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = formatUpdateDate(item.publishedAt)
+                textSize = 11f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(8), 0, 0)
+            })
+
+            setOnClickListener { showNewsDetail(item) }
+        }
+    }
+
+    private fun newsBadge(text: String, bg: String, fg: String): TextView {
+        return TextView(this).apply {
+            this.text = text
+            textSize = 10.5f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(fg))
+            background = flatRounded(bg, dp(10).toFloat())
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+            gravity = Gravity.CENTER
+        }
+    }
+
+    private fun formatUpdateDate(iso: String): String {
+        return try {
+            val millis = Instant.parse(iso).toEpochMilli()
+            SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("he", "IL")).format(java.util.Date(millis))
+        } catch (e: Exception) {
+            iso
+        }
     }
 
     private fun identityCard(subtitle: String): LinearLayout {
