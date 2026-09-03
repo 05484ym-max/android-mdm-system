@@ -6,7 +6,7 @@ const {
   moderateImage,
 } = require('./imageModerator');
 
-function payload({ adult = 'VERY_UNLIKELY', racy = 'VERY_UNLIKELY', labels = [] } = {}) {
+function payload({ adult = 'VERY_UNLIKELY', racy = 'VERY_UNLIKELY', labels = [], faces = [] } = {}) {
   return {
     responses: [{
       safeSearchAnnotation: {
@@ -17,6 +17,7 @@ function payload({ adult = 'VERY_UNLIKELY', racy = 'VERY_UNLIKELY', labels = [] 
         spoof: 'VERY_UNLIKELY',
       },
       labelAnnotations: labels,
+      faceAnnotations: faces,
     }],
   };
 }
@@ -43,6 +44,21 @@ assert.strictEqual(
     labels: [{ description: 'Person', score: 0.94 }],
   })).reason,
   'ambiguous_person',
+);
+
+assert.strictEqual(
+  evaluateVisionResponse(payload({
+    faces: [{ detectionConfidence: 0.99 }],
+  })).reason,
+  'ambiguous_face',
+);
+
+assert.strictEqual(
+  evaluateVisionResponse(payload({
+    faces: [{ detectionConfidence: 0.99 }],
+    labels: [{ description: 'Man', score: 0.95 }],
+  })).allowed,
+  true,
 );
 
 assert.strictEqual(
@@ -89,6 +105,7 @@ moderateImage(Buffer.from('fake-image')).then(result => {
     const types = requestBody.requests[0].features.map(x => x.type);
     assert.ok(types.includes('SAFE_SEARCH_DETECTION'));
     assert.ok(types.includes('LABEL_DETECTION'));
+    assert.ok(types.includes('FACE_DETECTION'));
   });
 }).finally(() => {
   if (previous === undefined) delete process.env.GOOGLE_VISION_API_KEY;
