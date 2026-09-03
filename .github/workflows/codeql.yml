@@ -2,11 +2,6 @@ name: CodeQL Security Scan
 
 on:
   push:
-    branches:
-      - main
-      - filtered-browser-client
-      - filtered-browser-server
-      - filtered-browser-integration
     paths:
       - 'dpc-app/**'
       - 'backend/**'
