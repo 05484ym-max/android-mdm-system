@@ -22,12 +22,20 @@ DEFAULT_SIGLIP_MODEL = "google/siglip2-base-patch16-512"
 # width*height check below as a second, deterministic bound.
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
+
+def _configured_concurrency() -> int:
+    """Return a safe bounded inference concurrency even for malformed env."""
+    try:
+        requested = int(os.environ.get("AI_MAX_CONCURRENCY", "1"))
+    except (TypeError, ValueError):
+        requested = 1
+    return max(1, min(requested, 4))
+
+
 _nudenet: NudeDetector | None = None
 _siglip: Any = None
 _model_load_lock = threading.Lock()
-_inference_gate = threading.BoundedSemaphore(
-    max(1, min(int(os.environ.get("AI_MAX_CONCURRENCY", "1")), 4))
-)
+_inference_gate = threading.BoundedSemaphore(_configured_concurrency())
 
 
 def _token_ok(value: str | None) -> bool:
@@ -135,6 +143,7 @@ def health():
         "siglipModel": os.environ.get("SIGLIP_MODEL", DEFAULT_SIGLIP_MODEL),
         "maxImageBytes": MAX_BYTES,
         "maxImagePixels": MAX_IMAGE_PIXELS,
+        "maxConcurrency": _configured_concurrency(),
     }
 
 
