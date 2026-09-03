@@ -150,7 +150,7 @@ async function deleteApk(config, assetId) {
 
 async function downloadApk(config, assetId) {
   const response = await fetch(
-    `https://api.github.com/repos/${config.repository}/releases/assets/${encodeURIComponent(assetId)}`,
+    `${config.apiBase}/repos/${config.repository}/releases/assets/${encodeURIComponent(assetId)}`,
     {
       headers: headers(config, 'application/octet-stream'),
       redirect: 'follow',
