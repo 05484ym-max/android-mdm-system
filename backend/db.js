@@ -186,15 +186,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS alerts_open_unique_idx
 -- safe "not visible to any device yet" state so a row can never become
 -- customer-visible except through an explicit admin action.
 CREATE TABLE IF NOT EXISTS customer_updates (
-  id           UUID PRIMARY KEY,
-  title        TEXT NOT NULL,
-  body         TEXT NOT NULL,
-  published    BOOLEAN NOT NULL DEFAULT false,
-  pinned       BOOLEAN NOT NULL DEFAULT false,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  published_at TIMESTAMPTZ
+  id                UUID PRIMARY KEY,
+  title             TEXT NOT NULL,
+  body              TEXT NOT NULL,
+  published         BOOLEAN NOT NULL DEFAULT false,
+  pinned            BOOLEAN NOT NULL DEFAULT false,
+  media_type        TEXT,
+  media_url         TEXT,
+  media_storage_key TEXT,
+  media_mime_type   TEXT,
+  media_size_bytes  BIGINT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at      TIMESTAMPTZ
 );
+
+-- Existing deployments created customer_updates before media support.
+ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_type TEXT;
+ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_url TEXT;
+ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_storage_key TEXT;
+ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_mime_type TEXT;
+ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_size_bytes BIGINT;
 
 -- Matches the device-facing query's own WHERE/ORDER BY exactly (see
 -- listPublishedCustomerUpdatesForDevice) - a partial index over only the
@@ -1042,6 +1054,11 @@ function mapCustomerUpdateRow(row) {
     body: row.body,
     published: row.published,
     pinned: row.pinned,
+    mediaType: row.media_type || null,
+    mediaUrl: row.media_url || null,
+    mediaStorageKey: row.media_storage_key || null,
+    mediaMimeType: row.media_mime_type || null,
+    mediaSizeBytes: row.media_size_bytes == null ? null : Number(row.media_size_bytes),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     publishedAt: row.published_at ? row.published_at.toISOString() : null,
@@ -1071,12 +1088,25 @@ async function getCustomerUpdateById(id) {
  * same convention as createAlert/createEnrollment above. published_at is
  * stamped immediately if the admin chooses to publish at creation time;
  * otherwise it stays null until a later explicit publish action. */
-async function createCustomerUpdate(id, { title, body, pinned, published }) {
+async function createCustomerUpdate(id, {
+  title, body, pinned, published,
+  mediaType = null, mediaUrl = null, mediaStorageKey = null,
+  mediaMimeType = null, mediaSizeBytes = null,
+}) {
   const { rows } = await pool.query(
-    `INSERT INTO customer_updates (id, title, body, pinned, published, published_at)
-     VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 THEN now() ELSE NULL END)
+    `INSERT INTO customer_updates (
+       id, title, body, pinned, published, published_at,
+       media_type, media_url, media_storage_key, media_mime_type, media_size_bytes
+     )
+     VALUES (
+       $1, $2, $3, $4, $5, CASE WHEN $5 THEN now() ELSE NULL END,
+       $6, $7, $8, $9, $10
+     )
      RETURNING *`,
-    [id, title, body, pinned, published],
+    [
+      id, title, body, pinned, published,
+      mediaType, mediaUrl, mediaStorageKey, mediaMimeType, mediaSizeBytes,
+    ],
   );
   return mapCustomerUpdateRow(rows[0]);
 }
@@ -1102,7 +1132,19 @@ async function updateCustomerUpdate(id, patch) {
   }
   if (patch.pinned !== undefined) {
     params.push(patch.pinned);
-    sets.push(`pinned = $${params.length}`);
+    sets.push(`pinned = ${params.length}`);
+  }
+  for (const [field, column] of [
+    ['mediaType', 'media_type'],
+    ['mediaUrl', 'media_url'],
+    ['mediaStorageKey', 'media_storage_key'],
+    ['mediaMimeType', 'media_mime_type'],
+    ['mediaSizeBytes', 'media_size_bytes'],
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(patch, field)) {
+      params.push(patch[field]);
+      sets.push(`${column} = ${params.length}`);
+    }
   }
   const { rows } = await pool.query(
     `UPDATE customer_updates SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
@@ -1139,11 +1181,11 @@ async function setCustomerUpdatePublished(id, published) {
 }
 
 async function deleteCustomerUpdate(id) {
-  const { rowCount } = await pool.query(
-    `DELETE FROM customer_updates WHERE id = $1`,
+  const { rows } = await pool.query(
+    `DELETE FROM customer_updates WHERE id = $1 RETURNING *`,
     [id],
   );
-  return rowCount > 0;
+  return rows[0] ? mapCustomerUpdateRow(rows[0]) : null;
 }
 
 /**
@@ -1156,7 +1198,8 @@ async function deleteCustomerUpdate(id) {
  */
 async function listPublishedCustomerUpdatesForDevice(limit) {
   const { rows } = await pool.query(
-    `SELECT id, title, body, pinned, published_at, created_at
+    `SELECT id, title, body, pinned, media_type, media_url,
+            media_mime_type, media_size_bytes, published_at, created_at
        FROM customer_updates
       WHERE published = true
       ORDER BY pinned DESC, COALESCE(published_at, created_at) DESC
@@ -1168,6 +1211,10 @@ async function listPublishedCustomerUpdatesForDevice(limit) {
     title: row.title,
     body: row.body,
     pinned: row.pinned,
+    mediaType: row.media_type || null,
+    mediaUrl: row.media_url || null,
+    mediaMimeType: row.media_mime_type || null,
+    mediaSizeBytes: row.media_size_bytes == null ? null : Number(row.media_size_bytes),
     // Guaranteed non-null for a published row - see createCustomerUpdate/
     // setCustomerUpdatePublished, both of which always stamp published_at
     // the moment published becomes true. COALESCE above is defense in
