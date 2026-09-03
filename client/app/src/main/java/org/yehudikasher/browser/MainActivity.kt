@@ -1,6 +1,7 @@
 package org.yehudikasher.browser
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -133,8 +134,12 @@ class MainActivity : AppCompatActivity() {
             WebViewCompat.startSafeBrowsing(applicationContext) { success ->
                 if (!success) {
                     showTechnicalError("safe_browsing_init_failed")
+                } else {
+                    handleIncomingWebIntent(intent)
                 }
             }
+        } else {
+            handleIncomingWebIntent(intent)
         }
     }
 
@@ -283,6 +288,19 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingWebIntent(intent)
+    }
+
+    private fun handleIncomingWebIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val candidate = intent.data?.toString().orEmpty()
+        if (candidate.isBlank()) return
+        navigateToCandidate(candidate)
+    }
+
     private fun navigateFromAddressBar() {
         val raw = addressBar.text?.toString().orEmpty().trim()
         val candidate = when {
@@ -290,7 +308,10 @@ class MainActivity : AppCompatActivity() {
             raw.isNotBlank() -> "https://$raw"
             else -> ""
         }
+        navigateToCandidate(candidate)
+    }
 
+    private fun navigateToCandidate(candidate: String) {
         val result = policy.evaluate(candidate)
         if (result.decision == LocalDecision.ALLOW) {
             addressBar.setText(candidate)
