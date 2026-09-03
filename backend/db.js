@@ -230,6 +230,17 @@ CREATE TABLE IF NOT EXISTS browser_domain_classifications (
 CREATE INDEX IF NOT EXISTS browser_domain_classifications_expires_idx
   ON browser_domain_classifications (expires_at);
 
+-- Small explicit admin override layer over automatic classification.
+-- AUTO is represented by absence of a row, so there is only one source of
+-- truth for manual exceptions: ALLOW or BLOCK.
+CREATE TABLE IF NOT EXISTS browser_domain_overrides (
+  host       TEXT PRIMARY KEY,
+  decision   TEXT NOT NULL CHECK (decision IN ('ALLOW', 'BLOCK')),
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Image moderation is cached by the image bytes (SHA-256), not by URL:
 -- the same bytes reused across multiple sites are moderated once, while a
 -- changed image at the same URL cannot inherit a stale allow decision.
@@ -1382,6 +1393,60 @@ async function saveBrowserImageModeration({
   };
 }
 
+
+// ---------- filtered browser manual domain overrides ----------
+
+function mapBrowserDomainOverride(row) {
+  return {
+    host: row.host,
+    decision: row.decision,
+    note: row.note || '',
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+async function getBrowserDomainOverride(host) {
+  const { rows } = await pool.query(
+    `SELECT host, decision, note, created_at, updated_at
+       FROM browser_domain_overrides
+      WHERE host = $1`,
+    [host],
+  );
+  return rows[0] ? mapBrowserDomainOverride(rows[0]) : null;
+}
+
+async function listBrowserDomainOverrides() {
+  const { rows } = await pool.query(
+    `SELECT host, decision, note, created_at, updated_at
+       FROM browser_domain_overrides
+      ORDER BY updated_at DESC, host ASC`,
+  );
+  return rows.map(mapBrowserDomainOverride);
+}
+
+async function setBrowserDomainOverride(host, decision, note) {
+  const { rows } = await pool.query(
+    `INSERT INTO browser_domain_overrides (host, decision, note, created_at, updated_at)
+     VALUES ($1, $2, $3, now(), now())
+     ON CONFLICT (host) DO UPDATE SET
+       decision = EXCLUDED.decision,
+       note = EXCLUDED.note,
+       updated_at = now()
+     RETURNING host, decision, note, created_at, updated_at`,
+    [host, decision, note || null],
+  );
+  return mapBrowserDomainOverride(rows[0]);
+}
+
+async function deleteBrowserDomainOverride(host) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM browser_domain_overrides WHERE host = $1`,
+    [host],
+  );
+  return rowCount > 0;
+}
+
 module.exports = {
   init,
   getDevice,
@@ -1432,6 +1497,10 @@ module.exports = {
   getBrowserDomainClassification,
   saveBrowserDomainClassification,
   deleteExpiredBrowserDomainClassifications,
+  getBrowserDomainOverride,
+  listBrowserDomainOverrides,
+  setBrowserDomainOverride,
+  deleteBrowserDomainOverride,
   getBrowserImageModeration,
   saveBrowserImageModeration,
 };
