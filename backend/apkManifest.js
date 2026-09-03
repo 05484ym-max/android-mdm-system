@@ -4,7 +4,7 @@ const zlib = require('zlib');
 
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 
-function readZipEntry(buffer, targetName) {
+function listZipEntries(buffer) {
   const min = Math.max(0, buffer.length - 65557);
   let eocd = -1;
   for (let i = buffer.length - 22; i >= min; i--) {
@@ -18,6 +18,7 @@ function readZipEntry(buffer, targetName) {
   const totalEntries = buffer.readUInt16LE(eocd + 10);
   const centralOffset = buffer.readUInt32LE(eocd + 16);
   let off = centralOffset;
+  const entries = [];
 
   for (let i = 0; i < totalEntries; i++) {
     if (off + 46 > buffer.length || buffer.readUInt32LE(off) !== 0x02014b50) {
@@ -36,38 +37,108 @@ function readZipEntry(buffer, targetName) {
     const nameEnd = nameStart + nameLen;
     if (nameEnd > buffer.length) throw new Error('APK ZIP filename is truncated');
 
-    const name = buffer.toString('utf8', nameStart, nameEnd);
-    if (name === targetName) {
-      if (localOffset + 30 > buffer.length || buffer.readUInt32LE(localOffset) !== 0x04034b50) {
-        throw new Error('APK ZIP local header is malformed');
-      }
-
-      const localNameLen = buffer.readUInt16LE(localOffset + 26);
-      const localExtraLen = buffer.readUInt16LE(localOffset + 28);
-      const dataStart = localOffset + 30 + localNameLen + localExtraLen;
-      const dataEnd = dataStart + compressedSize;
-      if (dataEnd > buffer.length) throw new Error('APK ZIP entry is truncated');
-
-      const compressed = buffer.subarray(dataStart, dataEnd);
-      let output;
-      if (method === 0) {
-        output = Buffer.from(compressed);
-      } else if (method === 8) {
-        output = zlib.inflateRawSync(compressed);
-      } else {
-        throw new Error(`Unsupported APK compression method ${method}`);
-      }
-
-      if (output.length !== uncompressedSize) {
-        throw new Error('APK manifest size mismatch');
-      }
-      return output;
-    }
-
+    entries.push({
+      name: buffer.toString('utf8', nameStart, nameEnd),
+      method,
+      compressedSize,
+      uncompressedSize,
+      localOffset,
+    });
     off = nameEnd + extraLen + commentLen;
   }
 
-  throw new Error('AndroidManifest.xml not found in APK');
+  return entries;
+}
+
+function readZipEntryFromMeta(buffer, entry, maxUncompressedBytes = null) {
+  const { method, compressedSize, uncompressedSize, localOffset } = entry;
+  if (maxUncompressedBytes != null && uncompressedSize > maxUncompressedBytes) {
+    throw new Error('APK ZIP entry exceeds allowed size');
+  }
+  if (localOffset + 30 > buffer.length || buffer.readUInt32LE(localOffset) !== 0x04034b50) {
+    throw new Error('APK ZIP local header is malformed');
+  }
+
+  const localNameLen = buffer.readUInt16LE(localOffset + 26);
+  const localExtraLen = buffer.readUInt16LE(localOffset + 28);
+  const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+  const dataEnd = dataStart + compressedSize;
+  if (dataEnd > buffer.length) throw new Error('APK ZIP entry is truncated');
+
+  const compressed = buffer.subarray(dataStart, dataEnd);
+  let output;
+  if (method === 0) {
+    output = Buffer.from(compressed);
+  } else if (method === 8) {
+    output = zlib.inflateRawSync(compressed, maxUncompressedBytes == null
+      ? undefined
+      : { maxOutputLength: maxUncompressedBytes });
+  } else {
+    throw new Error(`Unsupported APK compression method ${method}`);
+  }
+
+  if (output.length !== uncompressedSize) {
+    throw new Error('APK ZIP entry size mismatch');
+  }
+  return output;
+}
+
+function readZipEntry(buffer, targetName) {
+  const entry = listZipEntries(buffer).find(item => item.name === targetName);
+  if (!entry) throw new Error(`${targetName} not found in APK`);
+  return readZipEntryFromMeta(buffer, entry);
+}
+
+const ICON_MAX_BYTES = 2 * 1024 * 1024;
+
+function iconScore(name, size) {
+  const lower = name.toLowerCase();
+  if (!/^res\//.test(lower)) return -1;
+  if (!/\.(png|webp|jpe?g)$/.test(lower) || /\.9\.png$/.test(lower)) return -1;
+
+  const base = lower.split('/').pop().replace(/\.(png|webp|jpe?g)$/, '');
+  let score = 0;
+  if (/^res\/mipmap/.test(lower)) score += 100;
+  if (/^res\/drawable/.test(lower)) score += 25;
+  if (/^(ic_launcher|ic_launcher_round|launcher|app_icon|icon)$/.test(base)) score += 220;
+  else if (/launcher/.test(base)) score += 160;
+  else if (/(^|_)app(_|$).*icon|(^|_)icon(_|$)/.test(base)) score += 120;
+  else if (/logo/.test(base)) score += 55;
+
+  if (/xxxhdpi/.test(lower)) score += 60;
+  else if (/xxhdpi/.test(lower)) score += 50;
+  else if (/xhdpi/.test(lower)) score += 40;
+  else if (/hdpi/.test(lower)) score += 30;
+  else if (/mdpi/.test(lower)) score += 20;
+
+  // Prefer a substantial raster over tiny notification/status icons.
+  score += Math.min(40, Math.floor(Math.log2(Math.max(1, size))));
+  return score;
+}
+
+function extractAppIcon(apkBuffer) {
+  const candidates = listZipEntries(apkBuffer)
+    .filter(entry => entry.uncompressedSize > 0 && entry.uncompressedSize <= ICON_MAX_BYTES)
+    .map(entry => ({ entry, score: iconScore(entry.name, entry.uncompressedSize) }))
+    .filter(item => item.score >= 100)
+    .sort((a, b) => b.score - a.score || b.entry.uncompressedSize - a.entry.uncompressedSize);
+
+  for (const { entry } of candidates) {
+    try {
+      const buffer = readZipEntryFromMeta(apkBuffer, entry, ICON_MAX_BYTES);
+      const lower = entry.name.toLowerCase();
+      const extension = lower.endsWith('.webp') ? 'webp'
+        : lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'jpg'
+        : 'png';
+      const contentType = extension === 'webp' ? 'image/webp'
+        : extension === 'jpg' ? 'image/jpeg'
+        : 'image/png';
+      return { buffer, contentType, extension, path: entry.name };
+    } catch {
+      // Try the next plausible launcher icon rather than failing the APK upload.
+    }
+  }
+  return null;
 }
 
 function readUtf8Length(buffer, offset) {
@@ -212,4 +283,4 @@ function extractPackageName(apkBuffer) {
   throw new Error('APK manifest element not found');
 }
 
-module.exports = { extractPackageName };
+module.exports = { extractPackageName, extractAppIcon };
