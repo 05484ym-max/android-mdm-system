@@ -465,12 +465,40 @@ function validateUpdateId(id) {
   return typeof id === 'string' && UUID_REGEX.test(id);
 }
 
+app.get('/api/customer-updates/media/:assetId', wrap(async (req, res) => {
+  if (!/^\d+$/.test(req.params.assetId)) {
+    return res.status(400).json({ error: 'invalid media asset id' });
+  }
+  const storageConfig = apkStorage.loadStorageConfig();
+  const range = req.get('range');
+  const upstream = await apkStorage.downloadApk(
+    storageConfig,
+    req.params.assetId,
+    range ? { Range: range } : {},
+  );
+  const contentType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm'].includes(contentType)) {
+    throw new Error('GitHub media asset returned an invalid content type');
+  }
+  if (upstream.status === 206) res.status(206);
+  res.setHeader('Content-Type', contentType);
+  for (const header of ['content-length', 'content-range', 'accept-ranges']) {
+    const value = upstream.headers.get(header);
+    if (value) res.setHeader(header, value);
+  }
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  if (!upstream.body) throw new Error('GitHub media download returned an empty body');
+  Readable.fromWeb(upstream.body).pipe(res);
+}));
+
 app.get('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
   res.json(await db.listCustomerUpdatesForAdmin());
 }));
 
-app.post('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
-  const { title, body, pinned, published } = req.body || {};
+app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(async (req, res) => {
+  const { title, body } = req.body || {};
+  const pinned = parseNewsBoolean(req.body && req.body.pinned, false);
+  const published = parseNewsBoolean(req.body && req.body.published, false);
   if (typeof title !== 'string' || !title.trim()) {
     return res.status(400).json({ error: 'title is required' });
   }
@@ -483,25 +511,38 @@ app.post('/api/customer-updates', requireAdmin, wrap(async (req, res) => {
   if (body.trim().length > UPDATE_BODY_MAX_LENGTH) {
     return res.status(400).json({ error: `body must be at most ${UPDATE_BODY_MAX_LENGTH} characters` });
   }
-  if (pinned !== undefined && typeof pinned !== 'boolean') {
-    return res.status(400).json({ error: 'pinned must be a boolean' });
+  if (pinned === null) return res.status(400).json({ error: 'pinned must be a boolean' });
+  if (published === null) return res.status(400).json({ error: 'published must be a boolean' });
+
+  let media = null;
+  try {
+    media = await uploadNewsMedia(req, req.file);
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
   }
-  if (published !== undefined && typeof published !== 'boolean') {
-    return res.status(400).json({ error: 'published must be a boolean' });
+
+  try {
+    const created = await db.createCustomerUpdate(crypto.randomUUID(), {
+      title: title.trim(),
+      body: body.trim(),
+      pinned,
+      published,
+      ...(media || {}),
+    });
+    res.json(created);
+  } catch (e) {
+    if (media) await deleteNewsMediaAsset(media.mediaStorageKey);
+    throw e;
   }
-  const created = await db.createCustomerUpdate(crypto.randomUUID(), {
-    title: title.trim(),
-    body: body.trim(),
-    pinned: pinned === true,
-    published: published === true,
-  });
-  res.json(created);
 }));
 
-app.put('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/customer-updates/:id', requireAdmin, optionalNewsMediaUpload, wrap(async (req, res) => {
   if (!validateUpdateId(req.params.id)) {
     return res.status(400).json({ error: 'invalid id' });
   }
+  const existing = await db.getCustomerUpdateById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'update not found' });
+
   const patch = {};
   if (req.body.title !== undefined) {
     if (typeof req.body.title !== 'string' || !req.body.title.trim()) {
@@ -522,51 +563,72 @@ app.put('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
     patch.body = req.body.body.trim();
   }
   if (req.body.pinned !== undefined) {
-    if (typeof req.body.pinned !== 'boolean') {
-      return res.status(400).json({ error: 'pinned must be a boolean' });
+    const pinned = parseNewsBoolean(req.body.pinned, false);
+    if (pinned === null) return res.status(400).json({ error: 'pinned must be a boolean' });
+    patch.pinned = pinned;
+  }
+  const removeMedia = parseNewsBoolean(req.body.removeMedia, false);
+  if (removeMedia === null) return res.status(400).json({ error: 'removeMedia must be a boolean' });
+  if (removeMedia && req.file) {
+    return res.status(400).json({ error: 'cannot upload new media and remove media in the same request' });
+  }
+
+  let newMedia = null;
+  if (req.file) {
+    try {
+      newMedia = await uploadNewsMedia(req, req.file);
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message });
     }
-    patch.pinned = req.body.pinned;
+    Object.assign(patch, newMedia);
+  } else if (removeMedia) {
+    Object.assign(patch, {
+      mediaType: null, mediaUrl: null, mediaStorageKey: null,
+      mediaMimeType: null, mediaSizeBytes: null,
+    });
   }
+
   if (Object.keys(patch).length === 0) {
-    return res.status(400).json({ error: 'at least one of title, body, pinned is required' });
+    return res.status(400).json({ error: 'at least one editable field or media change is required' });
   }
-  const updated = await db.updateCustomerUpdate(req.params.id, patch);
+
+  let updated;
+  try {
+    updated = await db.updateCustomerUpdate(req.params.id, patch);
+  } catch (e) {
+    if (newMedia) await deleteNewsMediaAsset(newMedia.mediaStorageKey);
+    throw e;
+  }
   if (!updated) {
+    if (newMedia) await deleteNewsMediaAsset(newMedia.mediaStorageKey);
     return res.status(404).json({ error: 'update not found' });
+  }
+  if ((newMedia || removeMedia) && existing.mediaStorageKey &&
+      existing.mediaStorageKey !== (newMedia && newMedia.mediaStorageKey)) {
+    await deleteNewsMediaAsset(existing.mediaStorageKey);
   }
   res.json(updated);
 }));
 
 app.post('/api/customer-updates/:id/publish', requireAdmin, wrap(async (req, res) => {
-  if (!validateUpdateId(req.params.id)) {
-    return res.status(400).json({ error: 'invalid id' });
-  }
+  if (!validateUpdateId(req.params.id)) return res.status(400).json({ error: 'invalid id' });
   const updated = await db.setCustomerUpdatePublished(req.params.id, true);
-  if (!updated) {
-    return res.status(404).json({ error: 'update not found' });
-  }
+  if (!updated) return res.status(404).json({ error: 'update not found' });
   res.json(updated);
 }));
 
 app.post('/api/customer-updates/:id/unpublish', requireAdmin, wrap(async (req, res) => {
-  if (!validateUpdateId(req.params.id)) {
-    return res.status(400).json({ error: 'invalid id' });
-  }
+  if (!validateUpdateId(req.params.id)) return res.status(400).json({ error: 'invalid id' });
   const updated = await db.setCustomerUpdatePublished(req.params.id, false);
-  if (!updated) {
-    return res.status(404).json({ error: 'update not found' });
-  }
+  if (!updated) return res.status(404).json({ error: 'update not found' });
   res.json(updated);
 }));
 
 app.delete('/api/customer-updates/:id', requireAdmin, wrap(async (req, res) => {
-  if (!validateUpdateId(req.params.id)) {
-    return res.status(400).json({ error: 'invalid id' });
-  }
+  if (!validateUpdateId(req.params.id)) return res.status(400).json({ error: 'invalid id' });
   const deleted = await db.deleteCustomerUpdate(req.params.id);
-  if (!deleted) {
-    return res.status(404).json({ error: 'update not found' });
-  }
+  if (!deleted) return res.status(404).json({ error: 'update not found' });
+  if (deleted.mediaStorageKey) await deleteNewsMediaAsset(deleted.mediaStorageKey);
   res.json({ status: 'ok' });
 }));
 
