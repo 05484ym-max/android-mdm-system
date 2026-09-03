@@ -1,6 +1,6 @@
 'use strict';
 
-const POLICY_VERSION = 'HAREDI_STRICT_V3_PERMISSIVE';
+const POLICY_VERSION = 'HAREDI_STRICT_V4_GROUP_SAFE';
 const SOURCE = 'local_apache_vision_stack';
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
