@@ -77,15 +77,15 @@ jobs:
       - name: Test HAREDI_STRICT image moderation client
         working-directory: backend
         run: node test-image-moderator.js
-      - name: Test local HAREDI_STRICT AI policy
+      - name: Test local HAREDI_STRICT AI policy and runtime layout
         working-directory: ai-service
-        run: python -m unittest -v test_policy.py
+        run: python -m unittest -v test_policy.py test_runtime_layout.py
       - name: Compile local AI service
         working-directory: ai-service
         run: python -m py_compile app.py policy.py
       - name: Lint local AI runtime for undefined names
         working-directory: ai-service
-        run: pyflakes app.py policy.py test_policy.py
+        run: pyflakes app.py policy.py test_policy.py test_runtime_layout.py
       - name: Test SSRF-safe image validation
         working-directory: backend
         run: node test-safe-remote-image.js
