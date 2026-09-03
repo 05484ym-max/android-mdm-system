@@ -2,117 +2,115 @@
 
 const assert = require('assert');
 const {
-  evaluateVisionResponse,
+  POLICY_VERSION,
   moderateImage,
+  sanitizeDetails,
 } = require('./imageModerator');
 
-function payload({ adult = 'VERY_UNLIKELY', racy = 'VERY_UNLIKELY', labels = [], faces = [] } = {}) {
-  return {
-    responses: [{
-      safeSearchAnnotation: {
-        adult,
-        racy,
-        violence: 'VERY_UNLIKELY',
-        medical: 'VERY_UNLIKELY',
-        spoof: 'VERY_UNLIKELY',
-      },
-      labelAnnotations: labels,
-      faceAnnotations: faces,
-    }],
-  };
-}
+(async () => {
+  const oldUrl = process.env.LOCAL_AI_URL;
+  const oldToken = process.env.LOCAL_AI_TOKEN;
 
-assert.strictEqual(
-  evaluateVisionResponse(payload({
-    labels: [{ description: 'Woman', score: 0.96 }],
-  })).reason,
-  'female_detected',
-);
+  try {
+    delete process.env.LOCAL_AI_URL;
+    delete process.env.LOCAL_AI_TOKEN;
 
-assert.strictEqual(
-  evaluateVisionResponse(payload({
-    labels: [
-      { description: 'Person', score: 0.94 },
-      { description: 'Man', score: 0.93 },
-    ],
-  })).allowed,
-  true,
-);
+    let result = await moderateImage(Buffer.from('image'));
+    assert.strictEqual(result.allowed, false);
+    assert.strictEqual(result.reason, 'local_ai_not_configured');
 
-assert.strictEqual(
-  evaluateVisionResponse(payload({
-    labels: [{ description: 'Person', score: 0.94 }],
-  })).reason,
-  'ambiguous_person',
-);
+    process.env.LOCAL_AI_URL = 'http://local-ai.internal:8080';
+    process.env.LOCAL_AI_TOKEN = 'test-secret';
 
-assert.strictEqual(
-  evaluateVisionResponse(payload({
-    faces: [{ detectionConfidence: 0.99 }],
-  })).reason,
-  'ambiguous_face',
-);
+    let captured = null;
+    result = await moderateImage(Buffer.from('image-bytes'), async (url, options) => {
+      captured = { url, options };
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        async json() {
+          return {
+            allowed: false,
+            reason: 'female_detected',
+            policyVersion: POLICY_VERSION,
+            details: {
+              nudenetFemale: 0.97,
+              nested: { must: 'be dropped' },
+            },
+          };
+        },
+      };
+    });
 
-assert.strictEqual(
-  evaluateVisionResponse(payload({
-    faces: [{ detectionConfidence: 0.99 }],
-    labels: [{ description: 'Man', score: 0.95 }],
-  })).allowed,
-  true,
-);
+    assert.strictEqual(result.allowed, false);
+    assert.strictEqual(result.reason, 'female_detected');
+    assert.strictEqual(result.source, 'local_siglip2_nudenet');
+    assert.strictEqual(result.details.nudenetFemale, 0.97);
+    assert.strictEqual(result.details.nested, undefined);
+    assert.strictEqual(captured.url, 'http://local-ai.internal:8080/moderate');
+    assert.strictEqual(captured.options.headers['X-Local-AI-Token'], 'test-secret');
+    assert.ok(Buffer.isBuffer(captured.options.body));
 
-assert.strictEqual(
-  evaluateVisionResponse(payload({ racy: 'POSSIBLE' })).reason,
-  'racy_content',
-);
-
-assert.strictEqual(
-  evaluateVisionResponse(payload({ adult: 'LIKELY' })).reason,
-  'adult_content',
-);
-
-assert.strictEqual(
-  evaluateVisionResponse(payload({
-    labels: [{ description: 'Bikini', score: 0.91 }],
-  })).reason,
-  'revealing_clothing',
-);
-
-const previous = process.env.GOOGLE_VISION_API_KEY;
-delete process.env.GOOGLE_VISION_API_KEY;
-
-moderateImage(Buffer.from('fake-image')).then(result => {
-  assert.strictEqual(result.allowed, false);
-  assert.strictEqual(result.reason, 'vision_not_configured');
-
-  process.env.GOOGLE_VISION_API_KEY = 'test-key';
-  let requestBody = null;
-  return moderateImage(Buffer.from('image-bytes'), async (url, options) => {
-    assert.ok(String(url).includes('vision.googleapis.com/v1/images:annotate?key=test-key'));
-    requestBody = JSON.parse(options.body);
-    return {
+    result = await moderateImage(Buffer.from('image'), async () => ({
       ok: true,
       status: 200,
+      headers: { get: () => null },
       async json() {
-        return payload({
-          labels: [{ description: 'Woman', score: 0.99 }],
-        });
+        return {
+          allowed: true,
+          reason: 'image_safe_haredi_strict',
+          policyVersion: POLICY_VERSION,
+          details: { siglipMale: 0.91 },
+        };
       },
-    };
-  }).then(remote => {
-    assert.strictEqual(remote.allowed, false);
-    assert.strictEqual(remote.reason, 'female_detected');
-    const types = requestBody.requests[0].features.map(x => x.type);
-    assert.ok(types.includes('SAFE_SEARCH_DETECTION'));
-    assert.ok(types.includes('LABEL_DETECTION'));
-    assert.ok(types.includes('FACE_DETECTION'));
-  });
-}).finally(() => {
-  if (previous === undefined) delete process.env.GOOGLE_VISION_API_KEY;
-  else process.env.GOOGLE_VISION_API_KEY = previous;
-}).then(() => {
-  console.log('HAREDI_STRICT image moderation: all tests passed');
-}).catch(err => {
+    }));
+    assert.strictEqual(result.allowed, true);
+
+    result = await moderateImage(Buffer.from('image'), async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async json() {
+        return {
+          allowed: true,
+          reason: 'image_safe_haredi_strict',
+          policyVersion: 'OLD_POLICY',
+          details: {},
+        };
+      },
+    }));
+    assert.strictEqual(result.allowed, false);
+    assert.strictEqual(result.reason, 'local_ai_policy_mismatch');
+
+    result = await moderateImage(Buffer.from('image'), async () => {
+      throw new Error('offline');
+    });
+    assert.strictEqual(result.allowed, false);
+    assert.strictEqual(result.reason, 'local_ai_unreachable');
+
+    const clean = sanitizeDetails({
+      okNumber: 0.8,
+      okBool: true,
+      okString: 'value',
+      nested: { nope: true },
+      array: [1, 2],
+      'bad key': 1,
+    });
+    assert.deepStrictEqual(clean, {
+      okNumber: 0.8,
+      okBool: true,
+      okString: 'value',
+    });
+
+    console.log('Local AI image moderator client: all tests passed');
+  } finally {
+    if (oldUrl === undefined) delete process.env.LOCAL_AI_URL;
+    else process.env.LOCAL_AI_URL = oldUrl;
+    if (oldToken === undefined) delete process.env.LOCAL_AI_TOKEN;
+    else process.env.LOCAL_AI_TOKEN = oldToken;
+  }
+})().catch(err => {
   console.error(err);
   process.exit(1);
 });
