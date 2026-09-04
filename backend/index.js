@@ -10,6 +10,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
+const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const push = require('./push');
 const deviceHealth = require('./deviceHealth');
@@ -23,8 +24,7 @@ const apkManifest = require('./apkManifest');
 const browserClassifier = require('./browserClassifier');
 const { publicBaseUrl } = require('./publicUrl');
 const safeRemoteImage = require('./safeRemoteImage');
-const imageModerator = require('./imageModerator');
-const { SingleFlight } = require('./singleFlight');
+const imageModerationCache = require('./imageModerationCache');
 
 const app = express();
 app.use(express.json());
@@ -1831,7 +1831,27 @@ function browserClassifierRateAllowed(ip) {
   return true;
 }
 
+// The promotion gate itself (shouldPromoteToAllowlist) lives in
+// browserClassifier.js, next to the classification policy it depends on, so
+// it stays directly unit-testable without needing a live server or DB.
+async function maybePromoteToAllowlist(host, classification) {
+  if (!browserClassifier.shouldPromoteToAllowlist(classification)) {
+    return;
+  }
+  await db.upsertAutoBrowserDomainAllowlistEntry({
+    host,
+    reason: classification.reason,
+    categories: classification.categories || [],
+  });
+}
+
+/** Structured, PII-free timing log - never includes the host, image bytes, or tokens. */
+function logDecisionTiming(event, decisionSource, durMs) {
+  console.log(JSON.stringify({ event, decisionSource, durMs: Math.round(durMs) }));
+}
+
 app.get('/api/browser/check', wrap(async (req, res) => {
+  const startedAt = process.hrtime.bigint();
   const host = browserClassifier.normalizeHost(
     typeof req.query.host === 'string' ? req.query.host : '',
   );
@@ -1839,10 +1859,45 @@ app.get('/api/browser/check', wrap(async (req, res) => {
     return res.status(400).json({ allowed: false, reason: 'invalid_host' });
   }
 
+  // Fast path: a persistent, exact-host allowlist entry bypasses the
+  // classification cache and the external classifier entirely. This only
+  // ever short-circuits website-category classification - every other
+  // safety layer (image moderation, SSRF/public-URL checks, DNS filtering,
+  // WebView hardening, auth) is untouched and still runs independently.
+  const allowlisted = await db.getBrowserDomainAllowlistEntry(host);
+  if (allowlisted) {
+    const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    logDecisionTiming('browser_check', 'allowlist', durMs);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Server-Timing', `total;dur=${durMs.toFixed(1)}`);
+    res.setHeader('X-Filter-Decision-Source', 'allowlist');
+    return res.json({
+      host,
+      allowed: true,
+      reason: 'persistent_allowlist',
+      categories: allowlisted.categories,
+      source: allowlisted.source,
+      allowlisted: true,
+      cached: true,
+      decisionSource: 'allowlist',
+      checkedAt: allowlisted.updatedAt,
+    });
+  }
+
   const cached = await db.getBrowserDomainClassification(host);
   if (cached) {
+    // A pre-existing cached decision may not have been promoted yet (e.g. it
+    // was written before this feature existed, or promotion raced a
+    // concurrent request) - backfill it now. This is a one-time cost per
+    // host: once promoted, later requests hit the allowlist branch above and
+    // never reach this path again for that host.
+    await maybePromoteToAllowlist(host, cached);
+    const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    logDecisionTiming('browser_check', 'classification_cache', durMs);
     res.setHeader('Cache-Control', 'private, max-age=300');
-    return res.json({ ...cached, cached: true });
+    res.setHeader('Server-Timing', `total;dur=${durMs.toFixed(1)}`);
+    res.setHeader('X-Filter-Decision-Source', 'cache');
+    return res.json({ ...cached, cached: true, allowlisted: false, decisionSource: 'cache' });
   }
 
   if (!browserClassifierRateAllowed(req.ip)) {
@@ -1856,15 +1911,67 @@ app.get('/api/browser/check', wrap(async (req, res) => {
 
   const result = await browserClassifier.classifyHost(host);
   const saved = await db.saveBrowserDomainClassification(result);
+  await maybePromoteToAllowlist(host, saved);
+  const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+  logDecisionTiming('browser_check', 'classifier', durMs);
   const status = result.reason === 'classifier_not_configured' ? 503 : 200;
-  res.status(status).json({ ...saved, cached: false });
+  res.setHeader('Server-Timing', `total;dur=${durMs.toFixed(1)}`);
+  res.setHeader('X-Filter-Decision-Source', 'classifier');
+  res.status(status).json({ ...saved, cached: false, allowlisted: false, decisionSource: 'classifier' });
+}));
+
+// ---------- filtered browser persistent domain allowlist (admin) ----------
+//
+// These routes already require an authenticated admin session, but running
+// the rate limiter BEFORE that authorization check (rather than after) means
+// a flood of requests gets capped before it can hammer the auth check itself
+// too, independently of whether the caller is authenticated. Uses
+// express-rate-limit (rather than the hand-rolled Map-based limiters
+// elsewhere in this file) so a static analyzer can recognize it as a real
+// rate limiter, not just verify its runtime behavior.
+const browserAllowlistAdminRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  keyGenerator: req => String(req.ip || 'unknown'),
+  handler: (req, res) => res.status(429).json({ error: 'rate_limited' }),
+});
+
+app.get('/api/browser/allowlist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  res.json({ entries: await db.listBrowserDomainAllowlist() });
+}));
+
+app.post('/api/browser/allowlist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const host = browserClassifier.normalizeHost(
+    req.body && typeof req.body.host === 'string' ? req.body.host : '',
+  );
+  if (!host) {
+    return res.status(400).json({ error: 'invalid_host' });
+  }
+  const reason = req.body && typeof req.body.reason === 'string'
+    ? req.body.reason.slice(0, 500)
+    : 'manual_admin_allow';
+  const entry = await db.upsertAdminBrowserDomainAllowlistEntry({ host, reason, categories: [] });
+  res.json(entry);
+}));
+
+app.delete('/api/browser/allowlist/:host', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const host = browserClassifier.normalizeHost(req.params.host);
+  if (!host) {
+    return res.status(400).json({ error: 'invalid_host' });
+  }
+  const entry = await db.revokeBrowserDomainAllowlistEntry(host);
+  if (!entry) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  res.json(entry);
 }));
 
 // ---------- filtered browser image moderation proxy ----------
 
-const IMAGE_FILTER_POLICY_VERSION = imageModerator.POLICY_VERSION;
 const imageProxyRate = new Map();
-const imageModerationSingleFlight = new SingleFlight();
 const IMAGE_PROXY_WINDOW_MS = 60 * 1000;
 const IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW = 240;
 
@@ -1913,56 +2020,8 @@ function sendBlockedImage(res, reason) {
   res.end(svg);
 }
 
-// Single source of truth for which reasons represent a stable fact about the
-// image itself (a real HAREDI_STRICT decision) versus a transient
-// infrastructure condition (unreachable/warming/unavailable/error/timeout/
-// malformed response/schema mismatch/5xx). Only the former may ever be
-// written to the permanent moderation cache - a transient outage must never
-// be persisted as if it were a fact about the image, or a temporary AI
-// service failure could permanently misclassify images once it recovers.
-// This set lives in imageModerator.js (the policy owner) so it can never
-// drift out of sync with the reasons that module actually produces.
-function imageModerationDecisionIsCacheable(result) {
-  return imageModerator.CACHEABLE_DECISION_REASONS.has(result.reason);
-}
-
-async function getOrModerateImageDecision(sha256Hex, remote) {
-  const cached = await db.getBrowserImageModeration(
-    sha256Hex,
-    IMAGE_FILTER_POLICY_VERSION,
-  );
-  if (cached) return cached;
-
-  return imageModerationSingleFlight.run(sha256Hex, async () => {
-    // Re-check the database after winning the in-memory race in case another
-    // process/instance populated the shared cache between the first read and
-    // this point.
-    const secondRead = await db.getBrowserImageModeration(
-      sha256Hex,
-      IMAGE_FILTER_POLICY_VERSION,
-    );
-    if (secondRead) return secondRead;
-
-    const moderated = await imageModerator.moderateImage(remote.buffer);
-    let decision = {
-      sha256: sha256Hex,
-      policyVersion: IMAGE_FILTER_POLICY_VERSION,
-      allowed: moderated.allowed === true,
-      reason: moderated.reason,
-      details: moderated.details || {},
-      source: moderated.source || 'local_siglip2_nudenet',
-      mimeType: remote.mimeType,
-      sizeBytes: remote.buffer.length,
-    };
-
-    if (imageModerationDecisionIsCacheable(moderated)) {
-      decision = await db.saveBrowserImageModeration(decision);
-    }
-    return decision;
-  });
-}
-
 app.post('/api/browser/image', wrap(async (req, res) => {
+  const startedAt = process.hrtime.bigint();
   const rawUrl = req.body && typeof req.body.url === 'string' ? req.body.url : '';
   if (!rawUrl || rawUrl.length > 8192) {
     return sendBlockedImage(res, 'invalid_image_url');
@@ -1979,12 +2038,23 @@ app.post('/api/browser/image', wrap(async (req, res) => {
   if (!host) return sendBlockedImage(res, 'invalid_image_host');
 
   // An image host must itself have a current positive website-classification
-  // decision. This prevents the public proxy from becoming a generic fetcher
-  // for arbitrary internet hosts and keeps image delivery inside the same
-  // fail-closed trust model as normal browser subresources.
-  const hostDecision = await db.getBrowserDomainClassification(host);
-  if (!hostDecision || hostDecision.allowed !== true) {
-    return sendBlockedImage(res, 'image_host_not_approved');
+  // decision - either the persistent allowlist (checked first, never
+  // expires) or the shorter-lived classification cache. This prevents the
+  // public proxy from becoming a generic fetcher for arbitrary internet
+  // hosts and keeps image delivery inside the same fail-closed trust model
+  // as normal browser subresources. Checking the allowlist here matters:
+  // without it, an allowlisted site's own images would start failing once
+  // its 7-day browser_domain_classifications cache row expires, even though
+  // the site itself stays browsable forever via the allowlist fast path in
+  // /api/browser/check. The allowlist bypasses only this host-approval
+  // gate - the image bytes themselves still go through full moderation
+  // below regardless of which path approved the host.
+  const hostAllowlisted = await db.getBrowserDomainAllowlistEntry(host);
+  if (!hostAllowlisted) {
+    const hostDecision = await db.getBrowserDomainClassification(host);
+    if (!hostDecision || hostDecision.allowed !== true) {
+      return sendBlockedImage(res, 'image_host_not_approved');
+    }
   }
 
   if (!imageProxyRateAllowed(req.ip)) {
@@ -2000,9 +2070,26 @@ app.post('/api/browser/image', wrap(async (req, res) => {
   }
 
   const sha256Hex = crypto.createHash('sha256').update(remote.buffer).digest('hex');
-  const decision = await getOrModerateImageDecision(sha256Hex, remote);
+  const decision = await imageModerationCache.getOrModerateImageDecision(sha256Hex, remote);
+  const totalMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+  logDecisionTiming(
+    'browser_image',
+    decision.timing && decision.timing.cacheHit ? 'moderation_cache' : 'ai_moderation',
+    totalMs,
+  );
+  if (decision.timing && !decision.timing.cacheHit && decision.timing.aiMs !== null) {
+    console.log(JSON.stringify({
+      event: 'browser_image_ai_latency',
+      aiMs: Math.round(decision.timing.aiMs),
+    }));
+  }
+  const timingHeaderParts = [`total;dur=${totalMs.toFixed(1)}`];
+  if (decision.timing && decision.timing.aiMs !== null) {
+    timingHeaderParts.push(`ai_moderation;dur=${decision.timing.aiMs.toFixed(1)}`);
+  }
 
   if (decision.allowed !== true) {
+    res.setHeader('Server-Timing', timingHeaderParts.join(', '));
     return sendBlockedImage(res, decision.reason);
   }
 
@@ -2012,6 +2099,7 @@ app.post('/api/browser/image', wrap(async (req, res) => {
   res.setHeader('Cache-Control', 'private, max-age=3600');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Filter-Decision', 'allow');
+  res.setHeader('Server-Timing', timingHeaderParts.join(', '));
   res.end(remote.buffer);
 }));
 
