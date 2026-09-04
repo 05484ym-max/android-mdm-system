@@ -12,8 +12,10 @@ on:
       - 'ai-service/Dockerfile'
       - 'ai-service/requirements.txt'
       - 'ai-service/app.py'
-      - 'ai-service/test_policy.py'
       - 'ai-service/policy.py'
+      - 'ai-service/test_policy.py'
+      - 'ai-service/test_service_contract.py'
+      - 'ai-service/test_runtime_smoke.py'
       - 'backend/test-browser-image-cache-integration.js'
       - 'backend/test-image-moderator.js'
       - 'backend/test-safe-remote-image.js'
@@ -31,6 +33,20 @@ on:
     paths:
       - 'backend/browserClassifier.js'
       - 'backend/publicUrl.js'
+      - 'ai-service/Dockerfile'
+      - 'ai-service/requirements.txt'
+      - 'ai-service/app.py'
+      - 'ai-service/policy.py'
+      - 'ai-service/test_policy.py'
+      - 'ai-service/test_service_contract.py'
+      - 'ai-service/test_runtime_smoke.py'
+      - 'backend/test-browser-image-cache-integration.js'
+      - 'backend/test-image-moderator.js'
+      - 'backend/test-safe-remote-image.js'
+      - 'backend/imageModerator.js'
+      - 'backend/safeRemoteImage.js'
+      - 'backend/singleFlight.js'
+      - 'backend/test-single-flight.js'
       - 'backend/db.js'
       - 'backend/index.js'
       - 'backend/test-browser-classifier.js'
@@ -61,6 +77,9 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci
+      - name: Install lightweight AI smoke dependencies
+        working-directory: ai-service
+        run: python -m pip install fastapi==0.116.1 pillow==11.3.0 httpx==0.28.1
       - name: Test category policy
         working-directory: backend
         run: node test-browser-classifier.js
@@ -73,6 +92,12 @@ jobs:
       - name: Test local HAREDI_STRICT AI policy
         working-directory: ai-service
         run: python -m unittest -v test_policy.py
+      - name: Test local AI service contract
+        working-directory: ai-service
+        run: python -m unittest -v test_service_contract.py
+      - name: Test local AI runtime smoke
+        working-directory: ai-service
+        run: python -m unittest -v test_runtime_smoke.py
       - name: Compile local AI service
         working-directory: ai-service
         run: python -m py_compile app.py policy.py
@@ -143,7 +168,8 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          code=$(curl -sS -o /tmp/result.json -w '%{http_code}'             'http://127.0.0.1:4555/api/browser/check?host=example.com')
+          code=$(curl -sS -o /tmp/result.json -w '%{http_code}' \
+            'http://127.0.0.1:4555/api/browser/check?host=example.com')
           cat /tmp/result.json
           test "$code" = "503"
           node -e "const j=require('/tmp/result.json'); if(j.allowed!==false||j.reason!=='classifier_not_configured') process.exit(1)"
@@ -160,7 +186,6 @@ jobs:
           grep -qi '^X-Filter-Decision: block' /tmp/image-headers.txt
           grep -qi '^X-Filter-Reason: image_ip_literal_blocked' /tmp/image-headers.txt
           grep -q 'התמונה הוסתרה' /tmp/image-block.svg
-
       - name: Show log on failure
         if: failure()
         working-directory: backend

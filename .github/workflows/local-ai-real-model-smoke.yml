@@ -1,0 +1,57 @@
+name: Local AI Real Model Smoke
+
+on:
+  push:
+    branches:
+      - feature/haredi-image-filter
+    paths:
+      - 'ai-service/test_real_models_smoke.py'
+      - 'ai-service/test_policy.py'
+      - 'ai-service/test_runtime_smoke.py'
+      - 'ai-service/requirements.txt'
+      - 'ai-service/app.py'
+      - 'ai-service/policy.py'
+      - '.github/workflows/local-ai-real-model-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-ai-real-model-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-model-smoke:
+    name: Real YuNet + ManWoman + NSFW + SigLIP2 inference
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AI_MAX_CONCURRENCY: '1'
+      SIGLIP_MODEL: google/siglip2-base-patch16-512
+      SIGLIP_REVISION: a89f5c5093f902bf39d3cd4d81d2c09867f0724b
+      NSFW_MODEL: viddexa/nsfw-detection-mini
+      NSFW_REVISION: 008722e6cd8dff64efa75fb2a8482c80e41434ca
+      GENDER_MODEL: dima806/man_woman_face_image_detection
+      GENDER_REVISION: ecab7935ec1df4243f7832b87df94b4cd1530502
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: ai-service/requirements.txt
+      - name: Install local AI runtime
+        working-directory: ai-service
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Run HAREDI_STRICT policy tests
+        working-directory: ai-service
+        run: python -m unittest -v test_policy.py
+      - name: Run local AI runtime tests
+        working-directory: ai-service
+        run: python -m unittest -v test_runtime_smoke.py
+      - name: Run real model inference smoke
+        working-directory: ai-service
+        run: python -m unittest -v test_real_models_smoke.py

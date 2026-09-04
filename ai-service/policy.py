@@ -1,21 +1,4 @@
-POLICY_VERSION = "HAREDI_STRICT_V2_LOCAL"
-
-FEMALE_LABELS = {
-    "FACE_FEMALE",
-    "FEMALE_GENITALIA_COVERED",
-    "FEMALE_BREAST_COVERED",
-    "FEMALE_BREAST_EXPOSED",
-    "FEMALE_GENITALIA_EXPOSED",
-}
-REVEALING_LABELS = {
-    "BUTTOCKS_EXPOSED",
-    "FEMALE_BREAST_EXPOSED",
-    "FEMALE_GENITALIA_EXPOSED",
-    "MALE_GENITALIA_EXPOSED",
-    "ANUS_EXPOSED",
-    "BELLY_EXPOSED",
-    "ARMPITS_EXPOSED",
-}
+POLICY_VERSION = "HAREDI_STRICT_V4_GROUP_SAFE"
 
 SIGLIP_PROMPTS = [
     "a photograph of a woman",
@@ -28,70 +11,140 @@ SIGLIP_PROMPTS = [
 ]
 
 
-def _max_score(items: list[dict], labels: set[str]) -> float:
-    best = 0.0
-    for item in items:
-        if str(item.get("class", "")) in labels:
-            try:
-                best = max(best, float(item.get("score", 0.0)))
-            except (TypeError, ValueError):
-                pass
-    return best
+def _bounded(value, default=0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number < 0.0 or number > 1.0:
+        return default
+    return number
 
 
-def evaluate(nude: list[dict], siglip: dict[str, float]) -> dict:
-    female_face = _max_score(nude, {"FACE_FEMALE"})
-    female_body = _max_score(nude, FEMALE_LABELS)
-    revealing = _max_score(nude, REVEALING_LABELS)
+def evaluate(
+    nsfw_score: float,
+    gender_faces: list[dict],
+    siglip: dict[str, float],
+) -> dict:
+    """HAREDI_STRICT policy.
 
-    if female_face >= 0.45 or female_body >= 0.45:
+    The policy is deliberately fail-closed. A lack of an unsafe signal is not
+    sufficient to allow an image; it needs affirmative evidence that either no
+    person is present or that every detected face is confidently male.
+
+    Female whole-image evidence is evaluated independently of male evidence.
+    An image may contain both men and women, so a strong man score must never
+    cancel a meaningful woman/girl score.
+    """
+    nsfw = _bounded(nsfw_score)
+    if nsfw >= 0.35:
+        return {
+            "allowed": False,
+            "reason": "adult_content",
+            "details": {"nsfwScore": nsfw},
+        }
+
+    female_faces = []
+    uncertain_faces = []
+    male_faces = []
+    for face in gender_faces or []:
+        female = _bounded(face.get("female"))
+        male = _bounded(face.get("male"))
+        detection = _bounded(face.get("detection"), 1.0)
+        if detection < 0.60:
+            continue
+        if female >= 0.70 and female >= male:
+            female_faces.append(female)
+        elif male >= 0.82 and male > female:
+            male_faces.append(male)
+        else:
+            uncertain_faces.append(max(female, male))
+
+    if female_faces:
         return {
             "allowed": False,
             "reason": "female_detected",
             "details": {
-                "nudenetFemale": max(female_face, female_body),
-                "nudenetRevealing": revealing,
+                "femaleFaceCount": len(female_faces),
+                "maxFemaleFace": max(female_faces),
             },
         }
 
-    if revealing >= 0.40:
+    if uncertain_faces:
         return {
             "allowed": False,
-            "reason": "revealing_content",
-            "details": {"nudenetRevealing": revealing},
+            "reason": "ambiguous_face",
+            "details": {
+                "ambiguousFaceCount": len(uncertain_faces),
+                "maxFaceConfidence": max(uncertain_faces),
+            },
         }
 
     woman = max(
-        siglip.get("a photograph of a woman", 0.0),
-        siglip.get("a photograph of a girl", 0.0),
+        _bounded(siglip.get("a photograph of a woman")),
+        _bounded(siglip.get("a photograph of a girl")),
     )
     man = max(
-        siglip.get("a photograph of a man", 0.0),
-        siglip.get("a photograph of a boy", 0.0),
+        _bounded(siglip.get("a photograph of a man")),
+        _bounded(siglip.get("a photograph of a boy")),
     )
-    swimsuit = siglip.get("a photograph of a person wearing a swimsuit", 0.0)
-    revealing_clothes = siglip.get("a photograph of revealing clothing", 0.0)
-    no_person = siglip.get("a photograph with no person", 0.0)
+    swimsuit = _bounded(siglip.get("a photograph of a person wearing a swimsuit"))
+    revealing = _bounded(siglip.get("a photograph of revealing clothing"))
+    no_person = _bounded(siglip.get("a photograph with no person"))
 
-    if swimsuit >= 0.55 or revealing_clothes >= 0.55:
+    if swimsuit >= 0.50 or revealing >= 0.50:
         return {
             "allowed": False,
             "reason": "revealing_clothing",
             "details": {
                 "siglipSwimsuit": swimsuit,
-                "siglipRevealing": revealing_clothes,
+                "siglipRevealing": revealing,
             },
         }
 
-    if woman >= 0.55 and woman >= man:
+    # HAREDI_STRICT V4: never compare the female score against the male score
+    # as a gate. Group photos can legitimately score highly for both.
+    if woman >= 0.50:
         return {
             "allowed": False,
             "reason": "female_detected",
             "details": {"siglipFemale": woman, "siglipMale": man},
         }
 
-    person_like = max(woman, man, swimsuit, revealing_clothes)
-    if person_like >= 0.45 and man < 0.62:
+    if woman >= 0.42:
+        return {
+            "allowed": False,
+            "reason": "ambiguous_person",
+            "details": {"siglipFemale": woman, "siglipMale": man},
+        }
+
+    # A detected face must be affirmatively male. If YuNet saw faces but the
+    # gender model did not produce a usable result for all of them, fail closed.
+    usable_face_count = len(female_faces) + len(uncertain_faces) + len(male_faces)
+    if gender_faces and usable_face_count < len(gender_faces):
+        return {
+            "allowed": False,
+            "reason": "ambiguous_face",
+            "details": {
+                "detectedFaceCount": len(gender_faces),
+                "classifiedFaceCount": usable_face_count,
+            },
+        }
+
+    if male_faces:
+        return {
+            "allowed": True,
+            "reason": "image_safe_haredi_strict",
+            "details": {
+                "maleFaceCount": len(male_faces),
+                "minMaleFace": min(male_faces),
+                "siglipFemale": woman,
+                "nsfwScore": nsfw,
+            },
+        }
+
+    person_like = max(woman, man, swimsuit, revealing)
+    if person_like >= 0.42 and man < 0.65:
         return {
             "allowed": False,
             "reason": "ambiguous_person",
@@ -102,11 +155,7 @@ def evaluate(nude: list[dict], siglip: dict[str, float]) -> dict:
             },
         }
 
-    # HAREDI_STRICT never interprets "nothing bad detected" as an allow.
-    # We need affirmative evidence: either no person with useful confidence,
-    # or a confidently male image. Otherwise the image remains ambiguous and
-    # is blocked.
-    if no_person < 0.55 and man < 0.62:
+    if no_person < 0.58 and man < 0.65:
         return {
             "allowed": False,
             "reason": "ambiguous_image",
@@ -114,6 +163,7 @@ def evaluate(nude: list[dict], siglip: dict[str, float]) -> dict:
                 "siglipFemale": woman,
                 "siglipMale": man,
                 "siglipNoPerson": no_person,
+                "nsfwScore": nsfw,
             },
         }
 
@@ -124,6 +174,6 @@ def evaluate(nude: list[dict], siglip: dict[str, float]) -> dict:
             "siglipFemale": woman,
             "siglipMale": man,
             "siglipNoPerson": no_person,
-            "nudenetRevealing": revealing,
+            "nsfwScore": nsfw,
         },
     }

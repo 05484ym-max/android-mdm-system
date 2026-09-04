@@ -1,6 +1,7 @@
 'use strict';
 
-const POLICY_VERSION = 'HAREDI_STRICT_V2_LOCAL';
+const POLICY_VERSION = 'HAREDI_STRICT_V4_GROUP_SAFE';
+const SOURCE = 'local_apache_vision_stack';
 const MAX_RESPONSE_BYTES = 256 * 1024;
 
 function localAiEndpoint() {
@@ -32,25 +33,28 @@ function sanitizeDetails(value) {
   return out;
 }
 
+function normalizeReason(reason) {
+  if (reason === 'revealing_content') return 'revealing_clothing';
+  return String(reason || 'local_ai_invalid_response').slice(0, 80);
+}
+
+function blocked(reason) {
+  return {
+    allowed: false,
+    reason,
+    details: {},
+    source: SOURCE,
+    policyVersion: POLICY_VERSION,
+  };
+}
+
 async function moderateImage(buffer, fetchImpl = fetch) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
-    return {
-      allowed: false,
-      reason: 'local_ai_invalid_image',
-      details: {},
-      source: 'local_siglip2_nudenet',
-      policyVersion: POLICY_VERSION,
-    };
+    return blocked('local_ai_invalid_image');
   }
 
   if (!configured()) {
-    return {
-      allowed: false,
-      reason: 'local_ai_not_configured',
-      details: {},
-      source: 'local_siglip2_nudenet',
-      policyVersion: POLICY_VERSION,
-    };
+    return blocked('local_ai_not_configured');
   }
 
   const endpoint = localAiEndpoint();
@@ -67,47 +71,23 @@ async function moderateImage(buffer, fetchImpl = fetch) {
       signal: AbortSignal.timeout(30_000),
     });
   } catch {
-    return {
-      allowed: false,
-      reason: 'local_ai_unreachable',
-      details: {},
-      source: 'local_siglip2_nudenet',
-      policyVersion: POLICY_VERSION,
-    };
+    return blocked('local_ai_unreachable');
   }
 
   if (!response.ok) {
-    return {
-      allowed: false,
-      reason: 'local_ai_http_' + response.status,
-      details: {},
-      source: 'local_siglip2_nudenet',
-      policyVersion: POLICY_VERSION,
-    };
+    return blocked('local_ai_http_' + response.status);
   }
 
   const declaredLength = Number(response.headers?.get?.('content-length') || 0);
   if (declaredLength && declaredLength > MAX_RESPONSE_BYTES) {
-    return {
-      allowed: false,
-      reason: 'local_ai_response_too_large',
-      details: {},
-      source: 'local_siglip2_nudenet',
-      policyVersion: POLICY_VERSION,
-    };
+    return blocked('local_ai_response_too_large');
   }
 
   let payload;
   try {
     payload = await response.json();
   } catch {
-    return {
-      allowed: false,
-      reason: 'local_ai_invalid_response',
-      details: {},
-      source: 'local_siglip2_nudenet',
-      policyVersion: POLICY_VERSION,
-    };
+    return blocked('local_ai_invalid_response');
   }
 
   if (
@@ -115,30 +95,28 @@ async function moderateImage(buffer, fetchImpl = fetch) {
     typeof payload?.allowed !== 'boolean' ||
     typeof payload?.reason !== 'string'
   ) {
-    return {
-      allowed: false,
-      reason: payload?.policyVersion !== POLICY_VERSION
+    return blocked(
+      payload?.policyVersion !== POLICY_VERSION
         ? 'local_ai_policy_mismatch'
         : 'local_ai_invalid_response',
-      details: {},
-      source: 'local_siglip2_nudenet',
-      policyVersion: POLICY_VERSION,
-    };
+    );
   }
 
   return {
     allowed: payload.allowed === true,
-    reason: payload.reason.slice(0, 80),
+    reason: normalizeReason(payload.reason),
     details: sanitizeDetails(payload.details),
-    source: 'local_siglip2_nudenet',
+    source: SOURCE,
     policyVersion: POLICY_VERSION,
   };
 }
 
 module.exports = {
   POLICY_VERSION,
+  SOURCE,
   localAiEndpoint,
   configured,
   sanitizeDetails,
+  normalizeReason,
   moderateImage,
 };
