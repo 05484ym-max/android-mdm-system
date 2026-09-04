@@ -1913,17 +1913,17 @@ function sendBlockedImage(res, reason) {
   res.end(svg);
 }
 
+// Single source of truth for which reasons represent a stable fact about the
+// image itself (a real HAREDI_STRICT decision) versus a transient
+// infrastructure condition (unreachable/warming/unavailable/error/timeout/
+// malformed response/schema mismatch/5xx). Only the former may ever be
+// written to the permanent moderation cache - a transient outage must never
+// be persisted as if it were a fact about the image, or a temporary AI
+// service failure could permanently misclassify images once it recovers.
+// This set lives in imageModerator.js (the policy owner) so it can never
+// drift out of sync with the reasons that module actually produces.
 function imageModerationDecisionIsCacheable(result) {
-  return new Set([
-    'image_safe_haredi_strict',
-    'adult_content',
-    'racy_content',
-    'revealing_clothing',
-    'female_detected',
-    'ambiguous_face',
-    'ambiguous_person',
-    'ambiguous_image',
-  ]).has(result.reason);
+  return imageModerator.CACHEABLE_DECISION_REASONS.has(result.reason);
 }
 
 async function getOrModerateImageDecision(sha256Hex, remote) {

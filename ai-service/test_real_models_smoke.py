@@ -5,7 +5,7 @@ from PIL import Image
 
 # This test intentionally downloads/loads the actual production models.
 import app as ai_app
-from policy import POLICY_VERSION, SIGLIP_PROMPTS
+from policy import SIGLIP_PROMPTS, SIGNAL_SCHEMA_VERSION
 
 
 def neutral_image_bytes() -> bytes:
@@ -70,12 +70,17 @@ class RealModelSmokeTests(unittest.TestCase):
             self.assertGreaterEqual(score, 0.0)
             self.assertLessEqual(score, 1.0)
 
-        decision = ai_app._run_models(body, image)
-        self.assertIsInstance(decision, dict)
-        self.assertIsInstance(decision.get("allowed"), bool)
-        self.assertIsInstance(decision.get("reason"), str)
-        self.assertTrue(decision.get("reason"))
-        self.assertEqual(POLICY_VERSION, "HAREDI_STRICT_V3_PERMISSIVE")
+        signals = ai_app._run_models(body, image)
+        self.assertIsInstance(signals, dict)
+        self.assertIsInstance(signals.get("nsfwScore"), float)
+        self.assertGreaterEqual(signals["nsfwScore"], 0.0)
+        self.assertLessEqual(signals["nsfwScore"], 1.0)
+        self.assertIsInstance(signals.get("faces"), list)
+        self.assertIsInstance(signals.get("siglip"), dict)
+        # The service must return raw signals only - no ALLOW/BLOCK judgment.
+        self.assertNotIn("allowed", signals)
+        self.assertNotIn("reason", signals)
+        self.assertEqual(SIGNAL_SCHEMA_VERSION, "LOCAL_AI_SIGNALS_V1")
 
 
 if __name__ == "__main__":

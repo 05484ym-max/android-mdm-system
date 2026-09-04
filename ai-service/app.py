@@ -14,9 +14,9 @@ from PIL import Image, UnidentifiedImageError
 from starlette.concurrency import run_in_threadpool
 from transformers import pipeline
 
-from policy import POLICY_VERSION, SIGLIP_PROMPTS, evaluate
+from policy import SIGLIP_PROMPTS, SIGNAL_SCHEMA_VERSION, bounded
 
-app = FastAPI(title="Yehudi Kasher Local Image AI", version="3.1.0")
+app = FastAPI(title="Yehudi Kasher Local Image AI", version="4.0.0")
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
@@ -319,12 +319,32 @@ def _gender_faces(image: Image.Image) -> list[dict]:
 
 
 def _run_models(body: bytes, image: Image.Image) -> dict:
+    """Run every model and return raw, bounded, normalized signal scores.
+
+    This deliberately makes no ALLOW/BLOCK judgment. It is the Node caller's
+    responsibility to turn these signals into a policy decision.
+    """
     del body
     with _inference_gate:
         nsfw = _nsfw_score(image)
         faces = _gender_faces(image)
         siglip = _siglip_scores(image)
-        return evaluate(nsfw, faces, siglip)
+        return {
+            "nsfwScore": bounded(nsfw),
+            "faces": [
+                {
+                    "female": bounded(face.get("female")),
+                    "male": bounded(face.get("male")),
+                    "detection": bounded(face.get("detection"), 1.0),
+                }
+                for face in faces
+            ],
+            "siglip": {
+                label: bounded(score)
+                for label, score in siglip.items()
+                if label in SIGLIP_PROMPTS
+            },
+        }
 
 
 @app.get("/health")
@@ -332,7 +352,7 @@ def health():
     state = _get_model_state()
     return {
         "status": state["status"],
-        "policyVersion": POLICY_VERSION,
+        "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
         "productionReady": state["status"] == "ready",
         "modelErrorType": state["errorType"],
         "models": {
@@ -361,19 +381,15 @@ async def moderate(
     state = _get_model_state()["status"]
     if state == "warming":
         return {
-            "allowed": False,
-            "reason": "local_ai_warming",
-            "details": {},
+            "status": "warming",
+            "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
             "source": "local_apache_vision_stack",
-            "policyVersion": POLICY_VERSION,
         }
     if state == "error":
         return {
-            "allowed": False,
-            "reason": "local_ai_unavailable",
-            "details": {},
+            "status": "unavailable",
+            "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
             "source": "local_apache_vision_stack",
-            "policyVersion": POLICY_VERSION,
         }
 
     body = await request.body()
@@ -386,18 +402,18 @@ async def moderate(
         raise HTTPException(status_code=400, detail="invalid_image") from exc
 
     try:
-        decision = await run_in_threadpool(_run_models, body, image)
+        signals = await run_in_threadpool(_run_models, body, image)
     except Exception as exc:
         return {
-            "allowed": False,
-            "reason": "local_ai_error",
-            "details": {"errorType": type(exc).__name__},
+            "status": "error",
+            "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
             "source": "local_apache_vision_stack",
-            "policyVersion": POLICY_VERSION,
+            "errorType": type(exc).__name__,
         }
 
     return {
-        **decision,
+        "status": "ok",
+        "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
         "source": "local_apache_vision_stack",
-        "policyVersion": POLICY_VERSION,
+        "signals": signals,
     }

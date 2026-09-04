@@ -74,11 +74,11 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
         else:
             os.environ["LOCAL_AI_TOKEN"] = self.old_token
 
-    def test_health_exposes_policy_version_stack_and_readiness(self):
+    def test_health_exposes_signal_schema_version_stack_and_readiness(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["policyVersion"], "HAREDI_STRICT_V4_GROUP_SAFE")
+        self.assertEqual(body["signalSchemaVersion"], "LOCAL_AI_SIGNALS_V1")
         self.assertEqual(body["status"], "cold")
         self.assertFalse(body["productionReady"])
         self.assertIn("siglip", body["models"])
@@ -117,8 +117,9 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
         run_models.assert_not_called()
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertFalse(body["allowed"])
-        self.assertEqual(body["reason"], "local_ai_warming")
+        self.assertEqual(body["status"], "warming")
+        self.assertEqual(body["signalSchemaVersion"], "LOCAL_AI_SIGNALS_V1")
+        self.assertNotIn("signals", body)
 
     def test_model_load_error_fails_closed_without_running_models(self):
         ai_app._set_model_state("error", "RuntimeError")
@@ -134,8 +135,8 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
         run_models.assert_not_called()
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertFalse(body["allowed"])
-        self.assertEqual(body["reason"], "local_ai_unavailable")
+        self.assertEqual(body["status"], "unavailable")
+        self.assertNotIn("signals", body)
 
     def test_invalid_image_is_rejected_before_models(self):
         response = self.client.post(
@@ -148,16 +149,13 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    def test_model_block_contract(self):
-        with mock.patch.object(
-            ai_app,
-            "_run_models",
-            return_value={
-                "allowed": False,
-                "reason": "female_detected",
-                "details": {"siglipFemale": 0.97},
-            },
-        ):
+    def test_model_signals_contract(self):
+        raw_signals = {
+            "nsfwScore": 0.02,
+            "faces": [{"female": 0.97, "male": 0.03, "detection": 0.96}],
+            "siglip": {"a photograph of a woman": 0.9},
+        }
+        with mock.patch.object(ai_app, "_run_models", return_value=raw_signals):
             response = self.client.post(
                 "/moderate",
                 content=png_bytes(),
@@ -168,10 +166,13 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertFalse(body["allowed"])
-        self.assertEqual(body["reason"], "female_detected")
-        self.assertEqual(body["policyVersion"], "HAREDI_STRICT_V4_GROUP_SAFE")
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["signalSchemaVersion"], "LOCAL_AI_SIGNALS_V1")
         self.assertEqual(body["source"], "local_apache_vision_stack")
+        self.assertEqual(body["signals"], raw_signals)
+        # The service must not itself pass judgment on the signals it returns.
+        self.assertNotIn("allowed", body)
+        self.assertNotIn("reason", body)
 
     def test_model_exception_fails_closed(self):
         with mock.patch.object(ai_app, "_run_models", side_effect=RuntimeError("boom")):
@@ -185,9 +186,10 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertFalse(body["allowed"])
-        self.assertEqual(body["reason"], "local_ai_error")
+        self.assertEqual(body["status"], "error")
+        self.assertEqual(body["errorType"], "RuntimeError")
         self.assertEqual(body["source"], "local_apache_vision_stack")
+        self.assertNotIn("signals", body)
 
 
 if __name__ == "__main__":
