@@ -78,7 +78,7 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["policyVersion"], "HAREDI_STRICT_V3_PERMISSIVE")
+        self.assertEqual(body["policyVersion"], "HAREDI_STRICT_V4_GROUP_SAFE")
         self.assertEqual(body["status"], "cold")
         self.assertFalse(body["productionReady"])
         self.assertIn("siglip", body["models"])
@@ -170,7 +170,7 @@ class LocalAiRuntimeSmokeTests(unittest.TestCase):
         body = response.json()
         self.assertFalse(body["allowed"])
         self.assertEqual(body["reason"], "female_detected")
-        self.assertEqual(body["policyVersion"], "HAREDI_STRICT_V3_PERMISSIVE")
+        self.assertEqual(body["policyVersion"], "HAREDI_STRICT_V4_GROUP_SAFE")
         self.assertEqual(body["source"], "local_apache_vision_stack")
 
     def test_model_exception_fails_closed(self):
