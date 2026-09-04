@@ -9,6 +9,41 @@
   const categorySelect = document.getElementById('apkCategorySelect');
   const statusEl = document.getElementById('apkUploadStatus');
 
+  /*
+   * Older APK catalog rows can contain an absolute icon URL that was saved
+   * before reverse-proxy HTTPS handling was fixed (for example http://... on
+   * Render). The catalog's inline onerror handler immediately replaces a
+   * failed icon with the app's first letter, so repair these first-party icon
+   * URLs before that fallback runs. This also makes the panel resilient if the
+   * public host changes later: /api/apps/icon/:assetId is always served by the
+   * same backend that rendered the panel.
+   */
+  document.addEventListener('error', event => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement) || !img.classList.contains('catalog-icon')) return;
+    if (img.dataset.sameOriginIconRetry === '1') return;
+
+    let parsed;
+    try {
+      parsed = new URL(img.currentSrc || img.src, window.location.href);
+    } catch {
+      return;
+    }
+
+    if (!/^\/api\/apps\/icon\/\d+$/.test(parsed.pathname)) return;
+
+    const sameOriginUrl = window.location.origin + parsed.pathname + parsed.search;
+    if ((img.currentSrc || img.src) === sameOriginUrl) return;
+
+    // Capture-phase listener runs before the existing inline onerror fallback.
+    // Stop this first failure from replacing the <img>; retry once via the
+    // current HTTPS origin. If the retry itself fails, the normal fallback is
+    // allowed to run and display the first letter.
+    event.stopImmediatePropagation();
+    img.dataset.sameOriginIconRetry = '1';
+    img.src = sameOriginUrl;
+  }, true);
+
   if (!modal || !openBtn || !cancelBtn || !submitBtn || !fileInput || !nameInput ||
       !packageInput || !categorySelect || !statusEl) return;
 
