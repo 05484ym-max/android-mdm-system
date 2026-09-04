@@ -180,6 +180,33 @@ async function waitForText(locator, predicate, timeoutMs = 15000) {
       assert.strictEqual(await page.locator('#catalogList .apk-source-badge').count(), 1);
     });
 
+    await test('stale first-party APK icon URL retries through current origin before letter fallback', async () => {
+      const row = (await db.listAppsCatalog()).find(x => x.packageName === 'org.yehudikasher.browser');
+      assert.ok(row && row.apkIconStorageKey, 'test APK must have an extracted icon asset');
+
+      await rawPool.query(
+        'UPDATE apps_catalog SET icon_url = $2 WHERE package_name = $1',
+        [
+          'org.yehudikasher.browser',
+          `http://legacy.invalid/api/apps/icon/${row.apkIconStorageKey}`,
+        ],
+      );
+
+      await page.evaluate(() => loadAppsCatalog());
+      const icon = page.locator('#catalogList img.catalog-icon');
+      await icon.waitFor({ state: 'attached', timeout: 10000 });
+      await page.waitForFunction(
+        expectedPrefix => {
+          const img = document.querySelector('#catalogList img.catalog-icon');
+          return Boolean(img && img.src.startsWith(expectedPrefix));
+        },
+        `${BASE_URL}/api/apps/icon/`,
+      );
+
+      assert.strictEqual(await page.locator('#catalogList .catalog-icon-placeholder').count(), 0);
+      assert.ok((await icon.getAttribute('src')).startsWith(`${BASE_URL}/api/apps/icon/`));
+    });
+
     await test('no uncaught page errors occurred', async () => {
       assert.deepStrictEqual(pageErrors, []);
     });
