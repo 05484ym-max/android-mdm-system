@@ -1943,17 +1943,21 @@ function browserAllowlistAdminRateAllowed(ip) {
   return true;
 }
 
-app.get('/api/browser/allowlist', requireAdmin, wrap(async (req, res) => {
+// Applied as actual route middleware (not an inline check inside the
+// handler) so it runs, and is statically visible, on every request to
+// these routes regardless of what the handler body does.
+function browserAllowlistAdminRateLimit(req, res, next) {
   if (!browserAllowlistAdminRateAllowed(req.ip)) {
     return res.status(429).json({ error: 'rate_limited' });
   }
+  next();
+}
+
+app.get('/api/browser/allowlist', requireAdmin, browserAllowlistAdminRateLimit, wrap(async (req, res) => {
   res.json({ entries: await db.listBrowserDomainAllowlist() });
 }));
 
-app.post('/api/browser/allowlist', requireAdmin, wrap(async (req, res) => {
-  if (!browserAllowlistAdminRateAllowed(req.ip)) {
-    return res.status(429).json({ error: 'rate_limited' });
-  }
+app.post('/api/browser/allowlist', requireAdmin, browserAllowlistAdminRateLimit, wrap(async (req, res) => {
   const host = browserClassifier.normalizeHost(
     req.body && typeof req.body.host === 'string' ? req.body.host : '',
   );
@@ -1967,10 +1971,7 @@ app.post('/api/browser/allowlist', requireAdmin, wrap(async (req, res) => {
   res.json(entry);
 }));
 
-app.delete('/api/browser/allowlist/:host', requireAdmin, wrap(async (req, res) => {
-  if (!browserAllowlistAdminRateAllowed(req.ip)) {
-    return res.status(429).json({ error: 'rate_limited' });
-  }
+app.delete('/api/browser/allowlist/:host', requireAdmin, browserAllowlistAdminRateLimit, wrap(async (req, res) => {
   const host = browserClassifier.normalizeHost(req.params.host);
   if (!host) {
     return res.status(400).json({ error: 'invalid_host' });
