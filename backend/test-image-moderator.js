@@ -15,7 +15,7 @@ const {
   const oldToken = process.env.LOCAL_AI_TOKEN;
 
   try {
-    assert.strictEqual(POLICY_VERSION, 'HAREDI_STRICT_V3_PERMISSIVE');
+    assert.strictEqual(POLICY_VERSION, 'HAREDI_STRICT_V4_GROUP_SAFE');
     assert.strictEqual(SOURCE, 'local_apache_vision_stack');
 
     delete process.env.LOCAL_AI_URL;
