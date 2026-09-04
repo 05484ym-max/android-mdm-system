@@ -1922,13 +1922,13 @@ app.get('/api/browser/check', wrap(async (req, res) => {
 
 // ---------- filtered browser persistent domain allowlist (admin) ----------
 //
-// These routes already require an authenticated admin session, but that
-// alone doesn't bound how many requests a single (possibly compromised or
-// replayed) session can fire - a per-IP sliding-window limiter caps that
-// independently of authentication. Uses express-rate-limit (rather than the
-// hand-rolled Map-based limiters elsewhere in this file) specifically so a
-// static analyzer can recognize it as a real rate limiter, not just verify
-// its runtime behavior.
+// These routes already require an authenticated admin session, but running
+// the rate limiter BEFORE that authorization check (rather than after) means
+// a flood of requests gets capped before it can hammer the auth check itself
+// too, independently of whether the caller is authenticated. Uses
+// express-rate-limit (rather than the hand-rolled Map-based limiters
+// elsewhere in this file) so a static analyzer can recognize it as a real
+// rate limiter, not just verify its runtime behavior.
 const browserAllowlistAdminRateLimit = rateLimit({
   windowMs: 60 * 1000,
   limit: 60,
@@ -1939,11 +1939,11 @@ const browserAllowlistAdminRateLimit = rateLimit({
   handler: (req, res) => res.status(429).json({ error: 'rate_limited' }),
 });
 
-app.get('/api/browser/allowlist', requireAdmin, browserAllowlistAdminRateLimit, wrap(async (req, res) => {
+app.get('/api/browser/allowlist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
   res.json({ entries: await db.listBrowserDomainAllowlist() });
 }));
 
-app.post('/api/browser/allowlist', requireAdmin, browserAllowlistAdminRateLimit, wrap(async (req, res) => {
+app.post('/api/browser/allowlist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
   const host = browserClassifier.normalizeHost(
     req.body && typeof req.body.host === 'string' ? req.body.host : '',
   );
@@ -1957,7 +1957,7 @@ app.post('/api/browser/allowlist', requireAdmin, browserAllowlistAdminRateLimit,
   res.json(entry);
 }));
 
-app.delete('/api/browser/allowlist/:host', requireAdmin, browserAllowlistAdminRateLimit, wrap(async (req, res) => {
+app.delete('/api/browser/allowlist/:host', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
   const host = browserClassifier.normalizeHost(req.params.host);
   if (!host) {
     return res.status(400).json({ error: 'invalid_host' });
