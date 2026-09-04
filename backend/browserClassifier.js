@@ -88,6 +88,24 @@ function evaluateCategoryPayload(payload) {
   };
 }
 
+/**
+ * Whether a classification result represents a stable, high-confidence,
+ * safe fact about a host - the only case eligible for automatic promotion
+ * into the persistent allowlist (backend/db.js's browser_domain_allowlist).
+ * This is the single gate the whole promotion feature relies on: it must
+ * return false for every transient (unreachable/pending/erroring/
+ * misconfigured classifier), low-confidence, blocked-category, invalid-host,
+ * or malformed/missing result, and true only for the one shape
+ * evaluateCategoryPayload() ever returns alongside a real, confident allow.
+ */
+function shouldPromoteToAllowlist(classification) {
+  return Boolean(
+    classification &&
+    classification.allowed === true &&
+    classification.reason === 'safe_category',
+  );
+}
+
 function credentialsConfigured() {
   return Boolean(process.env.WEBSHRINKER_ACCESS_KEY && process.env.WEBSHRINKER_SECRET_KEY);
 }
@@ -199,6 +217,7 @@ module.exports = {
   TRANSIENT_TTL_MS,
   normalizeHost,
   evaluateCategoryPayload,
+  shouldPromoteToAllowlist,
   credentialsConfigured,
   classifyHost,
 };

@@ -230,6 +230,28 @@ CREATE TABLE IF NOT EXISTS browser_domain_classifications (
 CREATE INDEX IF NOT EXISTS browser_domain_classifications_expires_idx
   ON browser_domain_classifications (expires_at);
 
+-- A persistent, exact-host allowlist layered in front of the classification
+-- cache above. Unlike browser_domain_classifications (which self-expires),
+-- an allowlist entry is durable: once a host is proven safe, every device in
+-- the fleet skips the external classifier for it on every future request,
+-- forever, until an admin explicitly revokes it. Exact host only - there is
+-- deliberately no parent-domain/wildcard column, so "example.com" being
+-- allowlisted can never imply anything about "sub.example.com".
+CREATE TABLE IF NOT EXISTS browser_domain_allowlist (
+  host              TEXT PRIMARY KEY,
+  enabled           BOOLEAN NOT NULL DEFAULT true,
+  source            TEXT NOT NULL,
+  reason            TEXT,
+  categories        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_verified_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS browser_domain_allowlist_enabled_idx
+  ON browser_domain_allowlist (enabled);
+
 -- Image moderation is cached by the image bytes (SHA-256), not by URL:
 -- the same bytes reused across multiple sites are moderated once, while a
 -- changed image at the same URL cannot inherit a stale allow decision.
@@ -1321,6 +1343,117 @@ async function deleteExpiredBrowserDomainClassifications() {
 }
 
 
+// ---------- filtered browser persistent domain allowlist ----------
+
+function toAllowlistEntry(row) {
+  return {
+    host: row.host,
+    enabled: row.enabled,
+    source: row.source,
+    reason: row.reason,
+    categories: row.categories || [],
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    lastVerifiedAt: row.last_verified_at.toISOString(),
+    revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
+  };
+}
+
+/**
+ * The allowlist fast-path read: returns an entry only if it is currently
+ * enabled and has never been revoked. A revoked or disabled row must behave
+ * exactly as if it were absent, so callers fall through to the normal
+ * classification cache/classifier path.
+ */
+async function getBrowserDomainAllowlistEntry(host) {
+  const { rows } = await pool.query(
+    `SELECT host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at
+       FROM browser_domain_allowlist
+      WHERE host = $1 AND enabled = true AND revoked_at IS NULL`,
+    [host],
+  );
+  return rows[0] ? toAllowlistEntry(rows[0]) : null;
+}
+
+async function listBrowserDomainAllowlist() {
+  const { rows } = await pool.query(
+    `SELECT host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at
+       FROM browser_domain_allowlist
+      ORDER BY updated_at DESC`,
+  );
+  return rows.map(toAllowlistEntry);
+}
+
+/**
+ * Auto-promotion path, called only after the existing classifier policy has
+ * already produced a stable "safe_category" decision for this exact host.
+ * Deliberately never resurrects a host an admin revoked: the ON CONFLICT
+ * branch is guarded by "revoked_at IS NULL", so a conflicting row that was
+ * revoked is left untouched (a no-op), not silently re-enabled. A brand new
+ * host is still inserted normally - the guard only protects existing rows.
+ */
+async function upsertAutoBrowserDomainAllowlistEntry({ host, reason, categories }) {
+  const { rows } = await pool.query(
+    `INSERT INTO browser_domain_allowlist
+       (host, enabled, source, reason, categories, created_at, updated_at, last_verified_at)
+     VALUES ($1, true, 'AUTO_CLASSIFIER', $2, $3::jsonb, now(), now(), now())
+     ON CONFLICT (host) DO UPDATE SET
+       reason = EXCLUDED.reason,
+       categories = EXCLUDED.categories,
+       updated_at = now(),
+       last_verified_at = now()
+     WHERE browser_domain_allowlist.revoked_at IS NULL AND browser_domain_allowlist.enabled = true
+     RETURNING host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at`,
+    [host, reason || null, JSON.stringify(categories || [])],
+  );
+  // A guarded no-op (conflicting row was revoked) returns no row - that is
+  // expected and not an error; the host simply stays revoked.
+  return rows[0] ? toAllowlistEntry(rows[0]) : null;
+}
+
+/**
+ * Explicit admin add. Unlike the auto-promotion path, this is allowed to
+ * un-revoke a host, because a human is directly asserting it should be
+ * allowed right now - that is a deliberate override, not the automated
+ * classifier silently undoing a revocation.
+ */
+async function upsertAdminBrowserDomainAllowlistEntry({ host, reason, categories }) {
+  const { rows } = await pool.query(
+    `INSERT INTO browser_domain_allowlist
+       (host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at)
+     VALUES ($1, true, 'ADMIN', $2, $3::jsonb, now(), now(), now(), NULL)
+     ON CONFLICT (host) DO UPDATE SET
+       enabled = true,
+       source = 'ADMIN',
+       reason = EXCLUDED.reason,
+       categories = EXCLUDED.categories,
+       updated_at = now(),
+       last_verified_at = now(),
+       revoked_at = NULL
+     RETURNING host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at`,
+    [host, reason || null, JSON.stringify(categories || [])],
+  );
+  return toAllowlistEntry(rows[0]);
+}
+
+/**
+ * Revokes an exact host. Deliberately a soft revoke (enabled=false,
+ * revoked_at set) rather than a DELETE, so classification/audit history for
+ * the host is preserved. Takes effect immediately: the very next read via
+ * getBrowserDomainAllowlistEntry() will no longer see this row.
+ */
+async function revokeBrowserDomainAllowlistEntry(host) {
+  const { rows } = await pool.query(
+    `UPDATE browser_domain_allowlist
+        SET enabled = false, revoked_at = now(), updated_at = now()
+      WHERE host = $1
+      RETURNING host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at`,
+    [host],
+  );
+  return rows[0] ? toAllowlistEntry(rows[0]) : null;
+}
+
+
 // ---------- filtered browser image moderation cache ----------
 
 async function getBrowserImageModeration(sha256, policyVersion) {
@@ -1432,6 +1565,11 @@ module.exports = {
   getBrowserDomainClassification,
   saveBrowserDomainClassification,
   deleteExpiredBrowserDomainClassifications,
+  getBrowserDomainAllowlistEntry,
+  listBrowserDomainAllowlist,
+  upsertAutoBrowserDomainAllowlistEntry,
+  upsertAdminBrowserDomainAllowlistEntry,
+  revokeBrowserDomainAllowlistEntry,
   getBrowserImageModeration,
   saveBrowserImageModeration,
 };

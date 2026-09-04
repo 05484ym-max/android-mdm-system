@@ -5,6 +5,8 @@ on:
     branches:
       - feature/automatic-browser-filtering
       - feature/haredi-image-filter
+      - fix/node-owned-image-policy
+      - feature/strict-fast-allowlist
       - main
     paths:
       - 'backend/browserClassifier.js'
@@ -17,6 +19,9 @@ on:
       - 'ai-service/test_service_contract.py'
       - 'ai-service/test_runtime_smoke.py'
       - 'backend/test-browser-image-cache-integration.js'
+      - 'backend/test-browser-domain-allowlist.js'
+      - 'backend/test-image-moderation-cache-integration.js'
+      - 'backend/imageModerationCache.js'
       - 'backend/test-image-moderator.js'
       - 'backend/test-safe-remote-image.js'
       - 'backend/imageModerator.js'
@@ -29,7 +34,7 @@ on:
       - 'backend/test-public-url.js'
       - '.github/workflows/browser-filter-tests.yml'
   pull_request:
-    branches: [ main ]
+    branches: [ main, fix/node-owned-image-policy ]
     paths:
       - 'backend/browserClassifier.js'
       - 'backend/publicUrl.js'
@@ -41,6 +46,9 @@ on:
       - 'ai-service/test_service_contract.py'
       - 'ai-service/test_runtime_smoke.py'
       - 'backend/test-browser-image-cache-integration.js'
+      - 'backend/test-browser-domain-allowlist.js'
+      - 'backend/test-image-moderation-cache-integration.js'
+      - 'backend/imageModerationCache.js'
       - 'backend/test-image-moderator.js'
       - 'backend/test-safe-remote-image.js'
       - 'backend/imageModerator.js'
@@ -148,6 +156,16 @@ jobs:
         env:
           DATABASE_URL: postgresql://browser_test:browser_test_pw@127.0.0.1:5432/browser_test
         run: node test-browser-image-cache-integration.js
+      - name: Test persistent domain allowlist (real PostgreSQL)
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://browser_test:browser_test_pw@127.0.0.1:5432/browser_test
+        run: node test-browser-domain-allowlist.js
+      - name: Test image moderation cache orchestration (real PostgreSQL)
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://browser_test:browser_test_pw@127.0.0.1:5432/browser_test
+        run: node test-image-moderation-cache-integration.js
       - name: Start backend
         working-directory: backend
         env:
@@ -186,6 +204,108 @@ jobs:
           grep -qi '^X-Filter-Decision: block' /tmp/image-headers.txt
           grep -qi '^X-Filter-Reason: image_ip_literal_blocked' /tmp/image-headers.txt
           grep -q 'התמונה הוסתרה' /tmp/image-block.svg
+      - name: Log in as admin (for allowlist endpoint tests)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/login.json -w '%{http_code}' -c /tmp/cookies.txt \
+            -X POST 'http://127.0.0.1:4555/api/login' \
+            -H 'Content-Type: application/json' \
+            --data '{"username":"browser_admin","password":"browser_admin_password"}')
+          cat /tmp/login.json
+          test "$code" = "200"
+      - name: Prove a persistent allowlist entry skips the external classifier
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          host="allowlist-check-$(date +%s).example"
+
+          code=$(curl -sS -o /tmp/allow-add.json -w '%{http_code}' -b /tmp/cookies.txt \
+            -X POST 'http://127.0.0.1:4555/api/browser/allowlist' \
+            -H 'Content-Type: application/json' \
+            --data "{\"host\":\"$host\",\"reason\":\"ci_test\"}")
+          cat /tmp/allow-add.json
+          test "$code" = "200"
+          node -e "const j=require('/tmp/allow-add.json'); if(j.host!=='$host'||j.enabled!==true||j.source!=='ADMIN') process.exit(1)"
+
+          # With no WEBSHRINKER credentials configured in this job, the ONLY
+          # way to get anything other than 503/classifier_not_configured from
+          # /api/browser/check is the allowlist fast path - so a 200 with
+          # reason "persistent_allowlist" here proves the external classifier
+          # was never called for this host.
+          code=$(curl -sS -o /tmp/check-hit.json -w '%{http_code}' \
+            "http://127.0.0.1:4555/api/browser/check?host=$host")
+          cat /tmp/check-hit.json
+          test "$code" = "200"
+          node -e "const j=require('/tmp/check-hit.json'); if(j.allowed!==true||j.reason!=='persistent_allowlist'||j.allowlisted!==true||j.decisionSource!=='allowlist') process.exit(1)"
+
+          echo "host=$host" >> "$GITHUB_ENV" 2>/dev/null || true
+          echo "$host" > /tmp/allowlist-test-host.txt
+      - name: Prove admin revoke immediately stops the allowlist fast path
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          host=$(cat /tmp/allowlist-test-host.txt)
+
+          code=$(curl -sS -o /tmp/revoke.json -w '%{http_code}' -b /tmp/cookies.txt \
+            -X DELETE "http://127.0.0.1:4555/api/browser/allowlist/$host")
+          cat /tmp/revoke.json
+          test "$code" = "200"
+          node -e "const j=require('/tmp/revoke.json'); if(j.enabled!==false||!j.revokedAt) process.exit(1)"
+
+          # The very next check must fall back to the classifier path - which,
+          # with no WEBSHRINKER credentials, deterministically fails closed
+          # with 503/classifier_not_configured rather than serving a stale
+          # allow from the (now revoked) allowlist.
+          code=$(curl -sS -o /tmp/check-revoked.json -w '%{http_code}' \
+            "http://127.0.0.1:4555/api/browser/check?host=$host")
+          cat /tmp/check-revoked.json
+          test "$code" = "503"
+          node -e "const j=require('/tmp/check-revoked.json'); if(j.allowed!==false||j.reason!=='classifier_not_configured') process.exit(1)"
+      - name: Prove admin listing shows the allowlist entry (enabled and revoked)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          host=$(cat /tmp/allowlist-test-host.txt)
+          code=$(curl -sS -o /tmp/list.json -w '%{http_code}' -b /tmp/cookies.txt \
+            'http://127.0.0.1:4555/api/browser/allowlist')
+          cat /tmp/list.json
+          test "$code" = "200"
+          node -e "
+            const j = require('/tmp/list.json');
+            const entry = (j.entries || []).find(e => e.host === '$host');
+            if (!entry || entry.enabled !== false || !entry.revokedAt) process.exit(1);
+          "
+      - name: Prove an allowlisted host still requires the fetch/moderation stage for images
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          # .invalid is an IANA-reserved TLD guaranteed to never resolve
+          # (RFC 2606) - fast, deterministic, no real network dependency.
+          host="img-allowlist-test-$(date +%s).invalid"
+
+          code=$(curl -sS -o /tmp/allow-img.json -w '%{http_code}' -b /tmp/cookies.txt \
+            -X POST 'http://127.0.0.1:4555/api/browser/allowlist' \
+            -H 'Content-Type: application/json' \
+            --data "{\"host\":\"$host\"}")
+          test "$code" = "200"
+
+          # If the allowlist entry had wrongly bypassed image handling
+          # entirely, this would fail with "image_host_not_approved". Instead
+          # it must pass the host gate via the allowlist and reach (and fail
+          # at) DNS resolution for the never-resolving .invalid host - proving
+          # allowlisting a site's host approval is independent of, and does
+          # not skip, the image fetch/moderation pipeline that follows it.
+          code=$(curl -sS -o /tmp/image-allowlisted.svg -D /tmp/image-allowlisted-headers.txt -w '%{http_code}' \
+            -X POST 'http://127.0.0.1:4555/api/browser/image' \
+            -H 'Content-Type: application/json' \
+            --data "{\"url\":\"https://$host/photo.png\"}")
+          test "$code" = "200"
+          cat /tmp/image-allowlisted-headers.txt
+          if grep -qi '^X-Filter-Reason: image_host_not_approved' /tmp/image-allowlisted-headers.txt; then
+            echo "allowlisted host was wrongly rejected at the host-approval gate"
+            exit 1
+          fi
       - name: Show log on failure
         if: failure()
         working-directory: backend
