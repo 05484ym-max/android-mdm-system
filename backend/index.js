@@ -10,6 +10,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
+const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const push = require('./push');
 const deviceHealth = require('./deviceHealth');
@@ -1924,34 +1925,19 @@ app.get('/api/browser/check', wrap(async (req, res) => {
 // These routes already require an authenticated admin session, but that
 // alone doesn't bound how many requests a single (possibly compromised or
 // replayed) session can fire - a per-IP sliding-window limiter caps that
-// independently of authentication, same pattern as browserClassifierRate/
-// imageProxyRate above.
-const browserAllowlistAdminRate = new Map();
-const BROWSER_ALLOWLIST_ADMIN_WINDOW_MS = 60 * 1000;
-const BROWSER_ALLOWLIST_ADMIN_MAX_PER_WINDOW = 60;
-
-function browserAllowlistAdminRateAllowed(ip) {
-  const now = Date.now();
-  const key = String(ip || 'unknown').slice(0, 100);
-  const state = browserAllowlistAdminRate.get(key);
-  if (!state || now - state.startedAt >= BROWSER_ALLOWLIST_ADMIN_WINDOW_MS) {
-    browserAllowlistAdminRate.set(key, { startedAt: now, count: 1 });
-    return true;
-  }
-  if (state.count >= BROWSER_ALLOWLIST_ADMIN_MAX_PER_WINDOW) return false;
-  state.count += 1;
-  return true;
-}
-
-// Applied as actual route middleware (not an inline check inside the
-// handler) so it runs, and is statically visible, on every request to
-// these routes regardless of what the handler body does.
-function browserAllowlistAdminRateLimit(req, res, next) {
-  if (!browserAllowlistAdminRateAllowed(req.ip)) {
-    return res.status(429).json({ error: 'rate_limited' });
-  }
-  next();
-}
+// independently of authentication. Uses express-rate-limit (rather than the
+// hand-rolled Map-based limiters elsewhere in this file) specifically so a
+// static analyzer can recognize it as a real rate limiter, not just verify
+// its runtime behavior.
+const browserAllowlistAdminRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  keyGenerator: req => String(req.ip || 'unknown'),
+  handler: (req, res) => res.status(429).json({ error: 'rate_limited' }),
+});
 
 app.get('/api/browser/allowlist', requireAdmin, browserAllowlistAdminRateLimit, wrap(async (req, res) => {
   res.json({ entries: await db.listBrowserDomainAllowlist() });
