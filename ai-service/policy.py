@@ -1,4 +1,19 @@
-POLICY_VERSION = "HAREDI_STRICT_V4_GROUP_SAFE"
+"""Raw ML signal normalization for the local AI service.
+
+This module intentionally contains no ALLOW/BLOCK decision logic and no
+HAREDI_STRICT (or any other) policy thresholds. The service returns only
+normalized, bounded signal scores from its models. The binding moderation
+policy - including every threshold - is owned entirely by the Node backend
+(backend/imageModerator.js), which calls this service, receives these raw
+signals, and applies its own policy logic before ever persisting a decision.
+
+SIGNAL_SCHEMA_VERSION describes the *shape* of the signals this service
+emits, not any decision policy. It changes only when the signal contract
+itself changes (a score renamed/added/removed), so a Node deployment can
+detect and reject a shape it was not built to understand.
+"""
+
+SIGNAL_SCHEMA_VERSION = "LOCAL_AI_SIGNALS_V1"
 
 SIGLIP_PROMPTS = [
     "a photograph of a woman",
@@ -11,7 +26,7 @@ SIGLIP_PROMPTS = [
 ]
 
 
-def _bounded(value, default=0.0) -> float:
+def bounded(value, default=0.0) -> float:
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -19,161 +34,3 @@ def _bounded(value, default=0.0) -> float:
     if number < 0.0 or number > 1.0:
         return default
     return number
-
-
-def evaluate(
-    nsfw_score: float,
-    gender_faces: list[dict],
-    siglip: dict[str, float],
-) -> dict:
-    """HAREDI_STRICT policy.
-
-    The policy is deliberately fail-closed. A lack of an unsafe signal is not
-    sufficient to allow an image; it needs affirmative evidence that either no
-    person is present or that every detected face is confidently male.
-
-    Female whole-image evidence is evaluated independently of male evidence.
-    An image may contain both men and women, so a strong man score must never
-    cancel a meaningful woman/girl score.
-    """
-    nsfw = _bounded(nsfw_score)
-    if nsfw >= 0.35:
-        return {
-            "allowed": False,
-            "reason": "adult_content",
-            "details": {"nsfwScore": nsfw},
-        }
-
-    female_faces = []
-    uncertain_faces = []
-    male_faces = []
-    for face in gender_faces or []:
-        female = _bounded(face.get("female"))
-        male = _bounded(face.get("male"))
-        detection = _bounded(face.get("detection"), 1.0)
-        if detection < 0.60:
-            continue
-        if female >= 0.70 and female >= male:
-            female_faces.append(female)
-        elif male >= 0.82 and male > female:
-            male_faces.append(male)
-        else:
-            uncertain_faces.append(max(female, male))
-
-    if female_faces:
-        return {
-            "allowed": False,
-            "reason": "female_detected",
-            "details": {
-                "femaleFaceCount": len(female_faces),
-                "maxFemaleFace": max(female_faces),
-            },
-        }
-
-    if uncertain_faces:
-        return {
-            "allowed": False,
-            "reason": "ambiguous_face",
-            "details": {
-                "ambiguousFaceCount": len(uncertain_faces),
-                "maxFaceConfidence": max(uncertain_faces),
-            },
-        }
-
-    woman = max(
-        _bounded(siglip.get("a photograph of a woman")),
-        _bounded(siglip.get("a photograph of a girl")),
-    )
-    man = max(
-        _bounded(siglip.get("a photograph of a man")),
-        _bounded(siglip.get("a photograph of a boy")),
-    )
-    swimsuit = _bounded(siglip.get("a photograph of a person wearing a swimsuit"))
-    revealing = _bounded(siglip.get("a photograph of revealing clothing"))
-    no_person = _bounded(siglip.get("a photograph with no person"))
-
-    if swimsuit >= 0.50 or revealing >= 0.50:
-        return {
-            "allowed": False,
-            "reason": "revealing_clothing",
-            "details": {
-                "siglipSwimsuit": swimsuit,
-                "siglipRevealing": revealing,
-            },
-        }
-
-    # HAREDI_STRICT V4: never compare the female score against the male score
-    # as a gate. Group photos can legitimately score highly for both.
-    if woman >= 0.50:
-        return {
-            "allowed": False,
-            "reason": "female_detected",
-            "details": {"siglipFemale": woman, "siglipMale": man},
-        }
-
-    if woman >= 0.42:
-        return {
-            "allowed": False,
-            "reason": "ambiguous_person",
-            "details": {"siglipFemale": woman, "siglipMale": man},
-        }
-
-    # A detected face must be affirmatively male. If YuNet saw faces but the
-    # gender model did not produce a usable result for all of them, fail closed.
-    usable_face_count = len(female_faces) + len(uncertain_faces) + len(male_faces)
-    if gender_faces and usable_face_count < len(gender_faces):
-        return {
-            "allowed": False,
-            "reason": "ambiguous_face",
-            "details": {
-                "detectedFaceCount": len(gender_faces),
-                "classifiedFaceCount": usable_face_count,
-            },
-        }
-
-    if male_faces:
-        return {
-            "allowed": True,
-            "reason": "image_safe_haredi_strict",
-            "details": {
-                "maleFaceCount": len(male_faces),
-                "minMaleFace": min(male_faces),
-                "siglipFemale": woman,
-                "nsfwScore": nsfw,
-            },
-        }
-
-    person_like = max(woman, man, swimsuit, revealing)
-    if person_like >= 0.42 and man < 0.65:
-        return {
-            "allowed": False,
-            "reason": "ambiguous_person",
-            "details": {
-                "siglipFemale": woman,
-                "siglipMale": man,
-                "siglipNoPerson": no_person,
-            },
-        }
-
-    if no_person < 0.58 and man < 0.65:
-        return {
-            "allowed": False,
-            "reason": "ambiguous_image",
-            "details": {
-                "siglipFemale": woman,
-                "siglipMale": man,
-                "siglipNoPerson": no_person,
-                "nsfwScore": nsfw,
-            },
-        }
-
-    return {
-        "allowed": True,
-        "reason": "image_safe_haredi_strict",
-        "details": {
-            "siglipFemale": woman,
-            "siglipMale": man,
-            "siglipNoPerson": no_person,
-            "nsfwScore": nsfw,
-        },
-    }

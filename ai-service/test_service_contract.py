@@ -95,8 +95,17 @@ class LocalAiServiceContractTests(unittest.TestCase):
 
     def test_inference_is_bounded_and_fail_closed(self):
         self.assertIn("BoundedSemaphore", self.app_source)
-        self.assertIn('"allowed": False', self.app_source)
-        self.assertIn('"reason": "local_ai_error"', self.app_source)
+        self.assertIn('"status": "error"', self.app_source)
+        self.assertIn('"status": "warming"', self.app_source)
+        self.assertIn('"status": "unavailable"', self.app_source)
+
+    def test_service_makes_no_allow_block_decision(self):
+        # The service is provider/inference-only: no ALLOW/BLOCK judgment,
+        # no HAREDI_STRICT thresholds. The binding policy lives in Node
+        # (backend/imageModerator.js), not here.
+        self.assertNotIn('"allowed"', self.app_source)
+        self.assertNotIn("HAREDI_STRICT", self.app_source)
+        self.assertNotIn("evaluate", self.app_source)
 
     def test_container_copies_policy_and_runs_non_root(self):
         self.assertIn("COPY --chown=appuser:appuser app.py policy.py ./", self.dockerfile)
