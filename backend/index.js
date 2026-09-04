@@ -1920,12 +1920,40 @@ app.get('/api/browser/check', wrap(async (req, res) => {
 }));
 
 // ---------- filtered browser persistent domain allowlist (admin) ----------
+//
+// These routes already require an authenticated admin session, but that
+// alone doesn't bound how many requests a single (possibly compromised or
+// replayed) session can fire - a per-IP sliding-window limiter caps that
+// independently of authentication, same pattern as browserClassifierRate/
+// imageProxyRate above.
+const browserAllowlistAdminRate = new Map();
+const BROWSER_ALLOWLIST_ADMIN_WINDOW_MS = 60 * 1000;
+const BROWSER_ALLOWLIST_ADMIN_MAX_PER_WINDOW = 60;
+
+function browserAllowlistAdminRateAllowed(ip) {
+  const now = Date.now();
+  const key = String(ip || 'unknown').slice(0, 100);
+  const state = browserAllowlistAdminRate.get(key);
+  if (!state || now - state.startedAt >= BROWSER_ALLOWLIST_ADMIN_WINDOW_MS) {
+    browserAllowlistAdminRate.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (state.count >= BROWSER_ALLOWLIST_ADMIN_MAX_PER_WINDOW) return false;
+  state.count += 1;
+  return true;
+}
 
 app.get('/api/browser/allowlist', requireAdmin, wrap(async (req, res) => {
+  if (!browserAllowlistAdminRateAllowed(req.ip)) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
   res.json({ entries: await db.listBrowserDomainAllowlist() });
 }));
 
 app.post('/api/browser/allowlist', requireAdmin, wrap(async (req, res) => {
+  if (!browserAllowlistAdminRateAllowed(req.ip)) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
   const host = browserClassifier.normalizeHost(
     req.body && typeof req.body.host === 'string' ? req.body.host : '',
   );
@@ -1940,6 +1968,9 @@ app.post('/api/browser/allowlist', requireAdmin, wrap(async (req, res) => {
 }));
 
 app.delete('/api/browser/allowlist/:host', requireAdmin, wrap(async (req, res) => {
+  if (!browserAllowlistAdminRateAllowed(req.ip)) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
   const host = browserClassifier.normalizeHost(req.params.host);
   if (!host) {
     return res.status(400).json({ error: 'invalid_host' });
