@@ -20,6 +20,53 @@ class UrlPolicyTest {
     }
 
     @Test
+    fun exactGeneratedStrictSearchUrl_isAllowed() {
+        val result = policy.evaluate(
+            "https://duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q=%D7%91%D7%A0%D7%A7+%D7%94%D7%A4%D7%95%D7%A2%D7%9C%D7%99%D7%9D"
+        )
+        assertEquals(LocalDecision.ALLOW, result.decision)
+        assertEquals("duckduckgo.com", result.normalizedHost)
+        assertEquals("strict_search_allow", result.reason)
+    }
+
+    @Test
+    fun strictSearchRejectsSafeSearchOffOrModerate() {
+        listOf("-2", "-1").forEach { unsafeValue ->
+            val result = policy.evaluate(
+                "https://duckduckgo.com/?kp=$unsafeValue&kl=il-he&kc=-1&kac=-1&q=test"
+            )
+            assertEquals(LocalDecision.BLOCK, result.decision)
+            assertEquals("not_in_local_policy", result.reason)
+        }
+    }
+
+    @Test
+    fun strictSearchRejectsMissingDuplicateOrExtraParameters() {
+        val candidates = listOf(
+            "https://duckduckgo.com/?kp=1&kl=il-he&kc=-1&q=test",
+            "https://duckduckgo.com/?kp=1&kp=-2&kl=il-he&kc=-1&kac=-1&q=test",
+            "https://duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q=test&ia=images",
+            "https://duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q=",
+            "https://duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q=test#images"
+        )
+        candidates.forEach { candidate ->
+            assertEquals(candidate, LocalDecision.BLOCK, policy.evaluate(candidate).decision)
+        }
+    }
+
+    @Test
+    fun unrelatedDuckDuckGoPagesAreNotLocallyAllowed() {
+        listOf(
+            "https://duckduckgo.com/",
+            "https://duckduckgo.com/settings",
+            "https://duckduckgo.com/?q=test",
+            "https://safe.duckduckgo.com/?q=test"
+        ).forEach { candidate ->
+            assertEquals(candidate, LocalDecision.BLOCK, policy.evaluate(candidate).decision)
+        }
+    }
+
+    @Test
     fun unknownHost_isBlocked() {
         assertEquals(
             LocalDecision.BLOCK,
