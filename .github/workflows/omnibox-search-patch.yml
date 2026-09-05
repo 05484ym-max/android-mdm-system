@@ -26,74 +26,33 @@ jobs:
           p = Path('client/app/src/main/java/org/yehudikasher/browser/MainActivity.kt')
           s = p.read_text()
 
-          old_import = 'import android.view.Gravity\nimport android.view.View\n'
-          new_import = 'import android.view.Gravity\nimport android.view.View\nimport android.view.inputmethod.EditorInfo\n'
-          assert old_import in s
-          s = s.replace(old_import, new_import, 1)
+          replacements = [
+              (
+                  'import android.view.Gravity\nimport android.view.View\n',
+                  'import android.view.Gravity\nimport android.view.View\nimport android.view.inputmethod.EditorInfo\n',
+              ),
+              (
+                  '            hint = "הקלד כתובת אתר..."\n',
+                  '            hint = "חיפוש או כתובת אתר..."\n',
+              ),
+              (
+                  '            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI\n',
+                  '            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_NORMAL\n            imeOptions = EditorInfo.IME_ACTION_GO\n',
+              ),
+              (
+                  '            textDirection = View.TEXT_DIRECTION_LTR\n            setSingleLine(true)\n',
+                  '            textDirection = View.TEXT_DIRECTION_FIRST_STRONG\n            setSingleLine(true)\n            setOnEditorActionListener { _, actionId, _ ->\n                if (actionId == EditorInfo.IME_ACTION_GO ||\n                    actionId == EditorInfo.IME_ACTION_SEARCH ||\n                    actionId == EditorInfo.IME_ACTION_DONE\n                ) {\n                    navigateFromAddressBar()\n                    true\n                } else {\n                    false\n                }\n            }\n',
+              ),
+              (
+                  '    private fun navigateFromAddressBar() {\n        val raw = addressBar.text?.toString().orEmpty().trim()\n        val candidate = when {\n            raw.contains("://") -> raw\n            raw.isNotBlank() -> "https://$raw"\n            else -> ""\n        }\n        navigateToCandidate(candidate)\n    }\n',
+                  '    private fun navigateFromAddressBar() {\n        val raw = addressBar.text?.toString().orEmpty()\n        val candidate = SearchInput.resolve(raw)\n        if (candidate.isBlank()) {\n            showHome()\n            return\n        }\n        navigateToCandidate(candidate)\n    }\n',
+              ),
+          ]
 
-          old_bar = '''        addressBar = EditText(this).apply {
-            hint = "הקלד כתובת אתר..."
-            setHintTextColor(textDimColor)
-            setTextColor(textColor)
-            textSize = 13.5f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-            textDirection = View.TEXT_DIRECTION_LTR
-            setSingleLine(true)
-            background = null
-            setPadding(dp(8), 0, dp(8), 0)
-        }
-'''
-          new_bar = '''        addressBar = EditText(this).apply {
-            hint = "חיפוש או כתובת אתר..."
-            setHintTextColor(textDimColor)
-            setTextColor(textColor)
-            textSize = 13.5f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_NORMAL
-            imeOptions = EditorInfo.IME_ACTION_GO
-            layoutDirection = View.LAYOUT_DIRECTION_LTR
-            textDirection = View.TEXT_DIRECTION_FIRST_STRONG
-            setSingleLine(true)
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == EditorInfo.IME_ACTION_GO ||
-                    actionId == EditorInfo.IME_ACTION_SEARCH ||
-                    actionId == EditorInfo.IME_ACTION_DONE
-                ) {
-                    navigateFromAddressBar()
-                    true
-                } else {
-                    false
-                }
-            }
-            background = null
-            setPadding(dp(8), 0, dp(8), 0)
-        }
-'''
-          assert old_bar in s
-          s = s.replace(old_bar, new_bar, 1)
-
-          old_nav = '''    private fun navigateFromAddressBar() {
-        val raw = addressBar.text?.toString().orEmpty().trim()
-        val candidate = when {
-            raw.contains("://") -> raw
-            raw.isNotBlank() -> "https://$raw"
-            else -> ""
-        }
-        navigateToCandidate(candidate)
-    }
-'''
-          new_nav = '''    private fun navigateFromAddressBar() {
-        val raw = addressBar.text?.toString().orEmpty()
-        val candidate = SearchInput.resolve(raw)
-        if (candidate.isBlank()) {
-            showHome()
-            return
-        }
-        navigateToCandidate(candidate)
-    }
-'''
-          assert old_nav in s
-          s = s.replace(old_nav, new_nav, 1)
+          for old, new in replacements:
+              if s.count(old) != 1:
+                  raise SystemExit(f'expected exactly one match, found {s.count(old)} for: {old[:80]!r}')
+              s = s.replace(old, new, 1)
 
           p.write_text(s)
           PY
