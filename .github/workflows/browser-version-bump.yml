@@ -1,0 +1,71 @@
+name: One-off browser version bump
+
+on:
+  push:
+    branches:
+      - release/browser-0.2.1
+    paths:
+      - '.github/workflows/browser-version-bump.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bump-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: release/browser-0.2.1
+
+      - name: Bump browser version and workflow expectations
+        run: |
+          set -euo pipefail
+          sed -i 's/versionCode = 2/versionCode = 3/' client/app/build.gradle.kts
+          sed -i 's/versionName = "0.2.0"/versionName = "0.2.1"/' client/app/build.gradle.kts
+          sed -i "s/versionCode='2'/versionCode='3'/g" .github/workflows/filtered-browser-apk.yml
+          sed -i "s/versionName='0.2.0'/versionName='0.2.1'/g" .github/workflows/filtered-browser-apk.yml
+          sed -i 's/filtered-browser-release-0.2.0/filtered-browser-release-0.2.1/g' .github/workflows/filtered-browser-apk.yml
+          grep -q 'versionCode = 3' client/app/build.gradle.kts
+          grep -q 'versionName = "0.2.1"' client/app/build.gradle.kts
+          test "$(grep -c "versionCode='3'" .github/workflows/filtered-browser-apk.yml)" -eq 2
+          test "$(grep -c "versionName='0.2.1'" .github/workflows/filtered-browser-apk.yml)" -eq 2
+          grep -q 'filtered-browser-release-0.2.1' .github/workflows/filtered-browser-apk.yml
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: 8.9
+
+      - name: Test build and verify 0.2.1
+        run: |
+          set -euo pipefail
+          (cd client && gradle testDebugUnitTest assembleDebug)
+          APK=client/app/build/outputs/apk/debug/app-debug.apk
+          BADGING="$($ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | head -n 1)"
+          echo "$BADGING"
+          grep -q "package: name='org.yehudikasher.browser'" <<<"$BADGING"
+          grep -q "versionCode='3'" <<<"$BADGING"
+          grep -q "versionName='0.2.1'" <<<"$BADGING"
+
+      - name: Commit verified version bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add client/app/build.gradle.kts .github/workflows/filtered-browser-apk.yml
+          git diff --cached --check
+          git commit -m "Bump filtered browser to 0.2.1"
+          git push origin HEAD:release/browser-0.2.1
