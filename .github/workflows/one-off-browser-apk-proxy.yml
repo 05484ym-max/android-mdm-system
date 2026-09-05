@@ -35,14 +35,11 @@ jobs:
         working-directory: backend
         run: npm ci
 
-      - name: Run browser filtering regression tests when present
+      - name: Run self-contained browser/image regression tests
         run: |
           set -euo pipefail
-          for f in backend/test-browser*.js backend/test-image*.js; do
-            [ -f "$f" ] || continue
-            echo "Running $f"
-            node "$f"
-          done
+          node backend/test-browser-classifier.js
+          node backend/test-image-moderator.js
 
       - name: Commit verified patch
         run: |
