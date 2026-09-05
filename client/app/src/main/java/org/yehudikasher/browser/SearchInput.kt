@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets
  * Resolves omnibox input without weakening the existing URL policy.
  *
  * - Explicit http/https URLs stay URLs.
- * - Host-like input (for example bankhapoalim.co.il) becomes https://...
+ * - Host-like input (including a path/query/fragment) becomes https://...
  * - Everything else becomes a strict Safe Search query.
  *
  * The resolved URL is still passed to UrlPolicy / remote classification by
@@ -30,7 +30,7 @@ object SearchInput {
             return raw
         }
 
-        if (looksLikeHost(raw)) {
+        if (looksLikeWebAddress(raw)) {
             return "https://$raw"
         }
 
@@ -38,13 +38,20 @@ object SearchInput {
         return SEARCH_ENDPOINT + encoded
     }
 
-    internal fun looksLikeHost(raw: String): Boolean {
+    internal fun looksLikeWebAddress(raw: String): Boolean {
         if (raw.any { it.isWhitespace() }) return false
-        if (raw.contains('/')) return false
-        if (raw.startsWith(".") || raw.endsWith(".")) return false
 
-        // Treat dotted hostnames as direct navigation. IP literals are still
-        // rejected later by UrlPolicy, so this helper does not create a bypass.
-        return raw.contains('.') && raw.length >= 3
+        val authority = raw
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringBefore('#')
+
+        if (authority.startsWith(".") || authority.endsWith(".")) return false
+        if (authority.length < 3) return false
+
+        // Treat dotted hostnames (with optional path/query/fragment) as direct
+        // navigation. IP literals are still rejected later by UrlPolicy, so
+        // this helper does not create a bypass.
+        return authority.contains('.')
     }
 }
