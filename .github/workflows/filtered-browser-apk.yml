@@ -78,8 +78,8 @@ jobs:
           BADGING="$($ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | head -n 1)"
           echo "$BADGING"
           grep -q "package: name='org.yehudikasher.browser'" <<<"$BADGING"
-          grep -q "versionCode='2'" <<<"$BADGING"
-          grep -q "versionName='0.2.0'" <<<"$BADGING"
+          grep -q "versionCode='3'" <<<"$BADGING"
+          grep -q "versionName='0.2.1'" <<<"$BADGING"
 
       - name: Upload verified browser APK
         uses: actions/upload-artifact@v4
@@ -172,8 +172,8 @@ jobs:
           BADGING="$($ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | head -n 1)"
           echo "$BADGING"
           grep -q "package: name='org.yehudikasher.browser'" <<<"$BADGING"
-          grep -q "versionCode='2'" <<<"$BADGING"
-          grep -q "versionName='0.2.0'" <<<"$BADGING"
+          grep -q "versionCode='3'" <<<"$BADGING"
+          grep -q "versionName='0.2.1'" <<<"$BADGING"
           unzip -l "$APK" | grep -E 'res/[^ ]*browser_icon\.png$'
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -p 4 "$APK"
 
@@ -184,6 +184,6 @@ jobs:
       - name: Upload signed release APK
         uses: actions/upload-artifact@v4
         with:
-          name: filtered-browser-release-0.2.0
+          name: filtered-browser-release-0.2.1
           path: client/app/build/outputs/apk/release/filtered-browser-release-signed.apk
           if-no-files-found: error
