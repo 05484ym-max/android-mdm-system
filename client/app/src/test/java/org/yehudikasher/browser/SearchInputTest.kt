@@ -10,7 +10,7 @@ class SearchInputTest {
     @Test
     fun `hebrew words become strict safe search query`() {
         assertEquals(
-            "https://safe.duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q=%D7%91%D7%A0%D7%A7+%D7%94%D7%A4%D7%95%D7%A2%D7%9C%D7%99%D7%9D",
+            "https://duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q=%D7%91%D7%A0%D7%A7+%D7%94%D7%A4%D7%95%D7%A2%D7%9C%D7%99%D7%9D",
             SearchInput.resolve("בנק הפועלים")
         )
     }
