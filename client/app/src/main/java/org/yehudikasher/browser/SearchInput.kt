@@ -8,13 +8,17 @@ import java.nio.charset.StandardCharsets
  *
  * - Explicit http/https URLs stay URLs.
  * - Host-like input (for example bankhapoalim.co.il) becomes https://...
- * - Everything else becomes a web search query.
+ * - Everything else becomes a strict Safe Search query.
  *
  * The resolved URL is still passed to UrlPolicy / remote classification by
  * MainActivity, so this helper never grants access by itself.
  */
 object SearchInput {
-    private const val SEARCH_ENDPOINT = "https://www.google.com/search?safe=active&q="
+    // DuckDuckGo's dedicated safe host forces Safe Search. We also explicitly
+    // request strict mode, Israel/Hebrew region, no automatic image loading,
+    // and no autocomplete to keep the search page lean and conservative.
+    private const val SEARCH_ENDPOINT =
+        "https://safe.duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q="
 
     fun resolve(rawInput: String): String {
         val raw = rawInput.trim()
@@ -37,7 +41,7 @@ object SearchInput {
     internal fun looksLikeHost(raw: String): Boolean {
         if (raw.any { it.isWhitespace() }) return false
         if (raw.contains('/')) return false
-        if (raw.startsWith("." ) || raw.endsWith(".")) return false
+        if (raw.startsWith(".") || raw.endsWith(".")) return false
 
         // Treat dotted hostnames as direct navigation. IP literals are still
         // rejected later by UrlPolicy, so this helper does not create a bypass.
