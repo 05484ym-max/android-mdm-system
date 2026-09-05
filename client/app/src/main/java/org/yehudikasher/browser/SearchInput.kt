@@ -14,11 +14,12 @@ import java.nio.charset.StandardCharsets
  * MainActivity, so this helper never grants access by itself.
  */
 object SearchInput {
-    // DuckDuckGo's dedicated safe host forces Safe Search. We also explicitly
-    // request strict mode, Israel/Hebrew region, no automatic image loading,
-    // and no autocomplete to keep the search page lean and conservative.
+    // Use DuckDuckGo's non-JavaScript HTML surface on the dedicated safe host.
+    // The safe host forces strict Safe Search, while the HTML surface avoids
+    // relying on the regular JS-heavy search page inside the hardened WebView.
+    // Extra conservative parameters keep the page lean and region-aware.
     private const val SEARCH_ENDPOINT =
-        "https://safe.duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q="
+        "https://safe.duckduckgo.com/html/?kp=1&kl=il-he&kc=-1&kac=-1&q="
 
     fun resolve(rawInput: String): String {
         val raw = rawInput.trim()
