@@ -10,16 +10,16 @@ import java.nio.charset.StandardCharsets
  * - Host-like input (including a path/query/fragment) becomes https://...
  * - Everything else becomes a strict Safe Search query.
  *
- * The generated search URL is intentionally constrained and is only granted a
- * local fast-path by UrlPolicy when every required strict-search parameter is
- * present with the expected value. Other DuckDuckGo URLs receive no bypass.
+ * The resolved URL is still passed to UrlPolicy / remote classification by
+ * MainActivity, so this helper never grants access by itself.
  */
 object SearchInput {
-    // Use DuckDuckGo's normal hostname with an explicit strict Safe Search
-    // parameter. This avoids relying on the dedicated safe subdomain, which
-    // can fail to resolve/load on some networks/WebView combinations.
+    // Use DuckDuckGo's non-JavaScript HTML surface on the dedicated safe host.
+    // The safe host forces strict Safe Search, while the HTML surface avoids
+    // relying on the regular JS-heavy search page inside the hardened WebView.
+    // Extra conservative parameters keep the page lean and region-aware.
     private const val SEARCH_ENDPOINT =
-        "https://duckduckgo.com/?kp=1&kl=il-he&kc=-1&kac=-1&q="
+        "https://safe.duckduckgo.com/html/?kp=1&kl=il-he&kc=-1&kac=-1&q="
 
     fun resolve(rawInput: String): String {
         val raw = rawInput.trim()
