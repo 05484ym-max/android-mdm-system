@@ -25,6 +25,8 @@ permissions:
 jobs:
   build-and-verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -87,6 +89,15 @@ jobs:
           name: filtered-browser-debug
           path: client/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Publish latest verified debug APK to release
+        if: github.ref == 'refs/heads/filtered-browser-client'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp client/app/build/outputs/apk/debug/app-debug.apk /tmp/yehudi-kasher-browser-latest.apk
+          gh release upload app-store-assets /tmp/yehudi-kasher-browser-latest.apk --clobber -R "${{ github.repository }}"
 
   signed-release:
     name: Build and verify signed release APK
