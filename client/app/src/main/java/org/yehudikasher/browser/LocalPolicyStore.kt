@@ -2,9 +2,13 @@ package org.yehudikasher.browser
 
 object LocalPolicyStore {
     fun createPolicy(): UrlPolicy {
-        // Search is no longer granted a whole-host allow rule. UrlPolicy has a
-        // narrow strict-search URL fast-path that only accepts the exact
-        // browser-generated DuckDuckGo query shape with Safe Search forced on.
+        val trustedSearch = listOf(
+            // Dedicated DuckDuckGo Safe Search host. The browser still filters
+            // every destination and image independently; this only guarantees
+            // the search results page itself can open without a classifier round trip.
+            LocalPolicyRule("safe.duckduckgo.com")
+        )
+
         val debugAllowlist = if (BuildConfig.DEBUG) {
             listOf(
                 LocalPolicyRule("example.com"),
@@ -14,6 +18,6 @@ object LocalPolicyStore {
             emptyList()
         }
 
-        return UrlPolicy(debugAllowlist)
+        return UrlPolicy(trustedSearch + debugAllowlist)
     }
 }
