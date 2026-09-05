@@ -24,10 +24,26 @@ class SearchInputTest {
     }
 
     @Test
+    fun `bare domain with path becomes https url`() {
+        assertEquals(
+            "https://bankhapoalim.co.il/he/account",
+            SearchInput.resolve("bankhapoalim.co.il/he/account")
+        )
+    }
+
+    @Test
     fun `explicit https url is preserved`() {
         assertEquals(
             "https://www.bankhapoalim.co.il/foo?q=1",
             SearchInput.resolve("https://www.bankhapoalim.co.il/foo?q=1")
+        )
+    }
+
+    @Test
+    fun `explicit http is preserved for UrlPolicy to reject`() {
+        assertEquals(
+            "http://bankhapoalim.co.il",
+            SearchInput.resolve("http://bankhapoalim.co.il")
         )
     }
 
@@ -37,9 +53,10 @@ class SearchInputTest {
     }
 
     @Test
-    fun `host detector rejects search text and accepts domain`() {
-        assertFalse(SearchInput.looksLikeHost("בנק הפועלים"))
-        assertFalse(SearchInput.looksLikeHost("bank hapoalim.co.il"))
-        assertTrue(SearchInput.looksLikeHost("bankhapoalim.co.il"))
+    fun `web address detector rejects search text and accepts domain paths`() {
+        assertFalse(SearchInput.looksLikeWebAddress("בנק הפועלים"))
+        assertFalse(SearchInput.looksLikeWebAddress("bank hapoalim.co.il"))
+        assertTrue(SearchInput.looksLikeWebAddress("bankhapoalim.co.il"))
+        assertTrue(SearchInput.looksLikeWebAddress("bankhapoalim.co.il/he/account"))
     }
 }
