@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -178,14 +179,26 @@ class MainActivity : AppCompatActivity() {
         }
 
         addressBar = EditText(this).apply {
-            hint = "הקלד כתובת אתר..."
+            hint = "חיפוש או כתובת אתר..."
             setHintTextColor(textDimColor)
             setTextColor(textColor)
             textSize = 13.5f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_NORMAL
+            imeOptions = EditorInfo.IME_ACTION_GO
             layoutDirection = View.LAYOUT_DIRECTION_LTR
-            textDirection = View.TEXT_DIRECTION_LTR
+            textDirection = View.TEXT_DIRECTION_FIRST_STRONG
             setSingleLine(true)
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_GO ||
+                    actionId == EditorInfo.IME_ACTION_SEARCH ||
+                    actionId == EditorInfo.IME_ACTION_DONE
+                ) {
+                    navigateFromAddressBar()
+                    true
+                } else {
+                    false
+                }
+            }
             background = null
             setPadding(dp(8), 0, dp(8), 0)
         }
@@ -315,11 +328,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun navigateFromAddressBar() {
-        val raw = addressBar.text?.toString().orEmpty().trim()
-        val candidate = when {
-            raw.contains("://") -> raw
-            raw.isNotBlank() -> "https://$raw"
-            else -> ""
+        val raw = addressBar.text?.toString().orEmpty()
+        val candidate = SearchInput.resolve(raw)
+        if (candidate.isBlank()) {
+            showHome()
+            return
         }
         navigateToCandidate(candidate)
     }
