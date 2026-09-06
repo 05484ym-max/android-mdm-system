@@ -1,0 +1,39 @@
+name: Patch news media download
+
+on:
+  push:
+    branches:
+      - fix/news-media-download-content-type
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, '[media-fix-done]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fix/news-media-download-content-type
+          fetch-depth: 0
+      - name: Apply media fix
+        run: python3 .github/patch-news-media-download.py
+      - name: Verify backend syntax
+        run: |
+          node --check backend/index.js
+          node --check backend/apkStorage.js
+      - name: Run customer updates tests
+        run: npm test --prefix backend -- --runInBand || npm test --prefix backend
+      - name: Commit checked media fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/index.js backend/apkStorage.js
+          if git diff --cached --quiet; then
+            echo 'No media fix changes to commit'
+          else
+            git commit -m 'Fix news media delivery content type [media-fix-done]'
+            git push origin HEAD:fix/news-media-download-content-type
+          fi
