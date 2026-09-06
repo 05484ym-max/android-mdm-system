@@ -106,3 +106,7 @@
   font-size: .78rem; font-weight: 700; color: var(--accent); margin-bottom: 8px;
   overflow-wrap: anywhere;
 }
+
+/* WhatsApp Guard admin controls */
+.whatsapp-guard-admin .toggle-btn.wa-on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.whatsapp-guard-admin .toggle-btn:disabled{opacity:.55;cursor:wait}

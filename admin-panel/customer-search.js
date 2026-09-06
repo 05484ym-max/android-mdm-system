@@ -52,6 +52,7 @@
     const pending = Array.isArray(d.pendingCommands) ? d.pendingCommands : [];
     const history = Array.isArray(d.commandHistory) ? d.commandHistory : [];
     const deviceStatus = d.status || {};
+    const wa = p.whatsappGuard || { blockStatuses: false, blockChannels: false, hideProfilePhotos: false };
     const lastCommands = history.slice(-5).reverse();
 
     panel.innerHTML = `
@@ -74,6 +75,16 @@
         <div class="unified-info-card"><span>מצב קיוסק</span><strong>${p.kioskEnabled ? 'פעיל' : 'כבוי'}</strong></div>
       </div>
 
+      <div class="unified-profile-section whatsapp-guard-admin">
+        <h3>🟢 הגנת WhatsApp</h3>
+        <div class="unified-command-summary">כל חסימה נשלטת בנפרד ומסתנכרנת למכשיר.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+          <button type="button" class="toggle-btn ${wa.blockStatuses ? 'wa-on' : ''}" data-wa-key="blockStatuses">סטטוסים: ${wa.blockStatuses ? 'חסום' : 'פתוח'}</button>
+          <button type="button" class="toggle-btn ${wa.blockChannels ? 'wa-on' : ''}" data-wa-key="blockChannels">ערוצים: ${wa.blockChannels ? 'חסום' : 'פתוח'}</button>
+          <button type="button" class="toggle-btn ${wa.hideProfilePhotos ? 'wa-on' : ''}" data-wa-key="hideProfilePhotos">תמונות פרופיל: ${wa.hideProfilePhotos ? 'מוסתר' : 'גלוי'}</button>
+        </div>
+      </div>
+
       <div class="unified-profile-section">
         <h3>אפליקציות מותרות (${apps.length})</h3>
         <div class="unified-chip-list">${apps.length ? apps.map(a => `<span class="app-chip">${esc(a)}</span>`).join('') : '<span class="no-apps">אין אפליקציות מוגדרות</span>'}</div>
@@ -91,6 +102,32 @@
       </div>
     `;
     panel.style.display = 'block';
+
+    panel.querySelectorAll('[data-wa-key]').forEach(btn => btn.addEventListener('click', async e => {
+      const key = e.currentTarget.getAttribute('data-wa-key');
+      const next = {
+        blockStatuses: Boolean(wa.blockStatuses),
+        blockChannels: Boolean(wa.blockChannels),
+        hideProfilePhotos: Boolean(wa.hideProfilePhotos),
+      };
+      next[key] = !next[key];
+      panel.querySelectorAll('[data-wa-key]').forEach(x => x.disabled = true);
+      try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(d.deviceId)}/policy/whatsapp-guard`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(next),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        const idx = devices.findIndex(x => x && x.deviceId === d.deviceId);
+        if (idx >= 0) devices[idx] = body;
+        render(d.deviceId);
+      } catch (err) {
+        alert('שמירת הגנת WhatsApp נכשלה: ' + (err && err.message ? err.message : err));
+        panel.querySelectorAll('[data-wa-key]').forEach(x => x.disabled = false);
+      }
+    }));
 
     panel.querySelector('[data-unified-close]')?.addEventListener('click', () => {
       panel.style.display = 'none';

@@ -216,11 +216,17 @@ const DEFAULT_SYNC_INTERVAL_MINUTES = 60;
 
 /** Fills in policy defaults so older records keep working. */
 function normalizePolicy(policy) {
+  const whatsappGuard = policy && policy.whatsappGuard;
   return {
     allowedApps: (policy && policy.allowedApps) || [],
     kioskEnabled: Boolean(policy && policy.kioskEnabled),
     syncIntervalMinutes:
       (policy && policy.syncIntervalMinutes) || DEFAULT_SYNC_INTERVAL_MINUTES,
+    whatsappGuard: {
+      blockStatuses: Boolean(whatsappGuard && whatsappGuard.blockStatuses),
+      blockChannels: Boolean(whatsappGuard && whatsappGuard.blockChannels),
+      hideProfilePhotos: Boolean(whatsappGuard && whatsappGuard.hideProfilePhotos),
+    },
   };
 }
 
@@ -1438,6 +1444,28 @@ app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, r
   }
   const policy = normalizePolicy(device.policy);
   policy.kioskEnabled = enabled;
+  res.json(await savePolicyAndWake(device, policy));
+}));
+
+// WhatsApp Guard is part of the managed DPC policy, but each protection can
+// be controlled independently. The server validates every field instead of
+// trusting the admin UI and wakes the device after the JSON policy is saved.
+app.post('/api/devices/:deviceId/policy/whatsapp-guard', requireAdmin, wrap(async (req, res) => {
+  const body = req.body || {};
+  const keys = ['blockStatuses', 'blockChannels', 'hideProfilePhotos'];
+  if (!keys.every(key => typeof body[key] === 'boolean')) {
+    return res.status(400).json({ error: 'all WhatsApp Guard fields must be boolean' });
+  }
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) {
+    return res.status(404).json({ error: 'device not found' });
+  }
+  const policy = normalizePolicy(device.policy);
+  policy.whatsappGuard = {
+    blockStatuses: body.blockStatuses,
+    blockChannels: body.blockChannels,
+    hideProfilePhotos: body.hideProfilePhotos,
+  };
   res.json(await savePolicyAndWake(device, policy));
 }));
 
