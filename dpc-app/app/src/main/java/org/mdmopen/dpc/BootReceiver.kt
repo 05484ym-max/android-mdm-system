@@ -13,5 +13,7 @@ class BootReceiver : BroadcastReceiver() {
         UpdateCheckScheduler.scheduleIfNeeded(context)
         DnsFailSafeScheduler.scheduleIfNeeded(context)
         DnsFailSafeScheduler.scheduleImmediateCheck(context)
+        WhatsAppGuardWatchdogScheduler.reconcileSchedule(context)
+        WhatsAppGuardWatchdogScheduler.scheduleImmediateCheck(context)
     }
 }

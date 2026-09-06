@@ -14,6 +14,7 @@ data class Policy(
     val kioskEnabled: Boolean,
     val syncIntervalMinutes: Int,
     val fullOpen: Boolean = false,
+    val whatsappGuard: WhatsAppGuardPolicy = WhatsAppGuardPolicy(),
 )
 
 /** Server-authoritative DNS policy - see Config.setDnsPolicy(). desiredProviderHost
@@ -125,6 +126,7 @@ class ApiClient(
 
         val policyJson = json.getJSONObject("policy")
         val apps = policyJson.optJSONArray("allowedApps") ?: JSONArray()
+        val whatsappGuardJson = policyJson.optJSONObject("whatsappGuard")
         val policy = Policy(
             allowedApps = (0 until apps.length()).map { apps.getString(it) },
             kioskEnabled = policyJson.optBoolean("kioskEnabled", false),
@@ -133,6 +135,11 @@ class ApiClient(
                 Config.DEFAULT_SYNC_MINUTES,
             ),
             fullOpen = policyJson.optBoolean("fullOpen", false),
+            whatsappGuard = WhatsAppGuardPolicy(
+                blockStatuses = whatsappGuardJson?.optBoolean("blockStatuses", false) ?: false,
+                blockChannels = whatsappGuardJson?.optBoolean("blockChannels", false) ?: false,
+                hideProfilePhotos = whatsappGuardJson?.optBoolean("hideProfilePhotos", false) ?: false,
+            ),
         )
 
         val queued = json.optJSONArray("commands") ?: JSONArray()

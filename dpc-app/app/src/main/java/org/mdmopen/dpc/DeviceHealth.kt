@@ -10,15 +10,8 @@ import org.json.JSONObject
 
 /**
  * Collects the device-health fields reported on every sync, and separately
- * persists the outcome of the last AutoUpdater attempt (recorded in
- * AutoUpdater.kt / UpdateInstallReceiver.kt) so it can be included on the
- * *next* sync - the update check and the sync that reports it are two
- * separate round trips.
- *
- * Everything collected here is device/hardware metadata already visible to
- * any app with no special permission: battery percentage, free storage
- * space, OS/build info, and this app's own version. Nothing about the
- * customer - no location, no contacts, no files, no personal content.
+ * persists the outcome of the last AutoUpdater attempt so it can be included
+ * on the next sync.
  */
 object DeviceHealth {
 
@@ -28,8 +21,6 @@ object DeviceHealth {
     private const val KEY_LAST_UPDATE_ERROR = "last_update_error"
     private const val KEY_NO_LAUNCHER_CANDIDATES = "no_launcher_dry_run_candidates"
 
-    /** Called from AutoUpdater/UpdateInstallReceiver once an update attempt
-     * has an outcome. status should be one of "SUCCESS", "FAILED", "SKIPPED". */
     fun recordUpdateResult(context: Context, status: String, version: Long?, error: String?) {
         val editor = prefs(context).edit()
         editor.putString(KEY_LAST_UPDATE_STATUS, status)
@@ -40,14 +31,6 @@ object DeviceHealth {
         editor.apply()
     }
 
-    /**
-     * Called from PolicySync right after PolicyEnforcer.apply() so the *next*
-     * sync's health payload can report this cycle's DRY-RUN result - same
-     * one-cycle-behind pattern as recordUpdateResult() above, since apply()
-     * always runs after this sync's own health payload was already sent.
-     * Always overwrites (never accumulates) so a package that got approved
-     * or gained a launcher since the last cycle stops being reported.
-     */
     fun recordNoLauncherDryRun(context: Context, candidates: List<NoLauncherCandidate>) {
         val array = JSONArray()
         candidates.forEach { candidate ->
@@ -62,11 +45,14 @@ object DeviceHealth {
 
     /** Builds the JSON body reported on every sync. */
     fun collect(context: Context, isDeviceOwner: Boolean): JSONObject {
+        val guard = WhatsAppGuardConfig.load(context)
         val json = JSONObject()
             .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
             .put("manufacturer", Build.MANUFACTURER)
             .put("androidVersion", Build.VERSION.RELEASE)
             .put("isDeviceOwner", isDeviceOwner)
+            .put("whatsappGuardRequested", guard.enabled)
+            .put("whatsappGuardAccessibilityEnabled", WhatsAppGuardProtection.accessibilityEnabled(context))
 
         appVersion(context)?.let { (code, name) ->
             json.put("currentVersionCode", code)
@@ -101,10 +87,6 @@ object DeviceHealth {
         json.put("lastRollbackAt", dns.lastRollbackAt)
         json.put("failureReason", dns.failureReason)
         json.put("previousDnsMode", dns.previousDnsMode?.name)
-        // Only present when the customer flipped the DNS switch locally and
-        // the server hasn't confirmed it yet (see Config.setDnsPendingCustomerRequest) -
-        // absent on every other sync, same optional-field convention as the
-        // rest of this file.
         Config.dnsPendingCustomerRequest(context)?.let { json.put("customerDnsToggleRequest", it) }
 
         return json

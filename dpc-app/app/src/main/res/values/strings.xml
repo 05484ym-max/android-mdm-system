@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MDM DPC</string>
+    <string name="whatsapp_guard_accessibility_description">מגן WhatsApp של יהודי כשר: חסימת סטטוסים, ערוצים ותמונות פרופיל לפי מדיניות המנהל.</string>
 </resources>

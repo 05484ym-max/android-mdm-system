@@ -1,0 +1,37 @@
+name: Verify MDM WhatsApp Guard
+
+on:
+  push:
+    branches: [ feature/whatsapp-guard-mdm ]
+    paths:
+      - 'dpc-app/**'
+      - 'backend/index.js'
+      - 'admin-panel/customer-search.js'
+      - 'admin-panel/news.css'
+      - '.github/workflows/whatsapp-guard-mdm-verify.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install SDK
+        run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Compile DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Check backend syntax
+        run: node --check backend/index.js
+      - name: Check admin JavaScript
+        run: node --check admin-panel/customer-search.js
