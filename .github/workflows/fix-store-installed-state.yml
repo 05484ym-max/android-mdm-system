@@ -2,14 +2,16 @@ name: Fix store installed-state detection
 
 on:
   push:
-    branches: [ "fix/store-installed-state" ]
+    branches:
+      - fix/store-installed-state
+    paths:
+      - .github/workflows/fix-store-installed-state.yml
 
 permissions:
   contents: write
 
 jobs:
   patch-and-verify:
-    if: "${{ !contains(github.event.head_commit.message, '[store-installed-fixed]') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,5 +106,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
-          git commit -m "Fix app store installed-state detection [store-installed-fixed]"
+          git commit -m "Fix app store installed-state detection"
           git push origin HEAD:fix/store-installed-state
