@@ -1,0 +1,29 @@
+name: Fix full-open CodeQL limiter
+
+on:
+  push:
+    branches: [feature/full-open-mode]
+    paths:
+      - '.github/workflows/fix-full-open-codeql.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply limiter fix
+        run: python3 .github/scripts/fix-full-open-codeql.py
+      - name: Verify syntax and limiter ordering
+        run: |
+          node --check backend/index.js
+          grep -q "fullOpenPreAuthLimiter, requireAdmin, fullOpenAdminLimiter" backend/index.js
+      - name: Commit verified fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/index.js
+          git commit -m "Harden full-open route rate limiting"
+          git push origin HEAD:feature/full-open-mode
