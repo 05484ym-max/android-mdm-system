@@ -296,6 +296,9 @@ function subscriptionAccess(device, now = new Date()) {
     overrideActive,
     overridePermanent: permanent,
     overrideUntil: permanent ? null : (temporary ? until.toISOString() : null),
+    subscriptionExpiryDate: device.subscription && device.subscription.expiryDate
+      ? device.subscription.expiryDate
+      : null,
     source: subscriptionActive ? 'SUBSCRIPTION' : permanent ? 'PERMANENT' : temporary ? 'TEMPORARY' : 'NONE',
   };
 }
@@ -2253,8 +2256,75 @@ app.post('/api/browser/image', wrap(async (req, res) => {
 // this response carries no per-device state at all, so the same response
 // is valid for every device and safely cacheable at any layer in front of
 // this server.
+function subscriptionNewsUpdate(device, now = new Date()) {
+  const rawExpiry = device.subscription && device.subscription.expiryDate;
+  if (!rawExpiry) return null;
+  const expiry = new Date(rawExpiry);
+  if (Number.isNaN(expiry.getTime())) return null;
+
+  const expiryKey = expiry.toISOString().slice(0, 10);
+  const [year, month, day] = expiryKey.split('-');
+  const expiryLabel = `${day}/${month}/${year}`;
+  const access = subscriptionAccess(device, now);
+  const diffMs = expiry.getTime() - now.getTime();
+  const daysRemaining = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+
+  if (daysRemaining <= 0) {
+    if (access.overrideActive) {
+      const overrideText = access.overridePermanent
+        ? 'פתיחת החסימה של המנהל מוגדרת כרגע לתמיד.'
+        : `פתיחת החסימה הזמנית של המנהל פעילה עד ${new Date(access.overrideUntil).toLocaleString('he-IL')}.`;
+      return {
+        id: `subscription-expired-override-${expiryKey}`,
+        title: 'המנוי פג – החנות פתוחה בהרשאת מנהל',
+        body: `המנוי פג בתאריך ${expiryLabel}. ${overrideText} לאחר סיום ההרשאה חנות האפליקציות והעדכונים תינעל עד לחידוש המנוי. שאר המכשיר ימשיך לעבוד כרגיל.`,
+        pinned: true,
+        publishedAt: expiry.toISOString(),
+        mediaType: null,
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaSizeBytes: null,
+      };
+    }
+    return {
+      id: `subscription-expired-${expiryKey}`,
+      title: 'המנוי פג – חנות האפליקציות נעולה',
+      body: `המנוי פג בתאריך ${expiryLabel}. חנות האפליקציות והעדכונים נעולה עד לחידוש המנוי. שאר המכשיר והאפליקציות שכבר מותקנות ממשיכים לעבוד כרגיל.`,
+      pinned: true,
+      publishedAt: expiry.toISOString(),
+      mediaType: null,
+      mediaUrl: null,
+      mediaMimeType: null,
+      mediaSizeBytes: null,
+    };
+  }
+
+  if (daysRemaining > 30) return null;
+
+  // Four deterministic pre-expiry reminder ids: 30-22, 21-15, 14-8, 7-1 days.
+  // The id changes only when a new weekly bucket starts, so the device's existing
+  // read-id mechanism naturally shows one new unread News badge per week.
+  const weeklyBucket = daysRemaining >= 22 ? 4 : daysRemaining >= 15 ? 3 : daysRemaining >= 8 ? 2 : 1;
+  return {
+    id: `subscription-renewal-${expiryKey}-w${weeklyBucket}`,
+    title: 'תזכורת לחידוש המנוי',
+    body: `המנוי שלך יפוג בתאריך ${expiryLabel}. אם המנוי לא יחודש עד לתאריך זה, חנות האפליקציות והעדכונים תינעל עד לחידוש המנוי. שאר המכשיר והאפליקציות שכבר מותקנות ימשיכו לעבוד כרגיל.`,
+    pinned: true,
+    publishedAt: now.toISOString(),
+    mediaType: null,
+    mediaUrl: null,
+    mediaMimeType: null,
+    mediaSizeBytes: null,
+  };
+}
+
 app.get('/api/devices/:deviceId/updates', requireDevice, wrap(async (req, res) => {
-  res.json(await db.listPublishedCustomerUpdatesForDevice(UPDATE_LIST_LIMIT_FOR_DEVICE));
+  const updates = await db.listPublishedCustomerUpdatesForDevice(UPDATE_LIST_LIMIT_FOR_DEVICE);
+  const subscriptionUpdate = subscriptionNewsUpdate(req.device);
+  if (!subscriptionUpdate) return res.json(updates);
+  // Subscription reminder is device-specific and should always be visible at the
+  // top. Keep the response bounded to the same total size as before.
+  res.json([subscriptionUpdate, ...updates].slice(0, UPDATE_LIST_LIMIT_FOR_DEVICE));
 }));
 
 app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,

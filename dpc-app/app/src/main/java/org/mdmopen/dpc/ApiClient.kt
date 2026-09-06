@@ -51,11 +51,21 @@ data class CatalogApp(
     val apkSizeBytes: Long? = null,
 )
 
+data class SubscriptionAccess(
+    val allowed: Boolean,
+    val subscriptionActive: Boolean,
+    val overrideActive: Boolean,
+    val overridePermanent: Boolean,
+    val overrideUntil: String?,
+    val subscriptionExpiryDate: String?,
+)
+
 data class SyncResult(
     val policy: Policy,
     val catalog: List<CatalogApp>,
     val commands: List<QueuedCommand>,
     val dns: DnsPolicy,
+    val subscriptionAccess: SubscriptionAccess,
 )
 
 data class EnrollResult(val deviceId: String, val deviceToken: String)
@@ -163,7 +173,20 @@ class ApiClient(
             desiredProviderFilters = dnsJson?.optBoolean("desiredProviderFilters", false) ?: false,
         )
 
-        return SyncResult(policy, catalog, commands, dns)
+        val accessJson = json.optJSONObject("subscriptionAccess")
+        val subscriptionAccess = SubscriptionAccess(
+            // Backward-compatible fail-open for the store only: an older server
+            // that does not send this field must not suddenly lock an existing
+            // customer's store merely because the app updated first.
+            allowed = accessJson?.optBoolean("allowed", true) ?: true,
+            subscriptionActive = accessJson?.optBoolean("subscriptionActive", true) ?: true,
+            overrideActive = accessJson?.optBoolean("overrideActive", false) ?: false,
+            overridePermanent = accessJson?.optBoolean("overridePermanent", false) ?: false,
+            overrideUntil = accessJson?.let { if (it.isNull("overrideUntil")) null else it.optString("overrideUntil", null) },
+            subscriptionExpiryDate = accessJson?.let { if (it.isNull("subscriptionExpiryDate")) null else it.optString("subscriptionExpiryDate", null) },
+        )
+
+        return SyncResult(policy, catalog, commands, dns, subscriptionAccess)
     }
 
     fun reportCommandResult(

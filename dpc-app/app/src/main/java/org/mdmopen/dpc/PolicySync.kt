@@ -42,6 +42,7 @@ object PolicySync {
         // the meantime) - result.dns above already reflects the outcome, so
         // there is nothing left to retry.
         Config.setDnsPendingCustomerRequest(context, null)
+        Config.setSubscriptionAccess(context, result.subscriptionAccess)
 
         // Server-desired DNS state applied first (mirrors PolicyEnforcer.apply()
         // below for apps), then the fully-local fail-safe watchdog runs - see
