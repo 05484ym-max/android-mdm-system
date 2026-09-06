@@ -20,9 +20,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true">
 
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -42,36 +40,32 @@
             </intent-filter>
         </activity>
 
-        <service
-            android:name=".SyncJobService"
-            android:permission="android.permission.BIND_JOB_SERVICE"
-            android:exported="false" />
+        <service android:name=".SyncJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
+        <service android:name=".UpdateCheckJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
+        <service android:name=".DnsFailSafeJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false" />
 
-        <service
-            android:name=".UpdateCheckJobService"
-            android:permission="android.permission.BIND_JOB_SERVICE"
-            android:exported="false" />
-
-        <service
-            android:name=".DnsFailSafeJobService"
-            android:permission="android.permission.BIND_JOB_SERVICE"
-            android:exported="false" />
-
-        <service
-            android:name=".MdmMessagingService"
-            android:exported="false">
+        <service android:name=".MdmMessagingService" android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
 
-        <receiver
-            android:name=".InstallResultReceiver"
-            android:exported="false" />
+        <service
+            android:name=".WhatsAppGuardService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false"
+            android:label="יהודי כשר — הגנת WhatsApp">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/whatsapp_guard_accessibility" />
+        </service>
 
-        <receiver
-            android:name=".BootReceiver"
-            android:exported="true">
+        <receiver android:name=".InstallResultReceiver" android:exported="false" />
+
+        <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
@@ -81,51 +75,34 @@
             android:name=".DpcDeviceAdminReceiver"
             android:permission="android.permission.BIND_DEVICE_ADMIN"
             android:exported="true">
-            <meta-data
-                android:name="android.app.device_admin"
-                android:resource="@xml/device_admin_receiver" />
+            <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin_receiver" />
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
 
-    
-        <activity
-            android:name=".AppStoreActivity"
-            android:exported="false" />
+        <activity android:name=".AppStoreActivity" android:exported="false" />
+        <activity android:name=".CustomerActivity" android:exported="false" />
 
-    
-        <activity
-            android:name=".CustomerActivity"
-            android:exported="false" />
-
-    
         <activity
             android:name=".ProvisioningActivity"
             android:exported="true"
             android:permission="android.permission.BIND_DEVICE_ADMIN">
-
             <intent-filter>
                 <action android:name="android.app.action.GET_PROVISIONING_MODE" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-
             <intent-filter>
                 <action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-
         </activity>
 
-
-        <receiver
-            android:name=".UpdateInstallReceiver"
-            android:exported="false">
+        <receiver android:name=".UpdateInstallReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
     </application>
-
 </manifest>
