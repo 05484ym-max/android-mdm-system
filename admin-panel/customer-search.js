@@ -211,8 +211,13 @@
 (function () {
   'use strict';
 
-  const originalRenderDeviceDetail = window.renderDeviceDetail;
-  if (typeof originalRenderDeviceDetail !== 'function') return;
+  let detailHookInstalled = false;
+
+  function installDetailHook() {
+    if (detailHookInstalled) return true;
+    const originalRenderDeviceDetail = window.renderDeviceDetail;
+    if (typeof originalRenderDeviceDetail !== 'function') return false;
+    detailHookInstalled = true;
 
   function detailWaState(d) {
     const p = d && d.policy ? d.policy : {};
@@ -281,8 +286,18 @@
     }));
   }
 
-  window.renderDeviceDetail = function (deviceId) {
-    originalRenderDeviceDetail(deviceId);
-    injectWhatsAppGuard(deviceId);
-  };
+    window.renderDeviceDetail = function (deviceId) {
+      originalRenderDeviceDetail(deviceId);
+      injectWhatsAppGuard(deviceId);
+    };
+    return true;
+  }
+
+  if (!installDetailHook()) {
+    const installTimer = setInterval(() => {
+      if (installDetailHook()) clearInterval(installTimer);
+    }, 50);
+    setTimeout(() => clearInterval(installTimer), 10000);
+    window.addEventListener('load', installDetailHook, { once: true });
+  }
 })();
