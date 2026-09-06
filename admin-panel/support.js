@@ -10,6 +10,26 @@
   const fmt = iso => iso ? new Date(iso).toLocaleString('he-IL') : '—';
   const statusLabel = status => status === 'RESOLVED' ? 'טופל' : status === 'IN_PROGRESS' ? 'בטיפול' : 'חדש';
 
+  function conversationMarkup(t) {
+    const customerBubble = `<div class="support-chat-row customer">
+      <div class="support-bubble customer-bubble">
+        <div class="support-bubble-sender">לקוח</div>
+        <div class="support-bubble-text">${esc(t.message)}</div>
+        <div class="support-bubble-time">${esc(fmt(t.createdAt))}</div>
+      </div>
+    </div>`;
+    const adminBubble = t.adminReply
+      ? `<div class="support-chat-row admin">
+          <div class="support-bubble admin-bubble">
+            <div class="support-bubble-sender">תמיכה — יהודי כשר</div>
+            <div class="support-bubble-text">${esc(t.adminReply)}</div>
+            <div class="support-bubble-time">${esc(fmt(t.updatedAt))}</div>
+          </div>
+        </div>`
+      : '';
+    return `<div class="support-chat" dir="rtl">${customerBubble}${adminBubble}</div>`;
+  }
+
   function render() {
     const filter = filterEl.value;
     const shown = filter === 'all' ? tickets : tickets.filter(t => t.status === filter);
@@ -28,21 +48,21 @@
         <div class="support-ticket-head">
           <div>
             <div class="support-ticket-title">${esc(t.subject)}</div>
-            <div class="support-ticket-meta">${esc(customer)}${phone} · מכשיר ${esc(t.deviceId)} · ${esc(fmt(t.createdAt))}</div>
+            <div class="support-ticket-meta">${esc(customer)}${phone} · מכשיר ${esc(t.deviceId)}</div>
           </div>
           <strong>${statusLabel(t.status)}</strong>
         </div>
-        <div class="support-ticket-message">${esc(t.message)}</div>
+        ${conversationMarkup(t)}
         <div class="support-ticket-controls">
           <select class="login-input" data-support-status>
             <option value="OPEN"${t.status === 'OPEN' ? ' selected' : ''}>חדש</option>
             <option value="IN_PROGRESS"${t.status === 'IN_PROGRESS' ? ' selected' : ''}>בטיפול</option>
             <option value="RESOLVED"${t.status === 'RESOLVED' ? ' selected' : ''}>טופל</option>
           </select>
-          <textarea class="login-input" data-support-reply maxlength="5000" placeholder="תשובה ללקוח...">${esc(t.adminReply || '')}</textarea>
+          <textarea class="login-input support-reply-compose" data-support-reply maxlength="5000" placeholder="כתבו תשובה ללקוח...">${esc(t.adminReply || '')}</textarea>
         </div>
         <div class="support-ticket-actions">
-          <button class="add-app-btn" data-support-save>שמור ועדכן לקוח</button>
+          <button class="add-app-btn" data-support-save>שלח תשובה ועדכן</button>
           <button class="toggle-btn" data-support-customer="${esc(t.deviceId)}">פתח לקוח</button>
         </div>
       </div>`;
