@@ -117,7 +117,7 @@
     const detail = document.getElementById('detailContent');
     if (!detail || !detail.children.length) return;
     if (detail.querySelector('[data-sub-unblock-card]')) return;
-    const deviceId = window.currentDetailDeviceId || null;
+    const deviceId = window.__currentDetailDeviceId || null;
     if (!deviceId) return;
     const sections = [...detail.querySelectorAll('.detail-section')];
     const subscription = sections.find(s => s.querySelector('h3')?.textContent.trim() === 'מנוי');

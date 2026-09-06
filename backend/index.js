@@ -280,6 +280,26 @@ function fetchIconFromUrl(url, redirectsLeft) {
   });
 }
 
+function subscriptionAccess(device, now = new Date()) {
+  const subscriptionActive = Boolean(
+    device.subscription &&
+    device.subscription.expiryDate &&
+    new Date(device.subscription.expiryDate) > now
+  );
+  const permanent = device.subscriptionUnblockPermanent === true;
+  const until = device.subscriptionUnblockUntil ? new Date(device.subscriptionUnblockUntil) : null;
+  const temporary = Boolean(until && !Number.isNaN(until.getTime()) && until > now);
+  const overrideActive = permanent || temporary;
+  return {
+    allowed: subscriptionActive || overrideActive,
+    subscriptionActive,
+    overrideActive,
+    overridePermanent: permanent,
+    overrideUntil: permanent ? null : (temporary ? until.toISOString() : null),
+    source: subscriptionActive ? 'SUBSCRIPTION' : permanent ? 'PERMANENT' : temporary ? 'TEMPORARY' : 'NONE',
+  };
+}
+
 function publicDevice(device) {
   const { authTokenHash, ...rest } = device;
   let subscriptionStatus = 'none';
@@ -290,6 +310,7 @@ function publicDevice(device) {
   return {
     ...rest,
     subscriptionStatus,
+    subscriptionAccess: subscriptionAccess(device),
     policy: normalizePolicy(device.policy),
     pendingCommands: device.pendingCommands || [],
     commandHistory: device.commandHistory || [],
@@ -815,6 +836,54 @@ app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, r
     startDate: startDate.toISOString(),
     expiryDate: expiryDate.toISOString(),
   });
+  res.json(publicDevice(updated));
+}));
+
+const subscriptionUnblockAdminLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many subscription unblock changes; try again shortly' },
+});
+
+app.post('/api/devices/:deviceId/subscription-unblock', subscriptionUnblockAdminLimiter, requireAdmin, wrap(async (req, res) => {
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) return res.status(404).json({ error: 'device not found' });
+
+  const mode = typeof req.body.mode === 'string' ? req.body.mode : '';
+  let until = null;
+  let permanent = false;
+  const now = new Date();
+
+  if (mode === '24h') {
+    until = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  } else if (mode === 'days') {
+    const days = Number(req.body.days);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      return res.status(400).json({ error: 'days must be an integer between 1 and 3650' });
+    }
+    until = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+  } else if (mode === 'until') {
+    if (typeof req.body.until !== 'string') return res.status(400).json({ error: 'until is required' });
+    until = new Date(req.body.until);
+    const max = new Date(now);
+    max.setFullYear(max.getFullYear() + 10);
+    if (Number.isNaN(until.getTime()) || until <= now || until > max) {
+      return res.status(400).json({ error: 'until must be a future date within 10 years' });
+    }
+  } else if (mode === 'permanent') {
+    permanent = true;
+  } else if (mode !== 'clear') {
+    return res.status(400).json({ error: 'invalid mode' });
+  }
+
+  const updated = await db.setSubscriptionUnblock(
+    req.params.deviceId,
+    until ? until.toISOString() : null,
+    permanent,
+  );
+  await push.wake(device.pushToken);
   res.json(publicDevice(updated));
 }));
 
@@ -1874,7 +1943,7 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
     desiredProviderFilters: DNS_PROVIDER_FILTERS_CONTENT,
   };
 
-  res.json({ policy, catalog, commands, dns });
+  res.json({ policy, catalog, commands, dns, subscriptionAccess: subscriptionAccess(req.device) });
 }));
 
 // ---------- filtered browser automatic domain classification ----------

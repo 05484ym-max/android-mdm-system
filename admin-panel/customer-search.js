@@ -38,7 +38,7 @@
   function render(deviceId) {
     const panel = ensurePanel();
     if (!panel) return;
-    const devices = Array.isArray(window.allDevices) ? window.allDevices : [];
+    const devices = Array.isArray(window.__allDevices) ? window.__allDevices : [];
     const d = devices.find(x => x && x.deviceId === deviceId);
     if (!d) {
       panel.style.display = 'none';
@@ -111,7 +111,7 @@
     const q = String(value || '').trim().toLowerCase();
     if (!q) return [];
     const digits = q.replace(/\D/g, '');
-    return (Array.isArray(window.allDevices) ? window.allDevices : []).filter(d => {
+    return (Array.isArray(window.__allDevices) ? window.__allDevices : []).filter(d => {
       const name = String(d.customerName || '').toLowerCase();
       const number = String(d.customerNumber || '').toLowerCase();
       const id = String(d.deviceId || '').toLowerCase();

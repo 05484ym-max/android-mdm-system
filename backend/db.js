@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS devices (
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS push_token TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_name TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_number TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS subscription_unblock_until TIMESTAMPTZ;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS subscription_unblock_permanent BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS apps_catalog (
   package_name TEXT PRIMARY KEY,
@@ -320,6 +322,8 @@ function toDevice(row, pendingCommands = [], commandHistory = []) {
     pushToken: row.push_token,
     customerName: row.customer_name,
     customerNumber: row.customer_number,
+    subscriptionUnblockUntil: row.subscription_unblock_until ? row.subscription_unblock_until.toISOString() : null,
+    subscriptionUnblockPermanent: row.subscription_unblock_permanent === true,
     // Just the server-owned desired-state slice, needed by the /sync route to
     // build the "dns" object it sends down - the device-reported half (mode,
     // actual, fail-safe state...) lives only in the health-dashboard shape
@@ -345,7 +349,7 @@ async function getDevice(deviceId) {
 async function listDevices() {
   const { rows } = await pool.query(
     `SELECT device_id, registered_at, subscription, policy, status,
-            customer_name, customer_number
+            customer_name, customer_number, subscription_unblock_until, subscription_unblock_permanent
        FROM devices
       ORDER BY registered_at`,
   );
@@ -408,6 +412,18 @@ async function updateDeviceField(deviceId, column, value) {
 
 const setSubscription = (deviceId, value) =>
   updateDeviceField(deviceId, 'subscription', value);
+
+async function setSubscriptionUnblock(deviceId, until, permanent) {
+  const { rows } = await pool.query(
+    `UPDATE devices
+        SET subscription_unblock_until = $2,
+            subscription_unblock_permanent = $3
+      WHERE device_id = $1
+      RETURNING *`,
+    [deviceId, until || null, permanent === true],
+  );
+  return rows[0] ? toDevice(rows[0]) : null;
+}
 
 const setPolicy = (deviceId, value) =>
   updateDeviceField(deviceId, 'policy', value);
@@ -1616,6 +1632,7 @@ module.exports = {
   generateUniqueDeviceId,
   createDevice,
   setSubscription,
+  setSubscriptionUnblock,
   setPolicy,
   setStatus,
   setAllowCustomerDnsToggle,
