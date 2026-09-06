@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.provider.Settings
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -82,6 +83,13 @@ class CustomerActivity : Activity() {
         showAppStore()
         updateNewsBadge()
         refreshNews()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::contentArea.isInitialized && isPersonalAreaActive) {
+            showPersonalArea()
+        }
     }
 
     private fun buildUi(): View {
@@ -1106,6 +1114,12 @@ class CustomerActivity : Activity() {
             )
         )
 
+        val guardPolicy = WhatsAppGuardConfig.load(this)
+        if (guardPolicy.enabled) {
+            contentArea.addView(sectionTitle("הגנת WhatsApp"))
+            contentArea.addView(whatsAppGuardSetupCard())
+        }
+
         contentArea.addView(sectionTitle("סינון DNS"))
         contentArea.addView(dnsToggleCard())
         val dnsStatus = AdBlockDns.currentStatus(this)
@@ -1116,6 +1130,67 @@ class CustomerActivity : Activity() {
                 )
             )
         )
+    }
+
+    private fun whatsAppGuardSetupCard(): LinearLayout {
+        val enabled = WhatsAppGuardProtection.accessibilityEnabled(this)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedCardWithBorder()
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10) }
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = if (enabled) "✓ הגנת WhatsApp פעילה" else "הגנת WhatsApp ממתינה להפעלה"
+                textSize = 15f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(if (enabled) OK else TEXT))
+                gravity = Gravity.RIGHT
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = if (enabled) {
+                    "שירות הנגישות פעיל והסינון יכול להגן על WhatsApp לפי מדיניות המנהל."
+                } else {
+                    "נדרשת הפעלה חד-פעמית של שירות ‘יהודי כשר — הגנת WhatsApp’."
+                }
+                textSize = 12f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(5), 0, if (enabled) 0 else dp(10))
+            })
+
+            if (!enabled) {
+                addView(primaryButton("הפעל הגנת WhatsApp") {
+                    openWhatsAppAccessibilitySettings()
+                })
+            }
+        }
+    }
+
+    private fun openWhatsAppAccessibilitySettings() {
+        val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
+            data = Uri.parse("package:$packageName")
+        }
+        try {
+            startActivity(details)
+            return
+        } catch (_: Exception) {
+        }
+
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה: ${e.message ?: "שגיאה לא ידועה"}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun compactPersonalIdentityCard(): LinearLayout = LinearLayout(this).apply {
