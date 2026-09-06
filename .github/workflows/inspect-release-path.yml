@@ -13,5 +13,5 @@ jobs:
           grep -n -E "commands|queue.*Command|RELEASE_DEVICE_OWNER" backend/index.js | head -120 || true
           echo '--- db command functions ---'
           grep -n -E "takePendingCommands|commands|queue.*Command" backend/db.js | head -120 || true
-          echo '--- admin release references ---'
-          grep -Rni -E "RELEASE_DEVICE_OWNER|הסר.*ניהול|שחרור" admin-panel | head -120 || true
+          echo '--- admin release button context ---'
+          grep -n -C 5 "data-release-device" admin-panel/index.html || true
