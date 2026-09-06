@@ -28,10 +28,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
       - name: Install SDK packages
-        run: sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+        run: sdkmanager 'platform-tools' 'platforms;android-34' 'build-tools;34.0.0'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
       - name: Compile DPC
         working-directory: dpc-app
-        run: ./gradlew :app:compileDebugKotlin --no-daemon
+        run: gradle :app:compileDebugKotlin
       - name: Verify admin JavaScript syntax
         run: node --check admin-panel/support.js
       - name: Commit checked patch
