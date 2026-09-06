@@ -44,13 +44,11 @@ object PolicySync {
         val dnsFailSafeResult = AdBlockDns.runFailSafeCheckCycle(context)
 
         val enforcement = enforcer.apply(result.policy)
-        // Run after the ordinary app policy. If any WhatsApp guard is requested
-        // but Accessibility is not actually active, WhatsApp is suspended here
-        // so turning off the service never becomes a filtering bypass.
         val whatsappGuardResult = WhatsAppGuardProtection.reconcile(
             context,
             result.policy.whatsappGuard,
         )
+        WhatsAppGuardWatchdogScheduler.reconcileSchedule(context)
         DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
         SyncScheduler.schedule(context)
         UpdateCheckScheduler.scheduleIfNeeded(context)
