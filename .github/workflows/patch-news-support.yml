@@ -1,0 +1,47 @@
+name: Patch news media and support bubbles
+
+on:
+  push:
+    branches:
+      - fix/news-media-support-bubbles
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, '[patch-done]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fix/news-media-support-bubbles
+          fetch-depth: 0
+      - name: Apply patch
+        run: python3 .github/patch-news-support.py
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install SDK packages
+        run: sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Compile DPC
+        working-directory: dpc-app
+        run: ./gradlew :app:compileDebugKotlin --no-daemon
+      - name: Verify admin JavaScript syntax
+        run: node --check admin-panel/support.js
+      - name: Commit checked patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          if git diff --cached --quiet; then
+            echo 'No patch changes to commit'
+          else
+            git commit -m 'Fix news images and add support chat bubbles [patch-done]'
+            git push origin HEAD:fix/news-media-support-bubbles
+          fi
