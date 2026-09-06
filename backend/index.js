@@ -117,6 +117,15 @@ function detectNewsMedia(buffer) {
     return { mediaType: 'IMAGE', mimeType: 'image/webp' };
   }
   if (buffer.length >= 12 && buffer.toString('ascii', 4, 8) === 'ftyp') {
+    const brands = buffer.toString('ascii', 8, Math.min(buffer.length, 64)).toLowerCase();
+    const heicBrands = ['heic', 'heix', 'hevc', 'hevx'];
+    const heifBrands = ['mif1', 'msf1', 'heim', 'heis'];
+    if (heicBrands.some(brand => brands.includes(brand))) {
+      return { mediaType: 'IMAGE', mimeType: 'image/heic' };
+    }
+    if (heifBrands.some(brand => brands.includes(brand))) {
+      return { mediaType: 'IMAGE', mimeType: 'image/heif' };
+    }
     return { mediaType: 'VIDEO', mimeType: 'video/mp4' };
   }
   if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
@@ -137,7 +146,7 @@ async function uploadNewsMedia(req, file) {
   if (!file || !file.buffer || file.buffer.length === 0) return null;
   const detected = detectNewsMedia(file.buffer);
   if (!detected) {
-    const error = new Error('unsupported media file; use PNG/JPEG/WebP or MP4/WebM');
+    const error = new Error('unsupported media file; use PNG/JPEG/WebP/HEIC/HEIF or MP4/WebM');
     error.status = 400;
     throw error;
   }
