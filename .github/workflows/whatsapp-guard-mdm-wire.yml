@@ -1,0 +1,93 @@
+name: Wire MDM WhatsApp Guard
+
+on:
+  push:
+    branches: [ feature/whatsapp-guard-mdm ]
+    paths:
+      - '.github/workflows/whatsapp-guard-mdm-wire.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/whatsapp-guard-mdm
+      - name: Patch backend, DPC and panel
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              if new in s:
+                  print(path, 'already patched')
+                  return
+              if old not in s:
+                  raise SystemExit(f'anchor not found in {path}')
+              p.write_text(s.replace(old, new, 1))
+              print('patched', path)
+
+          # Backend: persist three independent WhatsApp Guard switches in policy.
+          replace_once('backend/index.js',
+          """function normalizePolicy(policy) {\n  return {\n    allowedApps: (policy && policy.allowedApps) || [],\n    kioskEnabled: Boolean(policy && policy.kioskEnabled),\n    syncIntervalMinutes:\n      (policy && policy.syncIntervalMinutes) || DEFAULT_SYNC_INTERVAL_MINUTES,\n  };\n}""",
+          """function normalizePolicy(policy) {\n  const guard = policy && policy.whatsappGuard || {};\n  return {\n    allowedApps: (policy && policy.allowedApps) || [],\n    kioskEnabled: Boolean(policy && policy.kioskEnabled),\n    syncIntervalMinutes:\n      (policy && policy.syncIntervalMinutes) || DEFAULT_SYNC_INTERVAL_MINUTES,\n    whatsappGuard: {\n      blockStatuses: guard.blockStatuses === true,\n      blockChannels: guard.blockChannels === true,\n      hideProfilePhotos: guard.hideProfilePhotos === true,\n    },\n  };\n}""")
+
+          kiosk_anchor = """app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, res) => {\n  const { enabled } = req.body;\n  if (typeof enabled !== 'boolean') {\n    return res.status(400).json({ error: 'enabled must be a boolean' });\n  }\n  const device = await db.getDevice(req.params.deviceId);\n  if (!device) {\n    return res.status(404).json({ error: 'device not found' });\n  }\n  const policy = normalizePolicy(device.policy);\n  policy.kioskEnabled = enabled;\n  res.json(await savePolicyAndWake(device, policy));\n}));\n"""
+          guard_route = kiosk_anchor + """\n// Three independent server-authoritative WhatsApp Guard controls.\napp.post('/api/devices/:deviceId/policy/whatsapp-guard', requireAdmin, wrap(async (req, res) => {\n  const { blockStatuses, blockChannels, hideProfilePhotos } = req.body || {};\n  if ([blockStatuses, blockChannels, hideProfilePhotos].some(v => typeof v !== 'boolean')) {\n    return res.status(400).json({ error: 'all WhatsApp Guard fields must be boolean' });\n  }\n  const device = await db.getDevice(req.params.deviceId);\n  if (!device) return res.status(404).json({ error: 'device not found' });\n  const policy = normalizePolicy(device.policy);\n  policy.whatsappGuard = { blockStatuses, blockChannels, hideProfilePhotos };\n  res.json(await savePolicyAndWake(device, policy));\n}));\n"""
+          replace_once('backend/index.js', kiosk_anchor, guard_route)
+
+          # DPC API model/parser.
+          replace_once('dpc-app/app/src/main/java/org/mdmopen/dpc/ApiClient.kt',
+          """data class Policy(\n    val allowedApps: List<String>,\n    val kioskEnabled: Boolean,\n    val syncIntervalMinutes: Int,\n    val fullOpen: Boolean = false,\n)""",
+          """data class Policy(\n    val allowedApps: List<String>,\n    val kioskEnabled: Boolean,\n    val syncIntervalMinutes: Int,\n    val fullOpen: Boolean = false,\n    val whatsappGuard: WhatsAppGuardPolicy = WhatsAppGuardPolicy(),\n)""")
+
+          replace_once('dpc-app/app/src/main/java/org/mdmopen/dpc/ApiClient.kt',
+          """            fullOpen = policyJson.optBoolean(\"fullOpen\", false),\n        )""",
+          """            fullOpen = policyJson.optBoolean(\"fullOpen\", false),\n            whatsappGuard = policyJson.optJSONObject(\"whatsappGuard\")?.let { guard ->\n                WhatsAppGuardPolicy(\n                    blockStatuses = guard.optBoolean(\"blockStatuses\", false),\n                    blockChannels = guard.optBoolean(\"blockChannels\", false),\n                    hideProfilePhotos = guard.optBoolean(\"hideProfilePhotos\", false),\n                )\n            } ?: WhatsAppGuardPolicy(),\n        )""")
+
+          replace_once('dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt',
+          """        Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)\n        Config.setDnsPolicy(""",
+          """        Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)\n        WhatsAppGuardConfig.save(context, result.policy.whatsappGuard)\n        Config.setDnsPolicy(""")
+
+          # Admin panel: inject compact controls into the unified customer card.
+          p = Path('admin-panel/customer-search.js')
+          s = p.read_text()
+          if 'data-wa-guard=' not in s:
+              s = s.replace(
+              """      <div class=\"unified-profile-actions\">""",
+              """      <div class=\"unified-profile-section whatsapp-guard-card\">\n        <h3>הגנת WhatsApp</h3>\n        <div class=\"wa-guard-grid\">\n          <button type=\"button\" class=\"wa-guard-toggle ${(p.whatsappGuard && p.whatsappGuard.blockStatuses) ? 'active' : ''}\" data-wa-guard=\"blockStatuses\">סטטוסים ${(p.whatsappGuard && p.whatsappGuard.blockStatuses) ? 'חסום' : 'פתוח'}</button>\n          <button type=\"button\" class=\"wa-guard-toggle ${(p.whatsappGuard && p.whatsappGuard.blockChannels) ? 'active' : ''}\" data-wa-guard=\"blockChannels\">ערוצים ${(p.whatsappGuard && p.whatsappGuard.blockChannels) ? 'חסום' : 'פתוח'}</button>\n          <button type=\"button\" class=\"wa-guard-toggle ${(p.whatsappGuard && p.whatsappGuard.hideProfilePhotos) ? 'active' : ''}\" data-wa-guard=\"hideProfilePhotos\">תמונות פרופיל ${(p.whatsappGuard && p.whatsappGuard.hideProfilePhotos) ? 'מוסתרות' : 'מוצגות'}</button>\n        </div>\n        <div class=\"wa-guard-note\">כל אפשרות נשלטת בנפרד ונכנסת לתוקף בסנכרון הבא.</div>\n      </div>\n\n      <div class=\"unified-profile-actions\">""", 1)
+
+              hook = """    panel.querySelector('[data-unified-close]')?.addEventListener('click', () => {"""
+              handler = """    panel.querySelectorAll('[data-wa-guard]').forEach(btn => btn.addEventListener('click', async e => {\n      const key = e.currentTarget.getAttribute('data-wa-guard');\n      const current = Object.assign({ blockStatuses: false, blockChannels: false, hideProfilePhotos: false }, p.whatsappGuard || {});\n      current[key] = !current[key];\n      e.currentTarget.disabled = true;\n      try {\n        const r = await fetch('/api/devices/' + encodeURIComponent(d.deviceId) + '/policy/whatsapp-guard', {\n          method: 'POST', credentials: 'same-origin',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify(current),\n        });\n        if (!r.ok) throw new Error('HTTP ' + r.status);\n        const updated = await r.json();\n        const idx = window.__allDevices.findIndex(x => x && x.deviceId === d.deviceId);\n        if (idx >= 0) window.__allDevices[idx] = updated;\n        render(d.deviceId);\n      } catch (err) {\n        alert('שמירת הגנת WhatsApp נכשלה: ' + err.message);\n        e.currentTarget.disabled = false;\n      }\n    }));\n\n""" + hook
+              if hook not in s:
+                  raise SystemExit('customer-search handler anchor not found')
+              s = s.replace(hook, handler, 1)
+
+              init_anchor = """  function init() {"""
+              init_new = """  function ensureWhatsAppGuardStyles() {\n    if (document.getElementById('whatsappGuardStyles')) return;\n    const style = document.createElement('style');\n    style.id = 'whatsappGuardStyles';\n    style.textContent = '.wa-guard-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.wa-guard-toggle{border:1px solid var(--card-border);background:var(--bg);color:var(--text);border-radius:12px;padding:10px 6px;font-family:inherit;font-weight:700;font-size:.78rem;cursor:pointer}.wa-guard-toggle.active{background:var(--accent);border-color:var(--accent);color:#fff}.wa-guard-note{margin-top:8px;color:var(--text-dim);font-size:.74rem}@media(max-width:520px){.wa-guard-grid{grid-template-columns:1fr}}';\n    document.head.appendChild(style);\n  }\n\n  function init() {\n    ensureWhatsAppGuardStyles();"""
+              s = s.replace(init_anchor, init_new, 1)
+              p.write_text(s)
+              print('patched admin-panel/customer-search.js')
+          else:
+              print('admin panel already patched')
+          PY
+      - name: Verify syntax anchors
+        run: |
+          node --check backend/index.js
+          node --check admin-panel/customer-search.js
+          grep -q 'whatsappGuard' backend/index.js
+          grep -q 'WhatsAppGuardConfig.save' dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt
+      - name: Commit wired policy
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/index.js admin-panel/customer-search.js dpc-app/app/src/main/java/org/mdmopen/dpc/ApiClient.kt dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Wire WhatsApp Guard controls through MDM policy'
+          git push origin HEAD:feature/whatsapp-guard-mdm
