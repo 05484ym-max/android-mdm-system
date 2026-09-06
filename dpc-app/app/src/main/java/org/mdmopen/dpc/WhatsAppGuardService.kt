@@ -15,6 +15,11 @@ class WhatsAppGuardService : AccessibilityService() {
         super.onServiceConnected()
         overlays = WhatsAppOverlayController(this)
         engine = WhatsAppGuardEngine(this, overlays)
+        // This is the earliest reliable point where Android has confirmed the
+        // service is truly enabled. On Device Owner devices this locks the
+        // accessibility settings against customer bypass and releases WhatsApp
+        // again if it was suspended during the one-time setup step.
+        WhatsAppGuardProtection.reconcile(this, WhatsAppGuardConfig.load(this))
         scheduleRender()
     }
 
