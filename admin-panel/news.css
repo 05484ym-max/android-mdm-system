@@ -39,7 +39,6 @@
 }
 .news-card-actions button.news-delete-btn { border-color: rgba(179,67,44,0.35); color: var(--danger); }
 
-
 .news-media-field { margin: 10px 0 12px; }
 .news-media-label { display:block; font-size:0.88rem; font-weight:700; color:var(--text); margin-bottom:6px; }
 .news-media-help { font-size:0.76rem; color:var(--text-dim); margin-top:4px; }
@@ -59,4 +58,37 @@
 .news-media-type-badge {
   display:inline-flex; align-items:center; gap:5px; margin-top:7px;
   font-size:0.74rem; color:var(--text-dim);
+}
+
+/* Keep all six admin destinations visible on phone widths. */
+@media (max-width: 720px) {
+  body {
+    padding-bottom: calc(154px + env(safe-area-inset-bottom));
+  }
+
+  .bottom-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px 6px;
+    justify-content: stretch;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .bottom-nav .nav-btn {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 4px;
+    gap: 3px;
+  }
+
+  .bottom-nav .nav-btn .nav-icon {
+    font-size: 1.15rem;
+  }
+
+  .bottom-nav .nav-btn .nav-label {
+    font-size: 0.68rem;
+    line-height: 1.15;
+    white-space: normal;
+    text-align: center;
+  }
 }
