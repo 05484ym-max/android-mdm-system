@@ -31,6 +31,12 @@
   let editingItem = null;
   let localPreviewUrl = null;
 
+  // Make the media control explicit on small phone screens: the native file
+  // input remains in place, but the label and save button clearly say when a
+  // photo/video will be sent with the customer update.
+  const mediaLabel = document.querySelector('label[for="newsMediaInput"]');
+  if (mediaLabel) mediaLabel.textContent = '📎 צרף תמונה או סרטון';
+
   function clearLocalPreviewUrl() {
     if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl);
     localPreviewUrl = null;
@@ -86,7 +92,7 @@
     pinnedInput.checked = false;
     publishedInput.checked = false;
     formTitle.textContent = 'הודעה חדשה';
-    saveBtn.textContent = 'שמור';
+    saveBtn.textContent = 'שלח ללקוחות';
     cancelEditBtn.style.display = 'none';
     formError.textContent = '';
   }
@@ -106,7 +112,7 @@
     publishedInput.checked = item.published;
     publishedInput.disabled = true;
     formTitle.textContent = 'עריכת הודעה';
-    saveBtn.textContent = 'עדכן';
+    saveBtn.textContent = 'עדכן הודעה';
     cancelEditBtn.style.display = '';
     formError.textContent = '';
     titleInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -123,8 +129,9 @@
     removeMediaRow.style.display = editingItem && editingItem.mediaUrl ? '' : 'none';
     localPreviewUrl = URL.createObjectURL(file);
     const type = file.type.startsWith('image/') ? 'IMAGE' : 'VIDEO';
-    mediaPreview.innerHTML = mediaMarkup(type, localPreviewUrl);
+    mediaPreview.innerHTML = `<div class="news-media-selected">נבחר: ${escapeHtml(file.name)}</div>` + mediaMarkup(type, localPreviewUrl);
     mediaPreview.style.display = '';
+    saveBtn.textContent = editingId ? 'עדכן עם המדיה' : 'שלח ללקוחות עם המדיה';
   });
 
   removeMediaInput.addEventListener('change', () => {
