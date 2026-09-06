@@ -1,0 +1,42 @@
+name: WhatsApp Accessibility Launch Fix
+
+on:
+  push:
+    branches: [ fix/whatsapp-accessibility-launch-v2 ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/whatsapp-accessibility-launch-v2
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Apply patch
+        run: python tools/patch-whatsapp-accessibility-v2.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Commit production change only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm tools/patch-whatsapp-accessibility-v2.py
+          rm .github/workflows/whatsapp-accessibility-v2.yml
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          git rm --cached tools/patch-whatsapp-accessibility-v2.py .github/workflows/whatsapp-accessibility-v2.yml >/dev/null 2>&1 || true
+          git add -u
+          git commit -m 'Fix WhatsApp accessibility settings launch on Samsung'
+          git push origin HEAD:fix/whatsapp-accessibility-launch-v2
