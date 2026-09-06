@@ -53,6 +53,7 @@ class CustomerActivity : Activity() {
     private lateinit var storeNavItem: NavItem
     private lateinit var adminNavItem: NavItem
     private lateinit var newsNavItem: NavItem
+    private lateinit var supportNavItem: NavItem
     private var isPersonalAreaActive = false
     private var isNewsActive = false
     private var selectedStoreCategory = "all"
@@ -221,6 +222,7 @@ class CustomerActivity : Activity() {
         personalNavItem = navButton("👤", "אזור אישי") { showPersonalArea() }
         storeNavItem = navButton("▦", "חנות אפליקציות") { showAppStore() }
         newsNavItem = navButton("📰", "חדשות ועדכונים") { showNews() }
+        supportNavItem = navButton("💬", "תמיכה") { showSupport() }
         adminNavItem = navButton("🔒", "כניסת מנהל") { showAdminLogin() }
 
         row.addView(
@@ -233,6 +235,10 @@ class CustomerActivity : Activity() {
         )
         row.addView(
             newsNavItem.container,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        row.addView(
+            supportNavItem.container,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
         row.addView(
@@ -287,13 +293,215 @@ class CustomerActivity : Activity() {
     }
 
     private fun setActiveNav(active: NavItem) {
-        for (item in listOf(personalNavItem, storeNavItem, newsNavItem, adminNavItem)) {
+        for (item in listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem)) {
             val isActive = item === active
             item.icon.alpha = if (isActive) 1f else 0.5f
             item.label.typeface = if (isActive) heavyFont else mediumFont
             item.label.setTextColor(Color.parseColor(if (isActive) ACCENT else MUTED))
             item.container.background =
                 if (isActive) flatRounded(ACCENT_TINT, dp(14).toFloat()) else null
+        }
+    }
+
+    private fun showSupport() {
+        isPersonalAreaActive = false
+        isNewsActive = false
+        headerLabelView.text = "תמיכה"
+        setActiveNav(supportNavItem)
+        contentArea.removeAllViews()
+
+        contentArea.addView(TextView(this).apply {
+            text = "צריכים עזרה? שלחו פנייה והיא תגיע ישירות לצוות התמיכה."
+            textSize = 14f
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.RIGHT
+            setPadding(dp(4), dp(8), dp(4), dp(14))
+        })
+
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = flatRounded(CARD, dp(18).toFloat())
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+        }
+        val subject = EditText(this).apply {
+            hint = "נושא הפנייה"
+            textSize = 14f
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            setSingleLine(true)
+            gravity = Gravity.RIGHT
+            background = flatRounded(BG, dp(12).toFloat())
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+        }
+        val message = EditText(this).apply {
+            hint = "כתבו כאן במה אפשר לעזור..."
+            textSize = 14f
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.TOP or Gravity.RIGHT
+            minLines = 5
+            maxLines = 10
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            background = flatRounded(BG, dp(12).toFloat())
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+        }
+        val send = Button(this).apply {
+            text = "שליחת פנייה"
+            textSize = 14f
+            typeface = heavyFont
+            setTextColor(Color.WHITE)
+            background = flatRounded(ACCENT, dp(12).toFloat())
+            isAllCaps = false
+        }
+        form.addView(subject, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+        form.addView(message, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) })
+        form.addView(send, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
+        contentArea.addView(form, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(18) })
+
+        val historyTitle = TextView(this).apply {
+            text = "הפניות שלי"
+            textSize = 17f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.RIGHT
+            setPadding(dp(4), dp(6), dp(4), dp(10))
+        }
+        val history = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        contentArea.addView(historyTitle)
+        contentArea.addView(history)
+
+        fun loadTickets() {
+            history.removeAllViews()
+            history.addView(TextView(this).apply {
+                text = "טוען פניות..."
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(24), 0, dp(24))
+            })
+            val deviceId = Config.deviceId(this)
+            val serverUrl = Config.serverUrl(this)
+            val token = Config.deviceToken(this)
+            Thread {
+                try {
+                    val tickets = ApiClient(serverUrl, token).fetchSupportTickets(deviceId)
+                    runOnUiThread { renderSupportTickets(history, tickets) }
+                } catch (_: Exception) {
+                    runOnUiThread {
+                        history.removeAllViews()
+                        history.addView(TextView(this).apply {
+                            text = "לא ניתן לטעון כרגע את הפניות. נסו שוב מאוחר יותר."
+                            setTextColor(Color.parseColor(MUTED))
+                            gravity = Gravity.CENTER
+                            setPadding(0, dp(24), 0, dp(24))
+                        })
+                    }
+                }
+            }.start()
+        }
+
+        send.setOnClickListener {
+            val subjectText = subject.text.toString().trim()
+            val messageText = message.text.toString().trim()
+            if (subjectText.isEmpty() || messageText.isEmpty()) {
+                Toast.makeText(this, "יש למלא נושא ותוכן", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (subjectText.length > 120 || messageText.length > 5000) {
+                Toast.makeText(this, "הפנייה ארוכה מדי", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            send.isEnabled = false
+            send.text = "שולח..."
+            val deviceId = Config.deviceId(this)
+            val serverUrl = Config.serverUrl(this)
+            val token = Config.deviceToken(this)
+            Thread {
+                try {
+                    ApiClient(serverUrl, token).createSupportTicket(deviceId, subjectText, messageText)
+                    runOnUiThread {
+                        subject.text.clear()
+                        message.text.clear()
+                        send.isEnabled = true
+                        send.text = "שליחת פנייה"
+                        Toast.makeText(this, "הפנייה נשלחה בהצלחה", Toast.LENGTH_LONG).show()
+                        loadTickets()
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        send.isEnabled = true
+                        send.text = "שליחת פנייה"
+                        Toast.makeText(this, "שליחת הפנייה נכשלה: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
+
+        loadTickets()
+    }
+
+    private fun renderSupportTickets(container: LinearLayout, tickets: List<SupportTicket>) {
+        container.removeAllViews()
+        if (tickets.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = "עדיין לא נשלחו פניות"
+                textSize = 14f
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(28), 0, dp(28))
+            })
+            return
+        }
+        tickets.forEach { ticket ->
+            val statusText = when (ticket.status) {
+                "IN_PROGRESS" -> "בטיפול"
+                "RESOLVED" -> "טופל"
+                else -> "חדש"
+            }
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = flatRounded(CARD, dp(16).toFloat())
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+            }
+            card.addView(TextView(this).apply {
+                text = ticket.subject
+                textSize = 15f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.RIGHT
+            })
+            card.addView(TextView(this).apply {
+                text = statusText
+                textSize = 12f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(if (ticket.status == "RESOLVED") OK else ACCENT))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(4), 0, dp(8))
+            })
+            card.addView(TextView(this).apply {
+                text = ticket.message
+                textSize = 14f
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.RIGHT
+            })
+            if (!ticket.adminReply.isNullOrBlank()) {
+                card.addView(TextView(this).apply {
+                    text = "תשובת התמיכה:\n${ticket.adminReply}"
+                    textSize = 14f
+                    typeface = mediumFont
+                    setTextColor(Color.parseColor(ACCENT))
+                    gravity = Gravity.RIGHT
+                    background = flatRounded(ACCENT_TINT, dp(10).toFloat())
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+            }
+            card.addView(TextView(this).apply {
+                text = try { SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("he", "IL")).format(java.util.Date.from(Instant.parse(ticket.createdAt))) } catch (_: Exception) { ticket.createdAt }
+                textSize = 11f
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(10), 0, 0)
+            })
+            container.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
         }
     }
 
