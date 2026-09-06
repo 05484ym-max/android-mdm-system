@@ -60,6 +60,36 @@
   font-size:0.74rem; color:var(--text-dim);
 }
 
+.unified-customer-profile {
+  max-width: 720px;
+  margin: 0 auto 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: 0 3px 14px rgba(0,0,0,0.05);
+}
+.unified-profile-head {
+  display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px;
+}
+.unified-profile-name { font-size:1.18rem; font-weight:800; color:var(--text); }
+.unified-profile-number { margin-top:4px; color:var(--text-dim); font-size:0.84rem; }
+.unified-profile-grid {
+  display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:16px;
+}
+.unified-info-card {
+  background:var(--bg); border:1px solid var(--card-border); border-radius:14px; padding:11px;
+  display:flex; flex-direction:column; gap:5px; min-width:0;
+}
+.unified-info-card span { color:var(--text-dim); font-size:0.74rem; }
+.unified-info-card strong { color:var(--text); font-size:0.88rem; overflow-wrap:anywhere; }
+.unified-profile-section { border-top:1px solid var(--card-border); padding-top:14px; margin-top:14px; }
+.unified-profile-section h3 { margin:0 0 10px; font-size:0.95rem; }
+.unified-chip-list { display:flex; flex-wrap:wrap; gap:6px; }
+.unified-command-summary { font-size:0.86rem; margin-bottom:8px; }
+.unified-last-commands { display:flex; flex-direction:column; gap:5px; font-size:0.8rem; color:var(--text-dim); }
+.unified-profile-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+
 /* Keep all six admin destinations visible on phone widths. */
 @media (max-width: 720px) {
   body {
@@ -91,4 +121,7 @@
     white-space: normal;
     text-align: center;
   }
+
+  .unified-profile-grid { grid-template-columns:1fr; }
+  .unified-profile-actions > button { flex:1; }
 }
