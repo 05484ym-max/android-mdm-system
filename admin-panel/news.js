@@ -100,9 +100,6 @@
     titleInput.value = item.title;
     bodyInput.value = item.body;
     pinnedInput.checked = item.pinned;
-    // published is not editable through this form once a row exists - the
-    // publish/unpublish buttons on the card are the one write path for
-    // that (see backend/index.js's comment on why they're kept separate).
     publishedInput.checked = item.published;
     publishedInput.disabled = true;
     formTitle.textContent = 'עריכת הודעה';
@@ -308,4 +305,15 @@
   });
 
   if (refreshBtn) refreshBtn.addEventListener('click', loadNews);
+})();
+
+// Unified customer search is intentionally loaded as a separate feature module.
+// The script tag is created here because news.js is already part of every admin page load.
+(function loadUnifiedCustomerSearch() {
+  if (document.querySelector('script[data-unified-customer-search]')) return;
+  const script = document.createElement('script');
+  script.src = 'customer-search.js';
+  script.defer = true;
+  script.dataset.unifiedCustomerSearch = '1';
+  document.head.appendChild(script);
 })();
