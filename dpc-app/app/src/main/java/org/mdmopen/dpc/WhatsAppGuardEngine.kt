@@ -15,8 +15,12 @@ class WhatsAppGuardEngine(
     private val updatesWords = listOf("עדכונים", "updates")
 
     fun render(root: AccessibilityNodeInfo?, policy: WhatsAppGuardPolicy) {
-        overlays.clear()
-        if (root == null || !policy.enabled) return
+        if (root == null || !policy.enabled) {
+            overlays.clear()
+            return
+        }
+
+        overlays.beginFrame()
         val screen = WhatsAppScreenClassifier.classify(root)
         val nodes = WhatsAppScreenClassifier.flatten(root)
 
@@ -35,6 +39,8 @@ class WhatsAppGuardEngine(
             if (policy.blockStatuses) findTextNode(nodes, statusWords)?.let { blockNode(it, nodes, transparent = false) }
             if (policy.blockChannels) findTextNode(nodes, channelWords)?.let { blockNode(it, nodes, transparent = false) }
         }
+
+        overlays.endFrame()
     }
 
     private fun maskChatList(nodes: List<AccessibilityNodeInfo>, root: AccessibilityNodeInfo) {
