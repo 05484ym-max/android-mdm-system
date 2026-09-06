@@ -22,8 +22,8 @@ android {
         applicationId = "org.yehudikasher.browser"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = 5
+        versionName = "0.2.3"
         buildConfigField(
             "String",
             "FILTER_API_BASE_URL",
