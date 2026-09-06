@@ -206,3 +206,83 @@
 
   window.renderUnifiedCustomerProfile = render;
 })();
+
+// Mirror WhatsApp Guard controls into the legacy full-management screen.
+(function () {
+  'use strict';
+
+  const originalRenderDeviceDetail = window.renderDeviceDetail;
+  if (typeof originalRenderDeviceDetail !== 'function') return;
+
+  function detailWaState(d) {
+    const p = d && d.policy ? d.policy : {};
+    const wa = p.whatsappGuard || { blockStatuses: false, blockChannels: false, hideProfilePhotos: false };
+    const requested = Boolean(wa.blockStatuses || wa.blockChannels || wa.hideProfilePhotos);
+    const accessibility = Boolean(d && d.status && d.status.whatsappGuardAccessibilityEnabled === true);
+    return {
+      wa,
+      runtime: !requested
+        ? { text: 'ההגנה כבויה', cls: 'wa-runtime-off' }
+        : accessibility
+          ? { text: '✓ פעיל ומוגן', cls: 'wa-runtime-ok' }
+          : { text: '⚠ נדרשת הפעלה חד־פעמית של שירות הנגישות — WhatsApp יישאר נעול עד אז', cls: 'wa-runtime-warn' },
+    };
+  }
+
+  function injectWhatsAppGuard(deviceId) {
+    const devices = Array.isArray(window.__allDevices) ? window.__allDevices : [];
+    const d = devices.find(x => x && x.deviceId === deviceId);
+    const content = document.getElementById('detailContent');
+    if (!d || !content || content.querySelector('[data-detail-wa-section]')) return;
+
+    const { wa, runtime } = detailWaState(d);
+    const section = document.createElement('div');
+    section.className = 'detail-section whatsapp-guard-admin';
+    section.setAttribute('data-detail-wa-section', 'true');
+    section.innerHTML = `
+      <h3>🟢 הגנת WhatsApp</h3>
+      <div class="wa-runtime ${runtime.cls}">${runtime.text}</div>
+      <div class="unified-command-summary">כל חסימה נשלטת בנפרד ומסתנכרנת למכשיר.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+        <button type="button" class="toggle-btn ${wa.blockStatuses ? 'wa-on' : ''}" data-detail-wa-key="blockStatuses">סטטוסים: ${wa.blockStatuses ? 'חסום' : 'פתוח'}</button>
+        <button type="button" class="toggle-btn ${wa.blockChannels ? 'wa-on' : ''}" data-detail-wa-key="blockChannels">ערוצים: ${wa.blockChannels ? 'חסום' : 'פתוח'}</button>
+        <button type="button" class="toggle-btn ${wa.hideProfilePhotos ? 'wa-on' : ''}" data-detail-wa-key="hideProfilePhotos">תמונות פרופיל: ${wa.hideProfilePhotos ? 'מוסתר' : 'גלוי'}</button>
+      </div>`;
+
+    const sections = content.querySelectorAll('.detail-section');
+    const actionsSection = sections.length ? sections[sections.length - 1] : null;
+    if (actionsSection) content.insertBefore(section, actionsSection);
+    else content.appendChild(section);
+
+    section.querySelectorAll('[data-detail-wa-key]').forEach(btn => btn.addEventListener('click', async e => {
+      const key = e.currentTarget.getAttribute('data-detail-wa-key');
+      const next = {
+        blockStatuses: Boolean(wa.blockStatuses),
+        blockChannels: Boolean(wa.blockChannels),
+        hideProfilePhotos: Boolean(wa.hideProfilePhotos),
+      };
+      next[key] = !next[key];
+      section.querySelectorAll('[data-detail-wa-key]').forEach(x => x.disabled = true);
+      try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/whatsapp-guard`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(next),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        const idx = devices.findIndex(x => x && x.deviceId === deviceId);
+        if (idx >= 0) devices[idx] = body;
+        window.renderDeviceDetail(deviceId);
+      } catch (err) {
+        alert('שמירת הגנת WhatsApp נכשלה: ' + (err && err.message ? err.message : err));
+        section.querySelectorAll('[data-detail-wa-key]').forEach(x => x.disabled = false);
+      }
+    }));
+  }
+
+  window.renderDeviceDetail = function (deviceId) {
+    originalRenderDeviceDetail(deviceId);
+    injectWhatsAppGuard(deviceId);
+  };
+})();
