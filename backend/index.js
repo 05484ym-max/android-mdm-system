@@ -280,6 +280,29 @@ function fetchIconFromUrl(url, redirectsLeft) {
   });
 }
 
+function subscriptionAccess(device, now = new Date()) {
+  const subscriptionActive = Boolean(
+    device.subscription &&
+    device.subscription.expiryDate &&
+    new Date(device.subscription.expiryDate) > now
+  );
+  const permanent = device.subscriptionUnblockPermanent === true;
+  const until = device.subscriptionUnblockUntil ? new Date(device.subscriptionUnblockUntil) : null;
+  const temporary = Boolean(until && !Number.isNaN(until.getTime()) && until > now);
+  const overrideActive = permanent || temporary;
+  return {
+    allowed: subscriptionActive || overrideActive,
+    subscriptionActive,
+    overrideActive,
+    overridePermanent: permanent,
+    overrideUntil: permanent ? null : (temporary ? until.toISOString() : null),
+    subscriptionExpiryDate: device.subscription && device.subscription.expiryDate
+      ? device.subscription.expiryDate
+      : null,
+    source: subscriptionActive ? 'SUBSCRIPTION' : permanent ? 'PERMANENT' : temporary ? 'TEMPORARY' : 'NONE',
+  };
+}
+
 function publicDevice(device) {
   const { authTokenHash, ...rest } = device;
   let subscriptionStatus = 'none';
@@ -290,6 +313,7 @@ function publicDevice(device) {
   return {
     ...rest,
     subscriptionStatus,
+    subscriptionAccess: subscriptionAccess(device),
     policy: normalizePolicy(device.policy),
     pendingCommands: device.pendingCommands || [],
     commandHistory: device.commandHistory || [],
@@ -815,6 +839,54 @@ app.post('/api/devices/:deviceId/subscription', requireAdmin, wrap(async (req, r
     startDate: startDate.toISOString(),
     expiryDate: expiryDate.toISOString(),
   });
+  res.json(publicDevice(updated));
+}));
+
+const subscriptionUnblockAdminLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many subscription unblock changes; try again shortly' },
+});
+
+app.post('/api/devices/:deviceId/subscription-unblock', subscriptionUnblockAdminLimiter, requireAdmin, wrap(async (req, res) => {
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) return res.status(404).json({ error: 'device not found' });
+
+  const mode = typeof req.body.mode === 'string' ? req.body.mode : '';
+  let until = null;
+  let permanent = false;
+  const now = new Date();
+
+  if (mode === '24h') {
+    until = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  } else if (mode === 'days') {
+    const days = Number(req.body.days);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      return res.status(400).json({ error: 'days must be an integer between 1 and 3650' });
+    }
+    until = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+  } else if (mode === 'until') {
+    if (typeof req.body.until !== 'string') return res.status(400).json({ error: 'until is required' });
+    until = new Date(req.body.until);
+    const max = new Date(now);
+    max.setFullYear(max.getFullYear() + 10);
+    if (Number.isNaN(until.getTime()) || until <= now || until > max) {
+      return res.status(400).json({ error: 'until must be a future date within 10 years' });
+    }
+  } else if (mode === 'permanent') {
+    permanent = true;
+  } else if (mode !== 'clear') {
+    return res.status(400).json({ error: 'invalid mode' });
+  }
+
+  const updated = await db.setSubscriptionUnblock(
+    req.params.deviceId,
+    until ? until.toISOString() : null,
+    permanent,
+  );
+  await push.wake(device.pushToken);
   res.json(publicDevice(updated));
 }));
 
@@ -1874,7 +1946,7 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
     desiredProviderFilters: DNS_PROVIDER_FILTERS_CONTENT,
   };
 
-  res.json({ policy, catalog, commands, dns });
+  res.json({ policy, catalog, commands, dns, subscriptionAccess: subscriptionAccess(req.device) });
 }));
 
 // ---------- filtered browser automatic domain classification ----------
@@ -2184,8 +2256,74 @@ app.post('/api/browser/image', wrap(async (req, res) => {
 // this response carries no per-device state at all, so the same response
 // is valid for every device and safely cacheable at any layer in front of
 // this server.
+function subscriptionNewsUpdate(device, now = new Date()) {
+  const rawExpiry = device.subscription && device.subscription.expiryDate;
+  if (!rawExpiry) return null;
+  const expiry = new Date(rawExpiry);
+  if (Number.isNaN(expiry.getTime())) return null;
+
+  const expiryKey = expiry.toISOString().slice(0, 10);
+  const [year, month, day] = expiryKey.split('-');
+  const expiryLabel = `${day}/${month}/${year}`;
+  const access = subscriptionAccess(device, now);
+  const diffMs = expiry.getTime() - now.getTime();
+  const daysRemaining = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+
+  if (daysRemaining <= 0) {
+    if (access.overrideActive) {
+      const overrideText = access.overridePermanent
+        ? 'פתיחת החסימה של המנהל מוגדרת כרגע לתמיד.'
+        : `פתיחת החסימה הזמנית של המנהל פעילה עד ${new Date(access.overrideUntil).toLocaleString('he-IL')}.`;
+      return {
+        id: `subscription-expired-override-${expiryKey}`,
+        title: 'המנוי פג – החנות פתוחה בהרשאת מנהל',
+        body: `המנוי פג בתאריך ${expiryLabel}. ${overrideText} לאחר סיום ההרשאה חנות האפליקציות והעדכונים תינעל עד לחידוש המנוי. שאר המכשיר ימשיך לעבוד כרגיל.`,
+        pinned: true,
+        publishedAt: expiry.toISOString(),
+        mediaType: null,
+        mediaUrl: null,
+        mediaMimeType: null,
+        mediaSizeBytes: null,
+      };
+    }
+    return {
+      id: `subscription-expired-${expiryKey}`,
+      title: 'המנוי פג – חנות האפליקציות נעולה',
+      body: `המנוי פג בתאריך ${expiryLabel}. חנות האפליקציות והעדכונים נעולה עד לחידוש המנוי. שאר המכשיר והאפליקציות שכבר מותקנות ממשיכים לעבוד כרגיל.`,
+      pinned: true,
+      publishedAt: expiry.toISOString(),
+      mediaType: null,
+      mediaUrl: null,
+      mediaMimeType: null,
+      mediaSizeBytes: null,
+    };
+  }
+
+  if (daysRemaining > 30) return null;
+
+  // Start about a month before expiry, then create a new deterministic reminder every seven days: 30, 23, 16, 9 and 2 days remaining.
+  // The id is stable inside each seven-day window, so repeated polling does not create duplicate unread News items.
+  const weeklyBucket = Math.floor((30 - daysRemaining) / 7);
+  return {
+    id: `subscription-renewal-${expiryKey}-w${weeklyBucket}`,
+    title: 'תזכורת לחידוש המנוי',
+    body: `המנוי שלך יפוג בתאריך ${expiryLabel}. אם המנוי לא יחודש עד לתאריך זה, חנות האפליקציות והעדכונים תינעל עד לחידוש המנוי. שאר המכשיר והאפליקציות שכבר מותקנות ימשיכו לעבוד כרגיל.`,
+    pinned: true,
+    publishedAt: now.toISOString(),
+    mediaType: null,
+    mediaUrl: null,
+    mediaMimeType: null,
+    mediaSizeBytes: null,
+  };
+}
+
 app.get('/api/devices/:deviceId/updates', requireDevice, wrap(async (req, res) => {
-  res.json(await db.listPublishedCustomerUpdatesForDevice(UPDATE_LIST_LIMIT_FOR_DEVICE));
+  const updates = await db.listPublishedCustomerUpdatesForDevice(UPDATE_LIST_LIMIT_FOR_DEVICE);
+  const subscriptionUpdate = subscriptionNewsUpdate(req.device);
+  if (!subscriptionUpdate) return res.json(updates);
+  // Subscription reminder is device-specific and should always be visible at the
+  // top. Keep the response bounded to the same total size as before.
+  res.json([subscriptionUpdate, ...updates].slice(0, UPDATE_LIST_LIMIT_FOR_DEVICE));
 }));
 
 app.post('/api/devices/:deviceId/policy/sync-interval', requireAdmin,

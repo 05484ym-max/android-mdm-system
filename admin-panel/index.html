@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>יהודי כשר — לוח בקרה</title>
+<link rel="stylesheet" href="subscription-unblock.css" />
 <style>
   :root {
     --bg: #F2F1E6;
@@ -696,6 +697,7 @@ async function loadDevices() {
   document.getElementById('loginScreen').style.display = 'none';
 
   allDevices = await res.json();
+  window.__allDevices = allDevices;
   document.getElementById('totalDevices').textContent = allDevices.length;
   document.getElementById('activeSubs').textContent =
     allDevices.filter(d => d.subscriptionStatus === 'active').length;
@@ -897,6 +899,7 @@ function renderDeviceList(devices) {
 
 function openDeviceDetail(deviceId) {
   currentDetailDeviceId = deviceId;
+  window.__currentDetailDeviceId = deviceId;
   renderDeviceDetail(deviceId);
   document.getElementById('deviceDetailView').style.display = 'block';
   window.scrollTo(0, 0);
@@ -904,6 +907,7 @@ function openDeviceDetail(deviceId) {
 
 function closeDeviceDetail() {
   currentDetailDeviceId = null;
+  window.__currentDetailDeviceId = null;
   document.getElementById('deviceDetailView').style.display = 'none';
 }
 
@@ -1574,5 +1578,7 @@ loadDevices();
 <script src="alerts.js"></script>
 <script src="news.js"></script>
 <script src="support.js"></script>
+<script src="customer-search.js"></script>
+<script src="subscription-unblock.js"></script>
 </body>
 </html>

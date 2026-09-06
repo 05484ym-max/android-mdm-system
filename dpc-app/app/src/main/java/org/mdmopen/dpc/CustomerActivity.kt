@@ -514,6 +514,11 @@ class CustomerActivity : Activity() {
         setActiveNav(storeNavItem)
         contentArea.removeAllViews()
 
+        if (!Config.storeAccessAllowed(this)) {
+            renderLockedStore()
+            return
+        }
+
         val apps = approvedApps()
             .sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
 
@@ -821,10 +826,50 @@ class CustomerActivity : Activity() {
         if (launchIntent != null) startActivity(launchIntent) else openPlayStoreForInstall(packageName)
     }
 
+    private fun renderLockedStore() {
+        val raw = Config.subscriptionExpiryDate(this)
+        val expiryLabel = raw?.take(10)?.split('-')?.takeIf { it.size == 3 }
+            ?.let { "${it[2]}/${it[1]}/${it[0]}" } ?: "תאריך המנוי"
+
+        contentArea.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = flatRounded(CARD, dp(20).toFloat())
+            setPadding(dp(24), dp(32), dp(24), dp(32))
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = "🔒"
+                textSize = 36f
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = "חנות האפליקציות נעולה"
+                textSize = 20f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(12), 0, dp(8))
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = "המנוי פג בתאריך $expiryLabel.\nכדי להוריד אפליקציות או לקבל עדכונים דרך החנות יש לחדש את המנוי.\n\nשאר המכשיר והאפליקציות שכבר מותקנות ממשיכים לעבוד כרגיל."
+                textSize = 14f
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+            })
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(22)
+        })
+    }
+
     /** Play Store is hidden by default like any unapproved app - this briefly
      * reveals it, opens the install page, and lets it hide itself again once
      * the window closes (see PlayStoreGate). */
     private fun openPlayStoreForInstall(packageName: String) {
+        if (!Config.storeAccessAllowed(this)) {
+            Toast.makeText(this, "המנוי פג — חנות האפליקציות נעולה עד לחידוש", Toast.LENGTH_LONG).show()
+            showAppStore()
+            return
+        }
         PlayStoreGate.openForInstall(this, packageName)
     }
 
@@ -840,6 +885,11 @@ class CustomerActivity : Activity() {
      * AppInstaller.installFromUrl - customers reach the store through this
      * screen instead, so it needs the same handling. */
     private fun installApp(app: CatalogApp) {
+        if (!Config.storeAccessAllowed(this)) {
+            Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
+            showAppStore()
+            return
+        }
         if (app.appSource != "APK") {
             openPlayStoreForInstall(app.packageName)
             return

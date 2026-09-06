@@ -48,6 +48,8 @@ object Config {
     private const val KEY_DNS_PENDING_CUSTOMER_REQUEST = "dns_pending_customer_request"
     private const val KEY_NEWS_CACHE = "news_cache"
     private const val KEY_READ_UPDATE_IDS = "read_update_ids"
+    private const val KEY_STORE_ACCESS_ALLOWED = "store_access_allowed"
+    private const val KEY_SUBSCRIPTION_EXPIRY_DATE = "subscription_expiry_date"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -201,6 +203,23 @@ object Config {
         // getStringSet's returned Set must be treated as immutable (its own
         // docs warn against mutating it in place) - copy before adding.
         prefs(context).edit().putStringSet(KEY_READ_UPDATE_IDS, current + id).apply()
+    }
+
+    /** Server-authoritative entitlement for the in-app app store only.
+     * Defaults open until the first new-server sync so an app-first rollout
+     * cannot accidentally lock paying customers. It never controls the rest
+     * of the device, already-installed apps, filtering, or Device Owner. */
+    fun storeAccessAllowed(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_STORE_ACCESS_ALLOWED, true)
+
+    fun subscriptionExpiryDate(context: Context): String? =
+        prefs(context).getString(KEY_SUBSCRIPTION_EXPIRY_DATE, null)
+
+    fun setSubscriptionAccess(context: Context, access: SubscriptionAccess) {
+        prefs(context).edit()
+            .putBoolean(KEY_STORE_ACCESS_ALLOWED, access.allowed)
+            .putString(KEY_SUBSCRIPTION_EXPIRY_DATE, access.subscriptionExpiryDate)
+            .apply()
     }
 
     fun kioskEnabled(context: Context): Boolean =
