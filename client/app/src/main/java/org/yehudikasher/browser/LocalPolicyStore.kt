@@ -9,6 +9,15 @@ object LocalPolicyStore {
             LocalPolicyRule("safe.duckduckgo.com")
         )
 
+        // Exact-host essential services that must remain usable even when the
+        // remote category classifier is temporarily unavailable. These rules
+        // never bypass HTTPS enforcement, image moderation, Safe Browsing, or
+        // any other WebView hardening. No wildcard/subdomain inheritance.
+        val essentialServices = listOf(
+            LocalPolicyRule("egged.co.il"),
+            LocalPolicyRule("www.egged.co.il")
+        )
+
         val debugAllowlist = if (BuildConfig.DEBUG) {
             listOf(
                 LocalPolicyRule("example.com"),
@@ -18,6 +27,6 @@ object LocalPolicyStore {
             emptyList()
         }
 
-        return UrlPolicy(trustedSearch + debugAllowlist)
+        return UrlPolicy(trustedSearch + essentialServices + debugAllowlist)
     }
 }
