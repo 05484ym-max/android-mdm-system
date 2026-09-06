@@ -4,74 +4,55 @@ on:
   push:
     branches: [feature/subscription-unblock-grace]
     paths:
-      - 'backend/patch-subscription-store-lock.py'
       - '.github/workflows/patch-subscription-store-lock.yml'
 
 permissions:
   contents: write
 
 jobs:
-  apply-test-commit:
+  finalize-test-commit:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: mdm_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mdm_test
-      DATABASE_SSL: disable
-      ALLOW_INSECURE_ADMIN: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feature/subscription-unblock-grace
-      - name: Adapt patch to current app-store implementation
+
+      - name: Finalize exact weekly reminders and approved-app filtering
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('backend/patch-subscription-store-lock.py')
-          s = p.read_text()
-          old = '        contentArea.removeAllViews()\\n\\n        val apps = Config.appCatalog(this)\\n'
-          new = '        contentArea.removeAllViews()\\n\\n        val apps = approvedApps()\\n'
+
+          customer = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
+          s = customer.read_text()
+          old = '        val apps = Config.appCatalog(this)\n            .sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })'
+          new = '        val apps = approvedApps()\n            .sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })'
           if old not in s:
-              raise SystemExit('expected legacy app-store marker missing from patch helper')
-          p.write_text(s.replace(old, new, 1))
+              raise SystemExit('current store catalog marker not found')
+          customer.write_text(s.replace(old, new, 1))
+
+          backend = Path('backend/index.js')
+          s = backend.read_text()
+          old = '''  // Four deterministic pre-expiry reminder ids: 30-22, 21-15, 14-8, 7-1 days.
+          // The id changes only when a new weekly bucket starts, so the device's existing
+          // read-id mechanism naturally shows one new unread News badge per week.
+          const weeklyBucket = daysRemaining >= 22 ? 4 : daysRemaining >= 15 ? 3 : daysRemaining >= 8 ? 2 : 1;
+          return {
+            id: `subscription-renewal-${expiryKey}-w${weeklyBucket}`,'''
+          new = '''  // Start about a month before expiry, then create a new deterministic
+          // reminder exactly every seven days: 30, 23, 16, 9 and 2 days remaining.
+          // The id is stable inside each seven-day window, so repeated polling does not
+          // create duplicate unread News items.
+          const weeklyBucket = Math.floor((30 - daysRemaining) / 7);
+          return {
+            id: `subscription-renewal-${expiryKey}-w${weeklyBucket}`,'''
+          if old not in s:
+              raise SystemExit('weekly reminder marker not found')
+          backend.write_text(s.replace(old, new, 1))
           PY
-      - name: Apply patch
-        run: python3 backend/patch-subscription-store-lock.py
+
       - name: Verify backend JavaScript syntax
         run: node --check backend/index.js
-      - name: Install backend dependencies
-        working-directory: backend
-        run: npm ci
-      - name: Verify backend starts with schema
-        working-directory: backend
-        run: |
-          node - <<'NODE'
-          const db = require('./db');
-          (async () => {
-            await db.init();
-            await db.createDevice('9900000002', 'hash');
-            await db.setSubscription('9900000002', {
-              price: 100,
-              startDate: new Date().toISOString(),
-              expiryDate: new Date(Date.now() + 20 * 86400000).toISOString(),
-            });
-            const d = await db.getDevice('9900000002');
-            if (!d.subscription || !d.subscription.expiryDate) throw new Error('subscription fixture failed');
-            console.log('subscription fixture ok');
-            process.exit(0);
-          })().catch(e => { console.error(e); process.exit(1); });
-          NODE
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -88,21 +69,19 @@ jobs:
       - name: Compile Android client
         working-directory: dpc-app
         run: gradle assembleDebug --no-daemon
-      - name: Verify store-only gating markers
+
+      - name: Verify required behavior markers
         run: |
-          grep -F 'fun storeAccessAllowed' dpc-app/app/src/main/java/org/mdmopen/dpc/Config.kt
-          grep -F 'Config.setSubscriptionAccess' dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt
+          grep -F 'val apps = approvedApps()' dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
           grep -F 'if (!Config.storeAccessAllowed(this))' dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
-          grep -F 'subscription-renewal-' backend/index.js
+          grep -F 'Math.floor((30 - daysRemaining) / 7)' backend/index.js
           grep -F 'חנות האפליקציות והעדכונים תינעל' backend/index.js
-      - name: Commit verified feature
+          grep -F 'שאר המכשיר והאפליקציות שכבר מותקנות' backend/index.js
+
+      - name: Commit verified finalization
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add backend/index.js \
-            dpc-app/app/src/main/java/org/mdmopen/dpc/ApiClient.kt \
-            dpc-app/app/src/main/java/org/mdmopen/dpc/Config.kt \
-            dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt \
-            dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
-          git commit -m 'Lock app store after subscription expiry and add weekly reminders' || exit 0
+          git add backend/index.js dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          git commit -m 'Finalize weekly subscription reminders and preserve app allowlist' || exit 0
           git push origin HEAD:feature/subscription-unblock-grace
