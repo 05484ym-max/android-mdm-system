@@ -1,5 +1,4 @@
 // Unified customer search/profile panel for the mobile admin dashboard.
-// Loaded dynamically from news.js to avoid duplicating the existing device-detail implementation.
 (function () {
   'use strict';
 
@@ -53,6 +52,13 @@
     const history = Array.isArray(d.commandHistory) ? d.commandHistory : [];
     const deviceStatus = d.status || {};
     const wa = p.whatsappGuard || { blockStatuses: false, blockChannels: false, hideProfilePhotos: false };
+    const waRequested = Boolean(wa.blockStatuses || wa.blockChannels || wa.hideProfilePhotos);
+    const waAccessibility = deviceStatus.whatsappGuardAccessibilityEnabled === true;
+    const waRuntime = !waRequested
+      ? { text: 'ההגנה כבויה', cls: 'wa-runtime-off' }
+      : waAccessibility
+        ? { text: '✓ פעיל ומוגן', cls: 'wa-runtime-ok' }
+        : { text: '⚠ נדרשת הפעלה חד־פעמית של שירות הנגישות — WhatsApp יישאר נעול עד אז', cls: 'wa-runtime-warn' };
     const lastCommands = history.slice(-5).reverse();
 
     panel.innerHTML = `
@@ -77,6 +83,7 @@
 
       <div class="unified-profile-section whatsapp-guard-admin">
         <h3>🟢 הגנת WhatsApp</h3>
+        <div class="wa-runtime ${esc(waRuntime.cls)}">${esc(waRuntime.text)}</div>
         <div class="unified-command-summary">כל חסימה נשלטת בנפרד ומסתנכרנת למכשיר.</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
           <button type="button" class="toggle-btn ${wa.blockStatuses ? 'wa-on' : ''}" data-wa-key="blockStatuses">סטטוסים: ${wa.blockStatuses ? 'חסום' : 'פתוח'}</button>
@@ -163,7 +170,6 @@
     if (!input || !results) return;
     ensurePanel();
 
-    // Intercept selection before the legacy handler opens the separate detail overlay.
     results.addEventListener('click', e => {
       const btn = e.target.closest('[data-quick-device]');
       if (!btn) return;
@@ -174,7 +180,6 @@
       render(id);
     }, true);
 
-    // As the manager types, if there is exactly one match, show it immediately.
     input.addEventListener('input', () => {
       const matches = matchingDevices(input.value);
       if (matches.length === 1) render(matches[0].deviceId);
