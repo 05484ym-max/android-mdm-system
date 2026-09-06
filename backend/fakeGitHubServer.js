@@ -55,6 +55,7 @@ function startFakeGitHubServer() {
         return sendJson(201, {
           id: Number(id),
           name,
+          content_type: req.headers['content-type'] || null,
           browser_download_url: `http://127.0.0.1/fake/${id}/${encodeURIComponent(name)}`,
         });
       }
@@ -87,7 +88,7 @@ function startFakeGitHubServer() {
               }
               const slice = asset.body.subarray(start, end + 1);
               res.writeHead(206, {
-                'content-type': asset.contentType || 'application/octet-stream',
+                'content-type': 'application/octet-stream',
                 'content-length': String(slice.length),
                 'content-range': `bytes ${start}-${end}/${asset.body.length}`,
                 'accept-ranges': 'bytes',
@@ -95,13 +96,17 @@ function startFakeGitHubServer() {
               return res.end(slice);
             }
             res.writeHead(200, {
-              'content-type': asset.contentType || 'application/octet-stream',
+              'content-type': 'application/octet-stream',
               'content-length': String(asset.body.length),
               'accept-ranges': 'bytes',
             });
             return res.end(asset.body);
           }
-          return sendJson(200, { id: Number(id), name: asset.name });
+          return sendJson(200, {
+            id: Number(id),
+            name: asset.name,
+            content_type: asset.contentType,
+          });
         }
       }
 
