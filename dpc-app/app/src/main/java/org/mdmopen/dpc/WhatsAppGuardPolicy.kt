@@ -3,7 +3,6 @@ package org.mdmopen.dpc
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
-import android.os.UserManager
 import android.provider.Settings
 
 data class WhatsAppGuardPolicy(
@@ -41,11 +40,11 @@ object WhatsAppGuardConfig {
 /**
  * Device-Owner enforcement around the accessibility based WhatsApp guard.
  *
- * Android does not let a normal DPC silently enable an AccessibilityService.
- * Therefore the first enable is a one-time local action. After it is enabled,
- * Device Owner locks accessibility configuration so the customer cannot simply
- * turn the guard off. Until that first enable happens, WhatsApp itself is
- * suspended: fail closed instead of presenting an unfiltered WhatsApp window.
+ * Android does not provide a supported Device Owner API that silently enables
+ * an AccessibilityService, so the first enable remains a one-time local action.
+ * The security rule is fail closed: whenever any WhatsApp guard rule is requested
+ * and the service is not actually enabled, WhatsApp itself is suspended instead
+ * of being left available without filtering.
  */
 object WhatsAppGuardProtection {
     const val WHATSAPP_PACKAGE = "com.whatsapp"
@@ -65,30 +64,27 @@ object WhatsAppGuardProtection {
         val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
         if (!dpm.isDeviceOwnerApp(context.packageName)) return "NOT_DEVICE_OWNER"
 
-        val enabled = accessibilityEnabled(context)
         if (!policy.enabled) {
-            // Do not leave the whole Accessibility settings page locked after the
-            // administrator has disabled every WhatsApp protection.
-            runCatching { dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_ACCESSIBILITY) }
+            // The ordinary PolicyEnforcer remains authoritative when WhatsApp
+            // guard is disabled. It has already applied the app allow/suspend
+            // policy before this method is called.
             return "DISABLED"
         }
 
-        if (!enabled) {
-            // The admin/customer must still be able to perform the one-time
-            // accessibility enable, so do not apply DISALLOW_CONFIG_ACCESSIBILITY yet.
-            runCatching { dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_ACCESSIBILITY) }
-            runCatching { dpm.setPackagesSuspended(admin, arrayOf(WHATSAPP_PACKAGE), true) }
+        if (!accessibilityEnabled(context)) {
+            runCatching {
+                dpm.setPackagesSuspended(admin, arrayOf(WHATSAPP_PACKAGE), true)
+            }
             return "WAITING_FOR_ACCESSIBILITY"
         }
 
-        // Once the service is genuinely enabled, lock the relevant settings so
-        // disabling Accessibility is no longer a bypass path on managed devices.
-        runCatching { dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_ACCESSIBILITY) }
-
-        // PolicyEnforcer normally unsuspends approved apps. This also closes the
-        // short setup gap immediately after the AccessibilityService connects.
+        // PolicyEnforcer normally releases approved apps. Releasing here too
+        // closes the setup transition immediately when Accessibility connects.
+        // Never release WhatsApp if it is not approved in the ordinary app policy.
         if (WHATSAPP_PACKAGE in Config.allowedApps(context)) {
-            runCatching { dpm.setPackagesSuspended(admin, arrayOf(WHATSAPP_PACKAGE), false) }
+            runCatching {
+                dpm.setPackagesSuspended(admin, arrayOf(WHATSAPP_PACKAGE), false)
+            }
         }
         return "PROTECTED"
     }
