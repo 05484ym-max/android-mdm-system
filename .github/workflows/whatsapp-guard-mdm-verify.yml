@@ -2,7 +2,7 @@ name: Verify MDM WhatsApp Guard
 
 on:
   push:
-    branches: [ feature/whatsapp-guard-mdm ]
+    branches: [ feature/whatsapp-guard-mdm, fix/whatsapp-optional-guard ]
     paths:
       - 'dpc-app/**'
       - 'backend/index.js'
