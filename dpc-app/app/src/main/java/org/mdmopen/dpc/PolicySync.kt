@@ -65,6 +65,12 @@ object PolicySync {
             }
         }
 
+        // A manual/remote policy sync should also act as an immediate DPC update
+        // trigger. AutoUpdater performs its own Device Owner, version, package and
+        // signing-certificate checks, and its AtomicBoolean prevents duplicate
+        // downloads if the scheduled updater is already running.
+        AutoUpdater.check(context)
+
         return buildString {
             append("רקע: $wallpaperResult")
             append("\nמותרות ${result.policy.allowedApps.size} · ")
