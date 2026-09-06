@@ -166,6 +166,10 @@ class PolicyEnforcer(private val context: Context) {
             if (!dpm.setApplicationHidden(admin, pkg, false)) failed += pkg
         }
 
+        val successfullyHidden = (toSuspend - failed.toSet()).toSet()
+        val stillTracked = (Config.policyHiddenApps(context) + successfullyHidden) - toUnsuspend.toSet()
+        Config.setPolicyHiddenApps(context, stillTracked)
+
         if (policy.kioskEnabled) enableKiosk(allowed) else disableKiosk()
 
         return EnforcementResult(
@@ -191,8 +195,12 @@ class PolicyEnforcer(private val context: Context) {
 
         val recovered = mutableListOf<String>()
         val failed = mutableListOf<String>()
-        val installed = context.packageManager.getInstalledApplications(0)
-            .map { it.packageName }
+        val normallyVisible = context.packageManager.getInstalledApplications(0).map { it.packageName }
+        val hiddenVisible = try {
+            context.packageManager.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
+                .map { it.packageName }
+        } catch (_: Exception) { emptyList() }
+        val installed = (normallyVisible + hiddenVisible + Config.policyHiddenApps(context))
             .filter { it != context.packageName }
             .distinct()
 
@@ -214,9 +222,11 @@ class PolicyEnforcer(private val context: Context) {
                 failed += pkg
             }
         }
+        val failedSet = failed.toSet()
+        Config.setPolicyHiddenApps(context, Config.policyHiddenApps(context).intersect(failedSet))
         return EnforcementResult(
             suspended = emptyList(),
-            unsuspended = recovered.distinct() - failed.toSet(),
+            unsuspended = recovered.distinct() - failedSet,
             failed = failed.distinct(),
             systemAppsSkipped = 0,
             kioskEnabled = false,

@@ -50,6 +50,7 @@ object Config {
     private const val KEY_READ_UPDATE_IDS = "read_update_ids"
     private const val KEY_STORE_ACCESS_ALLOWED = "store_access_allowed"
     private const val KEY_SUBSCRIPTION_EXPIRY_DATE = "subscription_expiry_date"
+    private const val KEY_POLICY_HIDDEN_APPS = "policy_hidden_apps"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -89,6 +90,13 @@ object Config {
 
     fun setAllowedApps(context: Context, apps: List<String>) {
         prefs(context).edit().putStringSet(KEY_ALLOWED_APPS, apps.toSet()).apply()
+    }
+
+    fun policyHiddenApps(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_POLICY_HIDDEN_APPS, emptySet()).orEmpty().toSet()
+
+    fun setPolicyHiddenApps(context: Context, packages: Set<String>) {
+        prefs(context).edit().putStringSet(KEY_POLICY_HIDDEN_APPS, packages).apply()
     }
 
     /** Display metadata (name, icon) for the customer's approved apps, so the

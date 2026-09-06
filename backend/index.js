@@ -898,7 +898,7 @@ const fullOpenAdminLimiter = rateLimit({
   message: { error: 'too many full-open changes; try again shortly' },
 });
 
-app.post('/api/devices/:deviceId/full-open', fullOpenAdminLimiter, requireAdmin, wrap(async (req, res) => {
+app.post('/api/devices/:deviceId/full-open', requireAdmin, fullOpenAdminLimiter, wrap(async (req, res) => {
   if (typeof req.body.enabled !== 'boolean') {
     return res.status(400).json({ error: 'enabled must be boolean' });
   }
