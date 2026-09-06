@@ -65,6 +65,13 @@ object PolicySync {
             }
         }
 
+        // A successful manual or remote policy sync now also performs an immediate
+        // self-update check. AutoUpdater runs on its own worker thread and has an
+        // atomic guard, so this does not delay the sync UI and cannot race the
+        // scheduled/push-triggered updater. Device Owner + signature verification
+        // keep the update silent and restricted to our signed DPC package.
+        AutoUpdater.check(context.applicationContext)
+
         return buildString {
             append("רקע: $wallpaperResult")
             append("\nמותרות ${result.policy.allowedApps.size} · ")
@@ -75,6 +82,7 @@ object PolicySync {
             append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
             append("סנכרון כל ${result.policy.syncIntervalMinutes} דק'")
             append("\n• WhatsApp Guard: $whatsappGuardResult")
+            append("\n• בדיקת עדכון MDM הופעלה")
             dnsReconcileResult?.let { append("\n• DNS: $it") }
             dnsFailSafeResult?.let { append("\n• $it") }
             outcomes.forEach { append("\n• $it") }
