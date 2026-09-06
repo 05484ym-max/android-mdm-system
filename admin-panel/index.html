@@ -6,6 +6,7 @@
 <title>יהודי כשר — לוח בקרה</title>
 <link rel="stylesheet" href="subscription-unblock.css" />
 <link rel="stylesheet" href="full-open.css" />
+<link rel="stylesheet" href="permanent-release.css" />
 <style>
   :root {
     --bg: #F2F1E6;
@@ -810,7 +811,7 @@ function renderDeviceList(devices) {
         <div class="device-actions">
           <button class="open-detail-btn" data-open-detail="${id}">פרטי לקוח</button>
           <button class="open-detail-btn" data-delete-device="${id}">הסר מהפאנל</button>
-          <button class="open-detail-btn" data-release-device="${id}">הסר חסימה מרחוק</button>
+          <button class="open-detail-btn" data-release-device="${id}">שחרור מכשיר לצמיתות</button>
         </div>
       </div>
     `;
@@ -1582,5 +1583,6 @@ loadDevices();
 <script src="customer-search.js"></script>
 <script src="subscription-unblock.js"></script>
 <script src="full-open.js"></script>
+<script src="permanent-release.js"></script>
 </body>
 </html>
