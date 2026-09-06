@@ -92,3 +92,17 @@
     text-align: center;
   }
 }
+
+/* Prominent attachment control for phone-first admin use. */
+.news-media-field {
+  background: var(--accent-tint);
+  border: 1px dashed var(--accent-soft);
+  border-radius: 14px;
+  padding: 12px;
+}
+.news-media-label { font-size: .95rem; }
+#newsMediaInput { background: #fff; cursor: pointer; }
+.news-media-selected {
+  font-size: .78rem; font-weight: 700; color: var(--accent); margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}

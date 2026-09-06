@@ -1396,8 +1396,8 @@ class CustomerActivity : Activity() {
         // plain strings, no markup interpretation anywhere in this pipeline).
         val detailCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedCardWithBorder()
-            setPadding(dp(20), dp(20), dp(20), dp(20))
+            background = flatRounded("#DFF1D8", dp(18).toFloat())
+            setPadding(dp(16), dp(14), dp(16), dp(12))
             addView(TextView(this@CustomerActivity).apply {
                 text = item.body
                 textSize = 15f
@@ -1408,7 +1408,16 @@ class CustomerActivity : Activity() {
             })
         }
         addNewsMedia(detailCard, item, detail = true)
-        contentArea.addView(detailCard)
+        contentArea.addView(
+            detailCard,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginStart = dp(34)
+                bottomMargin = dp(14)
+            }
+        )
     }
 
     private fun newsCard(item: UpdateItem): LinearLayout {
@@ -1416,10 +1425,13 @@ class CustomerActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(16), dp(18), dp(16))
-            background = roundedCardWithBorder()
+            background = flatRounded("#DFF1D8", dp(18).toFloat())
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(14) }
+            ).apply {
+                marginStart = dp(34)
+                bottomMargin = dp(14)
+            }
             isClickable = true
             isFocusable = true
 
@@ -1472,7 +1484,7 @@ class CustomerActivity : Activity() {
                 textSize = 11f
                 typeface = mediumFont
                 setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.RIGHT
+                gravity = Gravity.LEFT
                 setPadding(0, dp(8), 0, 0)
             })
 
