@@ -1669,7 +1669,29 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
 
 // ---------- customer support tickets ----------
 
-app.post('/api/devices/:deviceId/support-tickets', requireDevice, wrap(async (req, res) => {
+// Device-facing support endpoints are authenticated, but auth alone does not
+// prevent a compromised/buggy managed device from flooding support storage or
+// repeatedly polling the database. Keep write/read budgets separate: creating
+// tickets is intentionally much tighter than reading a customer's own history.
+// The limiter runs after requireDevice so unauthorized traffic is rejected by
+// device auth first; successful devices are then bounded per source IP.
+const supportTicketCreateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many support requests; try again later' },
+});
+
+const supportTicketReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many support refreshes; try again shortly' },
+});
+
+app.post('/api/devices/:deviceId/support-tickets', requireDevice, supportTicketCreateLimiter, wrap(async (req, res) => {
   const subject = typeof req.body.subject === 'string' ? req.body.subject.trim() : '';
   const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
   if (!subject || subject.length > SUPPORT_SUBJECT_MAX_LENGTH) {
@@ -1687,7 +1709,7 @@ app.post('/api/devices/:deviceId/support-tickets', requireDevice, wrap(async (re
   res.status(201).json(ticket);
 }));
 
-app.get('/api/devices/:deviceId/support-tickets', requireDevice, wrap(async (req, res) => {
+app.get('/api/devices/:deviceId/support-tickets', requireDevice, supportTicketReadLimiter, wrap(async (req, res) => {
   res.json(await db.listSupportTicketsForDevice(req.params.deviceId));
 }));
 
