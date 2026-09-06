@@ -99,7 +99,7 @@ block = '''    private fun whatsAppGuardSetupCard(): LinearLayout {
     }
 
     private fun openWhatsAppAccessibilitySettings() {
-        val details = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+        val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
             data = Uri.parse("package:$packageName")
         }
         try {
