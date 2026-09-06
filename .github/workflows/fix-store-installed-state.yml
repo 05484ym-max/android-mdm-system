@@ -2,14 +2,14 @@ name: Fix store installed-state detection
 
 on:
   push:
-    branches: [ fix/store-installed-state ]
+    branches: [ "fix/store-installed-state" ]
 
 permissions:
   contents: write
 
 jobs:
   patch-and-verify:
-    if: ${{ !contains(github.event.head_commit.message, '[store-installed-fixed]') }}
+    if: "${{ !contains(github.event.head_commit.message, '[store-installed-fixed]') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
