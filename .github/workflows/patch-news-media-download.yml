@@ -8,10 +8,34 @@ on:
 permissions:
   contents: write
 
+env:
+  PGUSER: newsupdates_test_user
+  PGPASSWORD: newsupdates_test_pw
+  PGDATABASE: newsupdates_test
+  ADMIN_USERNAME: itest_admin
+  ADMIN_PASSWORD: itest_password_123
+  JWT_SECRET: itest-jwt-secret-not-for-prod-ci-only
+  SECURE_COOKIES: '0'
+  DATABASE_SSL: disable
+
 jobs:
   patch-and-verify:
     if: ${{ !contains(github.event.head_commit.message, '[media-fix-done]') }}
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: newsupdates_test_user
+          POSTGRES_PASSWORD: newsupdates_test_pw
+          POSTGRES_DB: newsupdates_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U newsupdates_test_user -d newsupdates_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,8 +48,20 @@ jobs:
         run: |
           node --check backend/index.js
           node --check backend/apkStorage.js
-      - name: Run customer updates tests
-        run: npm test --prefix backend -- --runInBand || npm test --prefix backend
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Run customer updates media integration tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://newsupdates_test_user:newsupdates_test_pw@127.0.0.1:5432/newsupdates_test
+        run: node test-customer-updates-media-integration.js
       - name: Commit checked media fix
         run: |
           git config user.name 'github-actions[bot]'
