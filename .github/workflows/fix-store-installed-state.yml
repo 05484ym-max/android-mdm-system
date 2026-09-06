@@ -1,29 +1,32 @@
-name: Fix store installed-state detection
+name: Verify store installed state fix
 
 on:
   push:
     branches:
-      - fix/store-installed-state
+      - "fix/store-installed-state"
     paths:
-      - .github/workflows/fix-store-installed-state.yml
+      - ".github/workflows/fix-store-installed-state.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch-and-verify:
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout branch
+        uses: actions/checkout@v4
         with:
           ref: fix/store-installed-state
 
-      - name: Patch installed-state detection
+      - name: Patch installed-state detection in runner
+        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt')
-          s = p.read_text()
+
+          path = Path("dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt")
+          source = path.read_text()
           old = '''    private fun isInstalled(packageName: String): Boolean {
         // Hidden packages can disappear from ordinary PackageManager lookups
         // on some OEM builds even though they are still physically installed.
@@ -58,10 +61,7 @@ jobs:
           new = '''    private fun isInstalled(packageName: String): Boolean {
         // Approved/managed is not the same thing as installed. Query retained
         // package metadata so hidden apps are still visible, but only treat the
-        // package as installed when Android sets FLAG_INSTALLED. Do not fall
-        // back to DevicePolicyManager.isApplicationHidden(): policy state can
-        // exist for an approved package and must never make an absent app look
-        // installed in the customer store.
+        // package as installed when Android sets FLAG_INSTALLED.
         return try {
             val info = packageManager.getApplicationInfo(
                 packageName,
@@ -75,36 +75,50 @@ jobs:
         }
     }
 '''
-          if old not in s:
-              raise SystemExit('target isInstalled block not found')
-          p.write_text(s.replace(old, new, 1))
+          if old not in source:
+              raise SystemExit("target isInstalled block not found")
+          path.write_text(source.replace(old, new, 1))
+          PY
+
+      - name: Verify UI installed-state conditions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path("dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt").read_text()
+          checks = {
+              'not installed shows install': '!installed -> "התקנה"',
+              'open hidden when not installed': 'visibility = if (installed) View.VISIBLE else View.GONE',
+              'APK installed action preserved': 'app.appSource == "APK" && installed -> "התקן/עדכן"',
+              'PackageManager metadata lookup': 'PackageManager.MATCH_UNINSTALLED_PACKAGES',
+              'FLAG_INSTALLED truth source': '(info.flags and ApplicationInfo.FLAG_INSTALLED) != 0',
+          }
+          for name, needle in checks.items():
+              if needle not in s:
+                  raise SystemExit(f"missing expected UI/state condition: {name}")
+          block = s[s.index('private fun isInstalled'):s.index('private fun confirmQuickUninstall')]
+          if 'isApplicationHidden' in block:
+              raise SystemExit('isInstalled still depends on isApplicationHidden')
+          print('UI/state checks passed')
           PY
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install SDK packages
+      - name: Install Android SDK packages
         run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.9
+          gradle-version: "8.9"
 
-      - name: Compile DPC debug APK
+      - name: Build DPC debug APK
         working-directory: dpc-app
-        run: gradle assembleDebug
-
-      - name: Commit verified fix
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
-          git commit -m "Fix app store installed-state detection"
-          git push origin HEAD:fix/store-installed-state
+        run: gradle assembleDebug --stacktrace
