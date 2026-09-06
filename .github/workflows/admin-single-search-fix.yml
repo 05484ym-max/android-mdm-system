@@ -3,71 +3,24 @@ name: Admin single search fix
 on:
   push:
     branches:
-      - 'fix/admin-single-customer-search'
-
-permissions:
-  contents: write
+      - fix/admin-single-customer-search
 
 jobs:
   patch:
     if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Simplify customer search UI
-        shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path('admin-panel/index.html')
-          s = p.read_text()
-
-          replacements = [
-            ('    <input class="search-input" id="deviceSearch" placeholder="חיפוש לפי מספר לקוח, שם או מזהה מכשיר..." />\n', ''),
-            ("  renderDeviceList(filterDevices(document.getElementById('deviceSearch').value));", "  renderDeviceList(filterDevices(document.getElementById('quickCustomerSearch').value));"),
-            ("document.getElementById('quickCustomerSearch').addEventListener('input', renderQuickCustomerSearch);", """document.getElementById('quickCustomerSearch').addEventListener('input', () => {
-  renderQuickCustomerSearch();
-  renderDeviceList(filterDevices(document.getElementById('quickCustomerSearch').value));
-});"""),
-            ('    gap: 14px; margin-bottom: 24px;', '    gap: 12px; margin-bottom: 18px;'),
-            ('    border-radius: 20px; padding: 18px; text-align: center;', '    border-radius: 20px; padding: 14px; text-align: center;'),
-            ('    position: relative; max-width: 720px; margin: 0 auto 18px;', '    position: relative; max-width: 720px; margin: 0 auto 14px;'),
-            ('    border-radius: 20px; padding: 14px 16px;', '    border-radius: 20px; padding: 12px 14px;'),
-          ]
-          for old, new in replacements:
-            if s.count(old) != 1:
-              raise SystemExit(f'anchor count {s.count(old)} for {old[:50]!r}')
-            s = s.replace(old, new, 1)
-
-          old_devices_css = '''  .devices-section {
-    background: var(--card-bg); border: 1px solid var(--card-border);
-    border-radius: 20px; padding: 18px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.03);
-  }'''
-          new_devices_css = old_devices_css.replace('padding: 18px;', 'padding: 16px;')
-          if s.count(old_devices_css) != 1:
-            raise SystemExit('devices-section css anchor mismatch')
-          s = s.replace(old_devices_css, new_devices_css, 1)
-
-          pattern = re.compile(r"\ndocument\.getElementById\('deviceSearch'\)\.addEventListener\('input', \(\) => \{.*?\n\}\);\n", re.S)
-          s, n = pattern.subn('\n', s, count=1)
-          if n != 1:
-            raise SystemExit(f'deviceSearch listener removals={n}')
-          if 'deviceSearch' in s:
-            raise SystemExit('deviceSearch references remain')
-
-          p.write_text(s)
-          PY
+      - run: python3 .github/scripts/admin-single-search-fix.py
+      - run: |
           node -e "const fs=require('fs');const s=fs.readFileSync('admin-panel/index.html','utf8');const m=s.match(/<script>([\\s\\S]*?)<\\/script>/);if(!m)throw new Error('script not found');new Function(m[1]);"
           git diff --check
-      - name: Commit production change
-        shell: bash
-        run: |
-          rm .github/workflows/admin-single-search-fix.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add admin-panel/index.html .github/workflows/admin-single-search-fix.yml
-          git commit -m 'Simplify admin customer search layout'
+      - run: |
+          rm .github/workflows/admin-single-search-fix.yml .github/scripts/admin-single-search-fix.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add admin-panel/index.html .github/workflows/admin-single-search-fix.yml .github/scripts/admin-single-search-fix.py
+          git commit -m "Simplify admin customer search layout"
           git push
