@@ -447,66 +447,82 @@ class CustomerActivity : Activity() {
                 textSize = 14f
                 setTextColor(Color.parseColor(MUTED))
                 gravity = Gravity.CENTER
-                setPadding(0, dp(28), 0, dp(28))
+                setPadding(0, dp(24), 0, dp(24))
             })
             return
         }
+
         tickets.forEach { ticket ->
-            val statusText = when (ticket.status) {
-                "IN_PROGRESS" -> "בטיפול"
-                "RESOLVED" -> "טופל"
-                else -> "חדש"
-            }
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = flatRounded(CARD, dp(16).toFloat())
-                setPadding(dp(16), dp(14), dp(16), dp(14))
+                background = flatRounded(CARD, dp(18).toFloat())
+                setPadding(dp(14), dp(14), dp(14), dp(14))
+            }
+
+            val statusText = when (ticket.status) {
+                "RESOLVED" -> "טופל"
+                "IN_PROGRESS" -> "בטיפול"
+                else -> "חדש"
             }
             card.addView(TextView(this).apply {
-                text = ticket.subject
+                text = "${ticket.subject}  ·  $statusText"
                 textSize = 15f
                 typeface = heavyFont
                 setTextColor(Color.parseColor(TEXT))
                 gravity = Gravity.RIGHT
             })
-            card.addView(TextView(this).apply {
-                text = statusText
-                textSize = 12f
-                typeface = mediumFont
-                setTextColor(Color.parseColor(if (ticket.status == "RESOLVED") OK else ACCENT))
-                gravity = Gravity.RIGHT
-                setPadding(0, dp(4), 0, dp(8))
-            })
-            card.addView(TextView(this).apply {
-                text = ticket.message
-                textSize = 14f
-                setTextColor(Color.parseColor(TEXT))
-                gravity = Gravity.RIGHT
-            })
-            if (!ticket.adminReply.isNullOrBlank()) {
-                card.addView(TextView(this).apply {
-                    text = "תשובת התמיכה:\n${ticket.adminReply}"
-                    textSize = 14f
-                    typeface = mediumFont
-                    setTextColor(Color.parseColor(ACCENT))
-                    gravity = Gravity.RIGHT
-                    background = flatRounded(ACCENT_TINT, dp(10).toFloat())
-                    setPadding(dp(12), dp(10), dp(12), dp(10))
-                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+
+            val chat = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = flatRounded("#F5F4ED", dp(16).toFloat())
+                setPadding(dp(10), dp(10), dp(10), dp(10))
             }
-            card.addView(TextView(this).apply {
-                text = try { SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("he", "IL")).format(java.util.Date.from(Instant.parse(ticket.createdAt))) } catch (_: Exception) { ticket.createdAt }
-                textSize = 11f
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.RIGHT
-                setPadding(0, dp(10), 0, 0)
-            })
-            container.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+
+            fun addBubble(message: String, sender: String, whenIso: String, mine: Boolean) {
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = if (mine) Gravity.RIGHT else Gravity.LEFT
+                }
+                val bubble = TextView(this).apply {
+                    text = "$sender\n$message\n${formatUpdateDate(whenIso)}"
+                    textSize = 13.5f
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                    background = flatRounded(if (mine) "#DFF1D8" else "#FFFFFF", dp(16).toFloat())
+                    setPadding(dp(12), dp(9), dp(12), dp(8))
+                }
+                row.addView(
+                    bubble,
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.84f)
+                )
+                chat.addView(
+                    row,
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(8)
+                    }
+                )
+            }
+
+            addBubble(ticket.message, "אתם", ticket.createdAt, true)
+            ticket.adminReply?.takeIf { it.isNotBlank() }?.let {
+                addBubble(it, "תמיכה — יהודי כשר", ticket.updatedAt, false)
+            }
+
+            card.addView(
+                chat,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(12)
+                }
+            )
+            container.addView(
+                card,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(12)
+                }
+            )
         }
     }
 
-    /** Shows the actual app grid directly in this tab - no separate page to
-     * tap into first, matching the other two tabs. */
     private fun showAppStore() {
         isPersonalAreaActive = false
         isNewsActive = false
@@ -1470,6 +1486,7 @@ class CustomerActivity : Activity() {
             "IMAGE" -> {
                 val image = ImageView(this).apply {
                     adjustViewBounds = true
+                    minimumHeight = dp(if (detail) 260 else 170)
                     scaleType = ImageView.ScaleType.FIT_CENTER
                     setBackgroundColor(Color.parseColor("#F7F7F4"))
                     setPadding(dp(4), dp(4), dp(4), dp(4))
@@ -1558,11 +1575,15 @@ class CustomerActivity : Activity() {
     private fun loadNewsImageSafely(url: String): Bitmap? {
         val conn = (URL(url).openConnection() as? HttpURLConnection) ?: return null
         return try {
-            conn.connectTimeout = 12_000
-            conn.readTimeout = 20_000
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 60_000
             conn.instanceFollowRedirects = true
-            val length = conn.contentLengthLong
-            if (length > 10L * 1024 * 1024) return null
+            conn.setRequestProperty("Accept", "image/*")
+            conn.setRequestProperty("User-Agent", "YehudiKasher-Android")
+            val code = conn.responseCode
+            if (code !in 200..299) return null
+            val declared = conn.contentLengthLong
+            if (declared > 10L * 1024L * 1024L) return null
             val bytes = conn.inputStream.use { input ->
                 val out = ByteArrayOutputStream()
                 val buffer = ByteArray(16 * 1024)
@@ -1576,19 +1597,7 @@ class CustomerActivity : Activity() {
                 }
                 out.toByteArray()
             }
-
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-
-            var sample = 1
-            while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) {
-                sample *= 2
-            }
-            BitmapFactory.decodeByteArray(
-                bytes, 0, bytes.size,
-                BitmapFactory.Options().apply { inSampleSize = sample }
-            )
+            if (bytes.isEmpty()) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         } catch (_: Exception) {
             null
         } finally {
