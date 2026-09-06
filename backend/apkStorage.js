@@ -200,6 +200,30 @@ async function downloadApk(config, assetId, requestHeaders = {}) {
   return response;
 }
 
+async function downloadMedia(config, assetId, requestHeaders = {}) {
+  // GitHub's binary release-asset endpoint may return application/octet-stream
+  // even when the uploaded asset metadata correctly says image/jpeg, image/png,
+  // etc. Validate the trusted GitHub asset metadata first, then stream the
+  // binary body without relying on the transport Content-Type.
+  const base = `${config.apiBase}/repos/${config.repository}/releases/assets/${encodeURIComponent(assetId)}`;
+  const metadata = await githubJson(config, base);
+  const contentType = String(metadata && metadata.content_type || '').toLowerCase();
+  if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm'].includes(contentType)) {
+    throw new Error('GitHub media asset metadata has an invalid content type');
+  }
+  const response = await fetch(base, {
+    headers: {
+      ...headers(config, 'application/octet-stream'),
+      ...requestHeaders,
+    },
+    redirect: 'follow',
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub media download failed: HTTP ${response.status}`);
+  }
+  return { response, contentType };
+}
+
 module.exports = {
   APK_CONTENT_TYPE,
   loadStorageConfig,
@@ -211,4 +235,5 @@ module.exports = {
   uploadMedia,
   deleteApk,
   downloadApk,
+  downloadMedia,
 };

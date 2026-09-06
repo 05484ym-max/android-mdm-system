@@ -503,15 +503,13 @@ app.get('/api/customer-updates/media/:assetId', wrap(async (req, res) => {
   }
   const storageConfig = apkStorage.loadStorageConfig();
   const range = req.get('range');
-  const upstream = await apkStorage.downloadApk(
+  const downloaded = await apkStorage.downloadMedia(
     storageConfig,
     req.params.assetId,
     range ? { Range: range } : {},
   );
-  const contentType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm'].includes(contentType)) {
-    throw new Error('GitHub media asset returned an invalid content type');
-  }
+  const upstream = downloaded.response;
+  const contentType = downloaded.contentType;
   if (upstream.status === 206) res.status(206);
   res.setHeader('Content-Type', contentType);
   for (const header of ['content-length', 'content-range', 'accept-ranges']) {
