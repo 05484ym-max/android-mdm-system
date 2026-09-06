@@ -519,7 +519,7 @@ class CustomerActivity : Activity() {
             return
         }
 
-        val apps = Config.appCatalog(this)
+        val apps = approvedApps()
             .sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
 
         val search = EditText(this).apply {

@@ -2301,10 +2301,9 @@ function subscriptionNewsUpdate(device, now = new Date()) {
 
   if (daysRemaining > 30) return null;
 
-  // Four deterministic pre-expiry reminder ids: 30-22, 21-15, 14-8, 7-1 days.
-  // The id changes only when a new weekly bucket starts, so the device's existing
-  // read-id mechanism naturally shows one new unread News badge per week.
-  const weeklyBucket = daysRemaining >= 22 ? 4 : daysRemaining >= 15 ? 3 : daysRemaining >= 8 ? 2 : 1;
+  // Start about a month before expiry, then create a new deterministic reminder every seven days: 30, 23, 16, 9 and 2 days remaining.
+  // The id is stable inside each seven-day window, so repeated polling does not create duplicate unread News items.
+  const weeklyBucket = Math.floor((30 - daysRemaining) / 7);
   return {
     id: `subscription-renewal-${expiryKey}-w${weeklyBucket}`,
     title: 'תזכורת לחידוש המנוי',
