@@ -376,18 +376,35 @@ class PolicyEnforcer(private val context: Context) {
     fun releaseDeviceOwner() {
         check(isDeviceOwner()) { "Not device owner" }
 
-        // Remove kiosk controls first.
-        disableKiosk()
+        // A permanent release must never strand apps hidden by an older policy.
+        // Reuse the same hardened recovery used by reversible FULL_OPEN first.
+        val recovery = applyFullOpen()
+        check(recovery.failed.isEmpty()) {
+            "Cannot safely release device owner; failed to recover: ${recovery.failed.joinToString(",")}" 
+        }
 
-        // Remove restrictions we applied.
+        // Remove managed private-DNS state while Device Owner privileges still exist.
+        // If this fails, abort instead of relinquishing ownership and leaving filtering behind.
+        try {
+            AdBlockDns.disable(context)
+        } catch (e: Exception) {
+            throw IllegalStateException("Cannot safely disable managed DNS before release", e)
+        }
+
+        disableKiosk()
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
+        try {
+            dpm.setUninstallBlocked(admin, context.packageName, false)
+        } catch (_: Exception) {
+            // Device Owner itself is protected by Android until ownership is cleared anyway.
+        }
 
-        // Release Device Owner ownership.
+        // Irreversible: after this point remote management cannot be restored without enrollment.
         dpm.clearDeviceOwnerApp(context.packageName)
     }
 }

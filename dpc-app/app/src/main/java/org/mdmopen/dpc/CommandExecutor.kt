@@ -3,6 +3,8 @@ package org.mdmopen.dpc
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 
 class CommandExecutor(private val context: Context) {
 
@@ -59,7 +61,11 @@ class CommandExecutor(private val context: Context) {
         }
         "RELEASE_DEVICE_OWNER" -> {
             PolicyEnforcer(context).releaseDeviceOwner()
-            "ניהול המכשיר הוסר בהצלחה"
+            if (requestSelfUninstall()) {
+                "ניהול המכשיר הוסר; Android פתח את תהליך מחיקת אפליקציית הניהול"
+            } else {
+                "ניהול המכשיר הוסר; לא ניתן היה לפתוח אוטומטית את מסך מחיקת אפליקציית הניהול"
+            }
         }
         "ENABLE_DNS_FILTERING" -> {
             // providerHost is always server-set (see backend/index.js) - never
@@ -74,6 +80,16 @@ class CommandExecutor(private val context: Context) {
             AdBlockDns.disable(context)
         }
         else -> "פקודה לא מוכרת: ${queued.command}"
+    }
+
+    private fun requestSelfUninstall(): Boolean = try {
+        val intent = Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+        true
+    } catch (_: Exception) {
+        false
     }
 
     /** Best-effort - a failed report must never crash the command loop itself;
