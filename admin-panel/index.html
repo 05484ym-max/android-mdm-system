@@ -316,6 +316,7 @@
 <link rel="stylesheet" href="diagnostics.css">
 <link rel="stylesheet" href="alerts.css">
 <link rel="stylesheet" href="news.css">
+<link rel="stylesheet" href="support.css">
 </head>
 <body>
 
@@ -413,6 +414,23 @@
   <div id="alertsList"></div>
 </div>
 
+<div class="tab-content" data-tab-content="support">
+  <div class="enroll-card">
+    <h2>תמיכה ופניות לקוחות</h2>
+    <div class="support-toolbar">
+      <select id="supportStatusFilter" class="login-input support-filter">
+        <option value="all">כל הפניות</option>
+        <option value="OPEN">חדשות</option>
+        <option value="IN_PROGRESS">בטיפול</option>
+        <option value="RESOLVED">טופלו</option>
+      </select>
+      <button class="alerts-refresh-btn" id="supportRefreshBtn">⟳ רענן</button>
+    </div>
+    <div id="supportSummary" class="support-summary"></div>
+    <div id="supportList"><div class="empty-state">טוען...</div></div>
+  </div>
+</div>
+
 <div class="tab-content" data-tab-content="news">
   <div class="enroll-card">
     <h2 id="newsFormTitle">הודעה חדשה</h2>
@@ -477,6 +495,10 @@
   <button class="nav-btn" data-tab="alerts">
     <span class="nav-icon">🔔</span>
     <span class="nav-label">התראות</span>
+  </button>
+  <button class="nav-btn" data-tab="support">
+    <span class="nav-icon">💬</span>
+    <span class="nav-label">תמיכה</span>
   </button>
   <button class="nav-btn" data-tab="news">
     <span class="nav-icon">📰</span>
@@ -1551,5 +1573,6 @@ loadDevices();
 <script src="diagnostics.js"></script>
 <script src="alerts.js"></script>
 <script src="news.js"></script>
+<script src="support.js"></script>
 </body>
 </html>

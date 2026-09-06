@@ -76,6 +76,16 @@ data class UpdateItem(
     val mediaSizeBytes: Long? = null,
 )
 
+data class SupportTicket(
+    val id: String,
+    val subject: String,
+    val message: String,
+    val status: String,
+    val adminReply: String?,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
 class ApiException(message: String) : Exception(message)
 
 class ApiClient(
@@ -202,6 +212,31 @@ class ApiClient(
             )
         }
     }
+
+    fun createSupportTicket(deviceId: String, subject: String, message: String): SupportTicket {
+        val body = request(
+            "POST",
+            "/api/devices/${segment(deviceId)}/support-tickets",
+            JSONObject().put("subject", subject).put("message", message),
+        )
+        return parseSupportTicket(JSONObject(body))
+    }
+
+    fun fetchSupportTickets(deviceId: String): List<SupportTicket> {
+        val body = request("GET", "/api/devices/${segment(deviceId)}/support-tickets", null)
+        val array = JSONArray(body)
+        return (0 until array.length()).map { parseSupportTicket(array.getJSONObject(it)) }
+    }
+
+    private fun parseSupportTicket(item: JSONObject): SupportTicket = SupportTicket(
+        id = item.getString("id"),
+        subject = item.getString("subject"),
+        message = item.getString("message"),
+        status = item.optString("status", "OPEN"),
+        adminReply = if (item.isNull("adminReply")) null else item.optString("adminReply", null),
+        createdAt = item.getString("createdAt"),
+        updatedAt = item.getString("updatedAt"),
+    )
 
     private fun segment(value: String): String =
         URLEncoder.encode(value, "UTF-8").replace("+", "%20")

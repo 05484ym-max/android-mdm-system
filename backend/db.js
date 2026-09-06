@@ -214,6 +214,26 @@ CREATE INDEX IF NOT EXISTS customer_updates_published_idx
   ON customer_updates (pinned DESC, published_at DESC, created_at DESC)
   WHERE published = true;
 
+-- Customer support tickets. A ticket belongs to exactly one enrolled device,
+-- so the device-facing endpoints can only ever read/write their own rows.
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id          UUID PRIMARY KEY,
+  device_id   TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+  subject     TEXT NOT NULL,
+  message     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'OPEN'
+              CHECK (status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED')),
+  admin_reply TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS support_tickets_device_idx
+  ON support_tickets (device_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS support_tickets_open_idx
+  ON support_tickets (created_at DESC) WHERE status <> 'RESOLVED';
+
 -- Automatic browser-domain classification cache. Decisions are server-side
 -- and shared by the whole fleet so a domain is classified once, not once per
 -- device. expires_at makes stale vendor classifications self-invalidating.
@@ -1283,6 +1303,79 @@ async function listPublishedCustomerUpdatesForDevice(limit) {
 }
 
 
+// ---------- customer support tickets ----------
+
+function mapSupportTicketRow(row) {
+  return {
+    id: row.id,
+    deviceId: row.device_id,
+    customerName: row.customer_name || null,
+    customerNumber: row.customer_number || null,
+    subject: row.subject,
+    message: row.message,
+    status: row.status,
+    adminReply: row.admin_reply || null,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
+  };
+}
+
+async function createSupportTicket(deviceId, id, subject, message) {
+  const { rows } = await pool.query(
+    `INSERT INTO support_tickets (id, device_id, subject, message)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [id, deviceId, subject, message],
+  );
+  return mapSupportTicketRow(rows[0]);
+}
+
+async function listSupportTicketsForDevice(deviceId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM support_tickets
+      WHERE device_id = $1
+      ORDER BY created_at DESC
+      LIMIT 100`,
+    [deviceId],
+  );
+  return rows.map(mapSupportTicketRow);
+}
+
+async function listSupportTicketsForAdmin() {
+  const { rows } = await pool.query(
+    `SELECT t.*, d.customer_name, d.customer_number
+       FROM support_tickets t
+       JOIN devices d ON d.device_id = t.device_id
+      ORDER BY CASE t.status
+                 WHEN 'OPEN' THEN 0
+                 WHEN 'IN_PROGRESS' THEN 1
+                 ELSE 2
+               END,
+               t.updated_at DESC`,
+  );
+  return rows.map(mapSupportTicketRow);
+}
+
+async function updateSupportTicket(id, status, adminReply) {
+  const { rows } = await pool.query(
+    `UPDATE support_tickets
+        SET status = $2,
+            admin_reply = $3,
+            updated_at = now(),
+            resolved_at = CASE
+              WHEN $2 = 'RESOLVED' AND status <> 'RESOLVED' THEN now()
+              WHEN $2 <> 'RESOLVED' THEN NULL
+              ELSE resolved_at
+            END
+      WHERE id = $1
+      RETURNING *`,
+    [id, status, adminReply || null],
+  );
+  return rows[0] ? mapSupportTicketRow(rows[0]) : null;
+}
+
+
 // ---------- filtered browser automatic domain classification ----------
 
 async function getBrowserDomainClassification(host) {
@@ -1562,6 +1655,10 @@ module.exports = {
   setCustomerUpdatePublished,
   deleteCustomerUpdate,
   listPublishedCustomerUpdatesForDevice,
+  createSupportTicket,
+  listSupportTicketsForDevice,
+  listSupportTicketsForAdmin,
+  updateSupportTicket,
   getBrowserDomainClassification,
   saveBrowserDomainClassification,
   deleteExpiredBrowserDomainClassifications,

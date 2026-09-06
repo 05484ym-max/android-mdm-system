@@ -81,6 +81,9 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const UPDATE_TITLE_MAX_LENGTH = 200;
 const UPDATE_BODY_MAX_LENGTH = 20000;
 const UPDATE_LIST_LIMIT_FOR_DEVICE = 50;
+const SUPPORT_SUBJECT_MAX_LENGTH = 120;
+const SUPPORT_MESSAGE_MAX_LENGTH = 5000;
+const SUPPORT_REPLY_MAX_LENGTH = 5000;
 const NEWS_MEDIA_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 const NEWS_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -1662,6 +1665,73 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
   await push.wake(device.pushToken);
   const refreshed = await db.getDevice(req.params.deviceId);
   res.json(publicDevice(refreshed));
+}));
+
+// ---------- customer support tickets ----------
+
+// Device-facing support endpoints are authenticated, but auth alone does not
+// prevent a compromised/buggy managed device from flooding support storage or
+// repeatedly polling the database. Keep write/read budgets separate: creating
+// tickets is intentionally much tighter than reading a customer's own history.
+// The limiter runs after requireDevice so unauthorized traffic is rejected by
+// device auth first; successful devices are then bounded per source IP.
+const supportTicketCreateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many support requests; try again later' },
+});
+
+const supportTicketReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many support refreshes; try again shortly' },
+});
+
+app.post('/api/devices/:deviceId/support-tickets', requireDevice, supportTicketCreateLimiter, wrap(async (req, res) => {
+  const subject = typeof req.body.subject === 'string' ? req.body.subject.trim() : '';
+  const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
+  if (!subject || subject.length > SUPPORT_SUBJECT_MAX_LENGTH) {
+    return res.status(400).json({ error: `subject must be 1-${SUPPORT_SUBJECT_MAX_LENGTH} characters` });
+  }
+  if (!message || message.length > SUPPORT_MESSAGE_MAX_LENGTH) {
+    return res.status(400).json({ error: `message must be 1-${SUPPORT_MESSAGE_MAX_LENGTH} characters` });
+  }
+  const ticket = await db.createSupportTicket(
+    req.params.deviceId,
+    crypto.randomUUID(),
+    subject,
+    message,
+  );
+  res.status(201).json(ticket);
+}));
+
+app.get('/api/devices/:deviceId/support-tickets', requireDevice, supportTicketReadLimiter, wrap(async (req, res) => {
+  res.json(await db.listSupportTicketsForDevice(req.params.deviceId));
+}));
+
+app.get('/api/support-tickets', requireAdmin, wrap(async (_req, res) => {
+  res.json(await db.listSupportTicketsForAdmin());
+}));
+
+app.patch('/api/support-tickets/:ticketId', requireAdmin, wrap(async (req, res) => {
+  if (!UUID_REGEX.test(req.params.ticketId)) {
+    return res.status(400).json({ error: 'invalid ticket id' });
+  }
+  const status = typeof req.body.status === 'string' ? req.body.status.toUpperCase() : '';
+  if (!['OPEN', 'IN_PROGRESS', 'RESOLVED'].includes(status)) {
+    return res.status(400).json({ error: 'invalid support status' });
+  }
+  const adminReply = typeof req.body.adminReply === 'string' ? req.body.adminReply.trim() : '';
+  if (adminReply.length > SUPPORT_REPLY_MAX_LENGTH) {
+    return res.status(400).json({ error: `adminReply must be at most ${SUPPORT_REPLY_MAX_LENGTH} characters` });
+  }
+  const ticket = await db.updateSupportTicket(req.params.ticketId, status, adminReply);
+  if (!ticket) return res.status(404).json({ error: 'support ticket not found' });
+  res.json(ticket);
 }));
 
 /** One round trip per device: report status, take policy, collect commands. */
