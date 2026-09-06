@@ -1,0 +1,83 @@
+name: Apply subscription store lock and reminders
+
+on:
+  push:
+    branches: [feature/subscription-unblock-grace]
+    paths:
+      - 'backend/patch-subscription-store-lock.py'
+      - '.github/workflows/patch-subscription-store-lock.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mdm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mdm_test
+      DATABASE_SSL: disable
+      ALLOW_INSECURE_ADMIN: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/subscription-unblock-grace
+      - name: Apply patch
+        run: python3 backend/patch-subscription-store-lock.py
+      - name: Verify backend JavaScript syntax
+        run: node --check backend/index.js
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Verify backend starts with schema
+        working-directory: backend
+        run: |
+          node - <<'NODE'
+          const db = require('./db');
+          (async () => {
+            await db.init();
+            await db.createDevice('9900000002', 'hash');
+            await db.setSubscription('9900000002', {
+              price: 100,
+              startDate: new Date().toISOString(),
+              expiryDate: new Date(Date.now() + 20 * 86400000).toISOString(),
+            });
+            const d = await db.getDevice('9900000002');
+            if (!d.subscription || !d.subscription.expiryDate) throw new Error('subscription fixture failed');
+            console.log('subscription fixture ok');
+            process.exit(0);
+          })().catch(e => { console.error(e); process.exit(1); });
+          NODE
+      - name: Compile Android client
+        working-directory: dpc-app
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Verify store-only gating markers
+        run: |
+          grep -F 'fun storeAccessAllowed' dpc-app/app/src/main/java/org/mdmopen/dpc/Config.kt
+          grep -F 'Config.setSubscriptionAccess' dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt
+          grep -F 'if (!Config.storeAccessAllowed(this))' dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          grep -F 'subscription-renewal-' backend/index.js
+          grep -F 'חנות האפליקציות והעדכונים תינעל' backend/index.js
+      - name: Commit verified feature
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/index.js \
+            dpc-app/app/src/main/java/org/mdmopen/dpc/ApiClient.kt \
+            dpc-app/app/src/main/java/org/mdmopen/dpc/Config.kt \
+            dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt \
+            dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          git commit -m 'Lock app store after subscription expiry and add weekly reminders' || exit 0
+          git push origin HEAD:feature/subscription-unblock-grace
