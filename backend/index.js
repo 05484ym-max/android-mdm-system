@@ -890,6 +890,14 @@ app.post('/api/devices/:deviceId/subscription-unblock', subscriptionUnblockAdmin
   res.json(publicDevice(updated));
 }));
 
+const fullOpenPreAuthLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many full-open requests; try again shortly' },
+});
+
 const fullOpenAdminLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 30,
@@ -898,7 +906,7 @@ const fullOpenAdminLimiter = rateLimit({
   message: { error: 'too many full-open changes; try again shortly' },
 });
 
-app.post('/api/devices/:deviceId/full-open', requireAdmin, fullOpenAdminLimiter, wrap(async (req, res) => {
+app.post('/api/devices/:deviceId/full-open', fullOpenPreAuthLimiter, requireAdmin, fullOpenAdminLimiter, wrap(async (req, res) => {
   if (typeof req.body.enabled !== 'boolean') {
     return res.status(400).json({ error: 'enabled must be boolean' });
   }
