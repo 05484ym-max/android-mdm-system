@@ -26,14 +26,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
       - name: Install Android platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Build standalone WhatsApp Guard APK
-        run: |
-          chmod +x dpc-app/gradlew
-          dpc-app/gradlew -p whatsapp-guard-app :app:assembleDebug --stacktrace
+        run: gradle -p whatsapp-guard-app :app:assembleDebug --stacktrace
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
