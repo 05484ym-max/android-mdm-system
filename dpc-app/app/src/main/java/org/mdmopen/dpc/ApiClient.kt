@@ -13,6 +13,7 @@ data class Policy(
     val allowedApps: List<String>,
     val kioskEnabled: Boolean,
     val syncIntervalMinutes: Int,
+    val fullOpen: Boolean = false,
 )
 
 /** Server-authoritative DNS policy - see Config.setDnsPolicy(). desiredProviderHost
@@ -131,6 +132,7 @@ class ApiClient(
                 "syncIntervalMinutes",
                 Config.DEFAULT_SYNC_MINUTES,
             ),
+            fullOpen = policyJson.optBoolean("fullOpen", false),
         )
 
         val queued = json.optJSONArray("commands") ?: JSONArray()

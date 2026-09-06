@@ -21,6 +21,7 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_name TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_number TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS subscription_unblock_until TIMESTAMPTZ;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS subscription_unblock_permanent BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS full_open_mode BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS apps_catalog (
   package_name TEXT PRIMARY KEY,
@@ -324,6 +325,7 @@ function toDevice(row, pendingCommands = [], commandHistory = []) {
     customerNumber: row.customer_number,
     subscriptionUnblockUntil: row.subscription_unblock_until ? row.subscription_unblock_until.toISOString() : null,
     subscriptionUnblockPermanent: row.subscription_unblock_permanent === true,
+    fullOpenMode: row.full_open_mode === true,
     // Just the server-owned desired-state slice, needed by the /sync route to
     // build the "dns" object it sends down - the device-reported half (mode,
     // actual, fail-safe state...) lives only in the health-dashboard shape
@@ -349,7 +351,7 @@ async function getDevice(deviceId) {
 async function listDevices() {
   const { rows } = await pool.query(
     `SELECT device_id, registered_at, subscription, policy, status,
-            customer_name, customer_number, subscription_unblock_until, subscription_unblock_permanent
+            customer_name, customer_number, subscription_unblock_until, subscription_unblock_permanent, full_open_mode
        FROM devices
       ORDER BY registered_at`,
   );
@@ -424,6 +426,9 @@ async function setSubscriptionUnblock(deviceId, until, permanent) {
   );
   return rows[0] ? toDevice(rows[0]) : null;
 }
+
+const setFullOpenMode = (deviceId, enabled) =>
+  updateDeviceField(deviceId, 'full_open_mode', enabled === true);
 
 const setPolicy = (deviceId, value) =>
   updateDeviceField(deviceId, 'policy', value);
@@ -1633,6 +1638,7 @@ module.exports = {
   createDevice,
   setSubscription,
   setSubscriptionUnblock,
+  setFullOpenMode,
   setPolicy,
   setStatus,
   setAllowCustomerDnsToggle,

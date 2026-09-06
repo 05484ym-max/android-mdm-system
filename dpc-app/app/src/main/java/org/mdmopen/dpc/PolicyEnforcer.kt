@@ -42,6 +42,7 @@ class PolicyEnforcer(private val context: Context) {
      */
     fun apply(policy: Policy): EnforcementResult {
         check(isDeviceOwner()) { "Not device owner - cannot enforce policy" }
+        if (policy.fullOpen) return applyFullOpen()
 
         dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         // A background sync landing mid-install (PlayStoreGate's window still open)
@@ -174,6 +175,51 @@ class PolicyEnforcer(private val context: Context) {
             systemAppsSkipped = systemSkipped,
             kioskEnabled = policy.kioskEnabled,
             wouldHideNoLauncher = noLauncherCandidates,
+        )
+    }
+
+    private fun applyFullOpen(): EnforcementResult {
+        // Reversible full-open mode: make the phone behave normally while keeping
+        // Device Owner and anti-escape protections so the admin can re-apply policy remotely.
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
+        dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
+        dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
+        dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
+        disableKiosk()
+
+        val recovered = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        val installed = context.packageManager.getInstalledApplications(0)
+            .map { it.packageName }
+            .filter { it != context.packageName }
+            .distinct()
+
+        if (installed.isNotEmpty()) {
+            try {
+                val failedSuspended = dpm.setPackagesSuspended(admin, installed.toTypedArray(), false).toSet()
+                recovered += installed.filter { it !in failedSuspended }
+                failed += failedSuspended
+            } catch (_: Exception) {
+                // Continue with hidden-state recovery package-by-package.
+            }
+        }
+        for (pkg in installed) {
+            try {
+                if (dpm.isApplicationHidden(admin, pkg) && !dpm.setApplicationHidden(admin, pkg, false)) {
+                    failed += pkg
+                }
+            } catch (_: Exception) {
+                failed += pkg
+            }
+        }
+        return EnforcementResult(
+            suspended = emptyList(),
+            unsuspended = recovered.distinct() - failed.toSet(),
+            failed = failed.distinct(),
+            systemAppsSkipped = 0,
+            kioskEnabled = false,
         )
     }
 

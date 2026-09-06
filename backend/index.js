@@ -890,6 +890,25 @@ app.post('/api/devices/:deviceId/subscription-unblock', subscriptionUnblockAdmin
   res.json(publicDevice(updated));
 }));
 
+const fullOpenAdminLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many full-open changes; try again shortly' },
+});
+
+app.post('/api/devices/:deviceId/full-open', fullOpenAdminLimiter, requireAdmin, wrap(async (req, res) => {
+  if (typeof req.body.enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be boolean' });
+  }
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) return res.status(404).json({ error: 'device not found' });
+  const updated = await db.setFullOpenMode(req.params.deviceId, req.body.enabled);
+  await push.wake(device.pushToken);
+  res.json(publicDevice(updated));
+}));
+
 app.post('/api/devices/:deviceId/customer', requireAdmin, wrap(async (req, res) => {
   const { name, number } = req.body;
   if (name != null && typeof name !== 'string') {
@@ -1876,7 +1895,9 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
     lastSeen: new Date().toISOString(),
   });
 
+  const fullOpen = req.device.fullOpenMode === true;
   const policy = normalizePolicy(req.device.policy);
+  policy.fullOpen = fullOpen;
   const allowed = new Set(policy.allowedApps);
 
   // Opportunistic only and globally throttled. Device sync never waits for
@@ -1894,7 +1915,7 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   // for, since it never sees that app's row at all (no separate policy
   // check needed here; filtering already happened before this .map).
   const catalog = (await db.listAppsCatalog())
-    .filter(app => allowed.has(app.packageName))
+    .filter(app => fullOpen || allowed.has(app.packageName))
     .map(({
       packageName, name, iconUrl, playVersion, playUpdatedAt, category, isRecommended, sortOrder,
       appSource, apkUrl, apkSha256, apkSizeBytes,
@@ -1939,14 +1960,21 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
     desiredFilteringRequested = Boolean(updated.dnsFilteringRequested);
   }
 
-  const dns = {
+  const dns = fullOpen ? {
+    desiredProviderHost: null,
+    filteringRequested: false,
+    allowCustomerToggle: false,
+    desiredProviderFilters: false,
+  } : {
     desiredProviderHost,
     filteringRequested: desiredFilteringRequested,
     allowCustomerToggle: Boolean(req.device.allowCustomerDnsToggle),
     desiredProviderFilters: DNS_PROVIDER_FILTERS_CONTENT,
   };
 
-  res.json({ policy, catalog, commands, dns, subscriptionAccess: subscriptionAccess(req.device) });
+  const subscription = subscriptionAccess(req.device);
+  if (fullOpen) subscription.allowed = true;
+  res.json({ policy, catalog, commands, dns, subscriptionAccess: subscription });
 }));
 
 // ---------- filtered browser automatic domain classification ----------
