@@ -92,7 +92,7 @@ new_support = r'''    private fun renderSupportTickets(container: LinearLayout, 
         }
     }
 '''
-text, count = support_re.subn(new_support, text, count=1)
+text, count = support_re.subn(lambda _: new_support, text, count=1)
 if count != 1:
     raise SystemExit(f'expected one renderSupportTickets function, replaced {count}')
 
@@ -133,12 +133,10 @@ new_loader = r'''    private fun loadNewsImageSafely(url: String): Bitmap? {
         }
     }
 '''
-text, count = media_re.subn(new_loader, text, count=1)
+text, count = media_re.subn(lambda _: new_loader, text, count=1)
 if count != 1:
     raise SystemExit(f'expected one loadNewsImageSafely function, replaced {count}')
 
-# Ensure a remote news image has visible space while it loads; previously the
-# empty ImageView could collapse to zero height until decoding completed.
 news_re = re.compile(
     r'(private fun addNewsMedia\(container: LinearLayout, item: UpdateItem, detail: Boolean\) \{.*?)(?=\n    private fun )',
     re.S,
