@@ -93,7 +93,7 @@ class CustomerActivity : Activity() {
             // Restore the cached kiosk policy immediately on return; no network
             // dependency is required to close the temporary setup window.
             try {
-                PolicyEnforcer(this).restoreCachedKioskPolicy()
+                PolicyEnforcer(this).finishAccessibilitySetupWindow()
             } catch (_: Exception) {
                 SyncScheduler.enqueueImmediate(applicationContext)
             }
@@ -835,22 +835,36 @@ class CustomerActivity : Activity() {
     }
 
     private fun isInstalled(packageName: String): Boolean {
-        val installedByPackageManager = try {
-            val info = packageManager.getApplicationInfo(
-                packageName,
-                PackageManager.MATCH_UNINSTALLED_PACKAGES
-            )
-            (info.flags and ApplicationInfo.FLAG_INSTALLED) != 0
-        } catch (_: Exception) {
-            false
-        }
-        if (installedByPackageManager) return true
-
+        // Customer-visible truth only. Do not use MATCH_UNINSTALLED_PACKAGES and
+        // do not treat a Device Owner-hidden package as installed: Samsung keeps
+        // retained package rows for removed/disabled apps, which caused false
+        // "✓ מותקן" states in this actual customer store screen.
         return try {
+            val info = packageManager.getApplicationInfo(packageName, 0)
+            if ((info.flags and ApplicationInfo.FLAG_INSTALLED) == 0) return false
+            if (!info.enabled) return false
+
+            val enabledSetting = try {
+                packageManager.getApplicationEnabledSetting(packageName)
+            } catch (_: Exception) {
+                PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+            }
+            if (enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
+                enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER ||
+                enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED) {
+                return false
+            }
+
             val dpm = getSystemService(DevicePolicyManager::class.java)
-            val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
-            dpm.isDeviceOwnerApp(this.packageName) &&
-                dpm.isApplicationHidden(admin, packageName)
+            if (dpm.isDeviceOwnerApp(this.packageName)) {
+                val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+                if (dpm.isApplicationHidden(admin, packageName)) return false
+            }
+
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
+            launchIntent.resolveActivity(packageManager) != null
+        } catch (_: PackageManager.NameNotFoundException) {
+            false
         } catch (_: Exception) {
             false
         }
@@ -1190,11 +1204,10 @@ class CustomerActivity : Activity() {
                 Toast.makeText(this, "המכשיר אינו במצב ניהול מלא", Toast.LENGTH_LONG).show()
                 return
             }
-            enforcer.allowManagedAccessibilityService()
-            // Samsung A31 blocks/crashes the accessibility UI while our kiosk
-            // lock task is active. Open a very narrow temporary setup window:
-            // Device Owner and all user restrictions stay active; only kiosk/home
-            // pinning is suspended until this Activity resumes.
+            enforcer.beginAccessibilitySetupWindow()
+            // Samsung A31 needs LockTask/home pinning released before Settings
+            // can enter Accessibility. Device Owner and anti-removal protections
+            // remain active throughout this temporary setup window.
             try { stopLockTask() } catch (_: Exception) {}
             enforcer.disableKiosk()
             accessibilitySetupWindowOpen = true
@@ -1217,11 +1230,14 @@ class CustomerActivity : Activity() {
             if (intent.resolveActivity(packageManager) == null) continue
             try {
                 startActivity(intent)
+                contentArea.postDelayed({
+                    try { PolicyEnforcer(this).allowManagedAccessibilityService() } catch (_: Exception) {}
+                }, 1500L)
                 return
             } catch (_: Exception) {}
         }
         accessibilitySetupWindowOpen = false
-        try { PolicyEnforcer(this).restoreCachedKioskPolicy() } catch (_: Exception) {}
+        try { PolicyEnforcer(this).finishAccessibilitySetupWindow() } catch (_: Exception) {}
         Toast.makeText(this, "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה", Toast.LENGTH_LONG).show()
     }
 
