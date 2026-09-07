@@ -45,7 +45,7 @@ jobs:
           db = Path('backend/db.js').read_text()
           news = Path('admin-panel/news.js').read_text()
           is_inst = store[store.index('private fun isInstalled'):store.index('private fun confirmQuickUninstall')]
-          assert 'MATCH_UNINSTALLED_PACKAGES' not in is_inst
+          assert 'getApplicationInfo(packageName, 0)' in is_inst
           assert 'getLaunchIntentForPackage(packageName) != null' in is_inst
           assert 'isApplicationHidden(admin, packageName)' in is_inst
           assert 'accessibilitySetupWindowOpen = true' in customer
