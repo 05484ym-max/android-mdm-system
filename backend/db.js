@@ -89,6 +89,11 @@ CREATE TABLE IF NOT EXISTS enrollments (
   device_id  TEXT
 );
 
+-- Recovery codes are deliberately distinct from normal enrollment codes.
+-- Existing rows become ENROLL automatically; RECOVERY rows are always bound
+-- to one existing device_id before the plaintext code is returned to admin.
+ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'ENROLL';
+
 -- Device health / version reporting. Additive only - the existing "status"
 -- JSONB column is untouched, these are parallel first-class columns so the
 -- new health dashboard can query/sort/index without unpacking JSONB.
@@ -1097,25 +1102,79 @@ async function completeCommand(deviceId, commandId, status, message) {
 
 // ---------- enrollments ----------
 
-async function createEnrollment(id, tokenHash, expiresAt) {
+async function createEnrollment(
+  id, tokenHash, expiresAt, purpose = 'ENROLL', deviceId = null,
+) {
+  if (!['ENROLL', 'RECOVERY'].includes(purpose)) {
+    throw new Error('invalid enrollment purpose');
+  }
+  if (purpose === 'RECOVERY' && !deviceId) {
+    throw new Error('recovery enrollment must be bound to a device');
+  }
   await pool.query(
-    `INSERT INTO enrollments (id, token_hash, expires_at)
-     VALUES ($1, $2, $3)`,
-    [id, tokenHash, expiresAt],
+    `INSERT INTO enrollments (id, token_hash, expires_at, purpose, device_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [id, tokenHash, expiresAt, purpose, deviceId],
   );
 }
 
-/** Marks the code used only if it is still valid. Returns false otherwise. */
+/** Marks a normal enrollment code used only if it is still valid. */
 async function consumeEnrollment(tokenHash, deviceId) {
   const { rowCount } = await pool.query(
     `UPDATE enrollments
         SET used_at = now(), device_id = $2
       WHERE token_hash = $1
+        AND purpose = 'ENROLL'
         AND used_at IS NULL
         AND expires_at > now()`,
     [tokenHash, deviceId],
   );
   return rowCount > 0;
+}
+
+/**
+ * Consumes a device-bound recovery code and rotates the device credential in
+ * one transaction. If either step fails the code remains unused. The old FCM
+ * token is cleared so the recovered device registers its current token again.
+ */
+async function recoverDeviceAuthToken(tokenHash, deviceId, newAuthTokenHash) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rowCount: codeCount } = await client.query(
+      `UPDATE enrollments
+          SET used_at = now()
+        WHERE token_hash = $1
+          AND purpose = 'RECOVERY'
+          AND device_id = $2
+          AND used_at IS NULL
+          AND expires_at > now()`,
+      [tokenHash, deviceId],
+    );
+    if (!codeCount) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    const { rowCount: deviceCount } = await client.query(
+      `UPDATE devices
+          SET auth_token_hash = $2, push_token = NULL
+        WHERE device_id = $1`,
+      [deviceId, newAuthTokenHash],
+    );
+    if (!deviceCount) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    await client.query('COMMIT');
+    return true;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 async function deleteDevice(deviceId) {
@@ -1139,6 +1198,7 @@ async function listEnrollments() {
     expiresAt: row.expires_at.toISOString(),
     usedAt: row.used_at ? row.used_at.toISOString() : null,
     deviceId: row.device_id,
+    purpose: row.purpose || 'ENROLL',
   }));
 }
 
@@ -1654,6 +1714,7 @@ module.exports = {
   completeCommand,
   createEnrollment,
   consumeEnrollment,
+  recoverDeviceAuthToken,
   listEnrollments,
   listAppsCatalog,
   addAppToCatalog,

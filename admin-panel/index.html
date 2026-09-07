@@ -1004,6 +1004,7 @@ function renderDeviceDetail(deviceId) {
         <button class="cmd-btn" data-cmd="SYNC_POLICY">סנכרון מדיניות</button>
         <button class="cmd-btn" data-cmd="REBOOT">הפעלה מחדש</button>
         <button class="cmd-btn" data-cmd="OPEN_DEBUGGING_TEMP">פתח ניפוי באגים זמנית</button>
+        <button class="cmd-btn" id="detailRecoveryCode">קוד שחזור</button>
         <button class="cmd-btn cmd-danger" data-cmd="WIPE">מחיקת מכשיר</button>
       </div>
       <div class="add-app-row">
@@ -1097,7 +1098,29 @@ function bindDetailHandlers(d) {
     loadDevices();
   });
 
-  document.querySelectorAll('#detailContent .cmd-btn').forEach(btn => {
+  const recoveryBtn = document.getElementById('detailRecoveryCode');
+  if (recoveryBtn) {
+    recoveryBtn.addEventListener('click', async () => {
+      recoveryBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/recovery-code`, { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(data.error || 'יצירת קוד השחזור נכשלה');
+          return;
+        }
+        alert(`קוד שחזור למכשיר ${deviceId}:
+
+${data.token}
+
+הקוד חד-פעמי ותקף ל-30 דקות.`);
+      } finally {
+        recoveryBtn.disabled = false;
+      }
+    });
+  }
+
+  document.querySelectorAll('#detailContent .cmd-btn[data-cmd]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const command = btn.getAttribute('data-cmd');
       if (command === 'WIPE') {
