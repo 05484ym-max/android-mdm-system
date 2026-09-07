@@ -1173,35 +1173,36 @@ class CustomerActivity : Activity() {
     }
 
     private fun openWhatsAppAccessibilitySettings() {
-        // Use only public Android Settings actions here. Explicit Samsung/
-        // Settings implementation Activity class names are not API contracts
-        // and can crash the Settings app on older One UI builds (Galaxy A31).
-        val attempts = listOf(
-            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
-            Intent(Settings.ACTION_SETTINGS),
-        )
-
-        for (intent in attempts) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            if (intent.resolveActivity(packageManager) == null) continue
-            try {
-                Toast.makeText(
-                    this,
-                    "בחרו 'נגישות' ואז 'יהודי כשר — הגנת WhatsApp' והפעילו את השירות",
-                    Toast.LENGTH_LONG
-                ).show()
-                startActivity(intent)
-                return
-            } catch (_: Exception) {
-                // Try the next public Settings action.
-            }
+        // Ensure Device Owner explicitly permits our accessibility service before
+        // sending the customer into Settings. Older Samsung/One UI devices can
+        // otherwise label the service as blocked by the administrator.
+        try {
+            val enforcer = PolicyEnforcer(this)
+            if (enforcer.isDeviceOwner()) enforcer.allowManagedAccessibilityService()
+        } catch (_: Exception) {
+            // The Settings guidance below is still useful even if the OEM rejects it.
         }
 
+        // Galaxy A31 can crash com.android.settings when
+        // ACTION_ACCESSIBILITY_SETTINGS is invoked directly. Open only the public
+        // top-level Settings screen and guide the user from there.
+        val intent = Intent(Settings.ACTION_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
         Toast.makeText(
             this,
-            "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה",
+            "היכנסו: נגישות > שירותים מותקנים > יהודי כשר — הגנת WhatsApp",
             Toast.LENGTH_LONG
         ).show()
+        try {
+            if (intent.resolveActivity(packageManager) != null) startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(
+                this,
+                "פתחו ידנית: הגדרות > נגישות > שירותים מותקנים > יהודי כשר — הגנת WhatsApp",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun compactPersonalIdentityCard(): LinearLayout = LinearLayout(this).apply {

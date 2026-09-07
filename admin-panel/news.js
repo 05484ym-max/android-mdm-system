@@ -37,6 +37,15 @@
   const mediaLabel = document.querySelector('label[for="newsMediaInput"]');
   if (mediaLabel) mediaLabel.textContent = '📎 צרף תמונה או סרטון';
 
+  function selectedMediaKind(file) {
+    if (!file) return null;
+    const mime = String(file.type || '').toLowerCase();
+    const name = String(file.name || '').toLowerCase();
+    if (mime.startsWith('image/') || /\.(png|jpe?g|webp|heic|heif)$/.test(name)) return 'IMAGE';
+    if (mime.startsWith('video/') || /\.(mp4|webm)$/.test(name)) return 'VIDEO';
+    return null;
+  }
+
   function clearLocalPreviewUrl() {
     if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl);
     localPreviewUrl = null;
@@ -128,7 +137,7 @@
     removeMediaInput.checked = false;
     removeMediaRow.style.display = editingItem && editingItem.mediaUrl ? '' : 'none';
     localPreviewUrl = URL.createObjectURL(file);
-    const type = file.type.startsWith('image/') ? 'IMAGE' : 'VIDEO';
+    const type = selectedMediaKind(file);
     mediaPreview.innerHTML = `<div class="news-media-selected">נבחר: ${escapeHtml(file.name)}</div>` + mediaMarkup(type, localPreviewUrl);
     mediaPreview.style.display = '';
     saveBtn.textContent = editingId ? 'עדכן עם המדיה' : 'שלח ללקוחות עם המדיה';
@@ -266,9 +275,10 @@
 
     const file = mediaInput.files && mediaInput.files[0];
     if (file) {
-      const image = file.type.startsWith('image/');
-      const video = file.type.startsWith('video/');
-      if (!image && !video) {
+      const kind = selectedMediaKind(file);
+      const image = kind === 'IMAGE';
+      const video = kind === 'VIDEO';
+      if (!kind) {
         formError.textContent = 'יש לבחור תמונה או סרטון נתמכים';
         return;
       }

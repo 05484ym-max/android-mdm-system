@@ -63,6 +63,10 @@ class PolicyEnforcer(private val context: Context) {
         dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
 
+        // Explicitly permit this DPC's accessibility service. Some Samsung/One UI
+        // builds otherwise surface the service as blocked by the device administrator.
+        allowManagedAccessibilityService()
+
         val allowed = policy.allowedApps.toSet() + playStoreTemporaryAllowance()
         val essential = essentialPackages()
         val currentImePackage = currentInputMethodPackage()
@@ -192,6 +196,15 @@ class PolicyEnforcer(private val context: Context) {
         )
     }
 
+    fun allowManagedAccessibilityService() {
+        check(isDeviceOwner()) { "Not device owner" }
+        try {
+            dpm.setPermittedAccessibilityServices(admin, listOf(context.packageName))
+        } catch (_: Exception) {
+            // Keep policy sync alive on OEMs that reject this API unexpectedly.
+        }
+    }
+
     private fun applyFullOpen(): EnforcementResult {
         // Reversible full-open mode: make the phone behave normally while keeping
         // Device Owner and anti-escape protections so the admin can re-apply policy remotely.
@@ -201,6 +214,7 @@ class PolicyEnforcer(private val context: Context) {
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
+        try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
         disableKiosk()
 
         val recovered = mutableListOf<String>()
