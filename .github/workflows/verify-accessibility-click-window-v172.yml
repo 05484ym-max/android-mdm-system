@@ -1,0 +1,58 @@
+name: Verify Samsung accessibility click window v172
+
+on:
+  push:
+    branches: [ fix/accessibility-click-window-v172 ]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Apply production patch
+        run: python3 tools/patch-accessibility-click-window-v172.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify accessibility safety markers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          c = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt').read_text()
+          s = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/SyncScheduler.kt').read_text()
+          w = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/WhatsAppGuardService.kt').read_text()
+          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt').read_text()
+          block = c[c.index('private fun openWhatsAppAccessibilitySettings'):c.index('private fun compactPersonalIdentityCard')]
+          assert '1500L' not in block
+          assert 'startActivity(intent)' in block
+          assert '.setInitialDelay(60, TimeUnit.SECONDS)' in s
+          assert 'enforcer.allowManagedAccessibilityService()' in w
+          assert 'setPermittedAccessibilityServices(admin, null)' in p
+          assert 'setUninstallBlocked(admin, context.packageName, true)' in p
+          assert 'DISALLOW_FACTORY_RESET' in p
+          assert 'DISALLOW_DEBUGGING_FEATURES' in p
+          assert 'DISALLOW_SAFE_BOOT' in p
+          print('Samsung accessibility click-window markers verified')
+          PY
+      - name: Commit production files only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt \
+                  dpc-app/app/src/main/java/org/mdmopen/dpc/SyncScheduler.kt \
+                  dpc-app/app/src/main/java/org/mdmopen/dpc/WhatsAppGuardService.kt \
+                  dpc-app/app/src/main/java/org/mdmopen/dpc/AccessibilityRelockWorker.kt
+          git commit -m "Keep Samsung accessibility page usable until service enable" || exit 0
+          git push
