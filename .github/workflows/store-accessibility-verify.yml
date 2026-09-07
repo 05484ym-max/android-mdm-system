@@ -1,0 +1,41 @@
+name: Verify store installed state and accessibility
+
+on:
+  push:
+    branches: [ fix/store-installed-and-accessibility ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Apply patch
+        run: python tools/patch-store-accessibility.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify markers
+        run: |
+          grep -q 'PackageManager.NameNotFoundException' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+          ! grep -A30 'private fun isInstalled' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt | grep -q 'isApplicationHidden'
+          grep -q 'launchAttempt(index + 1)' dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          grep -q 'hasWindowFocus()' dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+      - name: Commit production changes only
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          git commit -m 'Fix app installed state and accessibility navigation'
+          git push
