@@ -1187,7 +1187,7 @@ async function deleteDevice(deviceId) {
 
 async function listEnrollments() {
   const { rows } = await pool.query(
-    `SELECT id, created_at, expires_at, used_at, device_id
+    `SELECT id, created_at, expires_at, used_at, device_id, purpose
        FROM enrollments
       ORDER BY created_at DESC
       LIMIT 50`,
