@@ -75,7 +75,7 @@ new_method = '''    private fun openWhatsAppAccessibilitySettings() {
             ),
             Intent().setClassName(
                 "com.android.settings",
-                "com.android.settings.Settings$AccessibilitySettingsActivity"
+                "com.android.settings.Settings\\$AccessibilitySettingsActivity"
             ),
             // Per-service details where supported.
             Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
