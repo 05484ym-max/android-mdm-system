@@ -1,0 +1,52 @@
+name: Verify A31 general Settings accessibility fallback
+
+on:
+  push:
+    branches: [ fix/a31-accessibility-general-settings-only ]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Apply patch
+        run: python3 tools/patch-a31-general-settings-only.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify safe Settings-only launcher
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt').read_text(encoding='utf-8')
+          start = s.index('private fun openWhatsAppAccessibilitySettings()')
+          end = s.index('private fun compactPersonalIdentityCard()', start)
+          block = s[start:end]
+          assert 'Settings.ACTION_ACCESSIBILITY_SETTINGS' not in block
+          assert 'Settings.ACTION_SETTINGS' in block
+          assert 'resolveActivity(packageManager)' in block
+          print('safe general Settings launcher verified')
+          PY
+      - name: Commit production change only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt
+          if git diff --cached --quiet; then
+            echo "No production change"
+            exit 0
+          fi
+          git commit -m "Use general Settings for WhatsApp accessibility setup"
+          git push
