@@ -220,6 +220,9 @@ class PolicyEnforcer(private val context: Context) {
         // one policy momentarily; CustomerActivity re-applies our package-only
         // allowlist after 1.5s and finishAccessibilitySetupWindow() does it again.
         try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
+        // Activity handler normally re-locks in 1.5s; WorkManager is a separate
+        // process/lifecycle failsafe so a crash cannot leave this relaxed.
+        SyncScheduler.enqueueAccessibilityRelock(context)
     }
 
     fun finishAccessibilitySetupWindow() {
