@@ -1,0 +1,40 @@
+name: Verify updater recovery and sync trigger
+
+on:
+  push:
+    branches: [ fix/updater-recovery-and-sync-trigger ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Apply patch
+        run: python tools/patch-updater-recovery.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify markers
+        run: |
+          grep -q 'recoverInstallBlockIfNeeded' dpc-app/app/src/main/java/org/mdmopen/dpc/AutoUpdater.kt
+          grep -q 'AutoUpdater.recoverInstallBlockIfNeeded(context)' dpc-app/app/src/main/java/org/mdmopen/dpc/BootReceiver.kt
+          grep -q 'AutoUpdater.check(context.applicationContext)' dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt
+      - name: Commit production change only
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/AutoUpdater.kt dpc-app/app/src/main/java/org/mdmopen/dpc/BootReceiver.kt dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt
+          git commit -m 'Harden updater recovery and trigger checks after sync'
+          git push
