@@ -24,8 +24,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - name: Apply production patch
-        run: python3 tools/patch-p0-store-media-accessibility-v2.py
+      - name: Apply production patches
+        run: |
+          python3 tools/patch-p0-store-media-accessibility-v2.py
+          python3 tools/patch-p0-stop-lock-task.py
       - name: Check backend syntax
         run: |
           node --check backend/index.js
@@ -49,6 +51,7 @@ jobs:
           assert 'getLaunchIntentForPackage(packageName) != null' in is_inst
           assert 'isApplicationHidden(admin, packageName)' in is_inst
           assert 'accessibilitySetupWindowOpen = true' in customer
+          assert 'stopLockTask()' in customer
           assert 'enforcer.disableKiosk()' in customer
           assert 'Settings.ACTION_ACCESSIBILITY_SETTINGS' in customer
           assert 'restoreCachedKioskPolicy()' in customer
