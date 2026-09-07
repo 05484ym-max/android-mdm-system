@@ -280,6 +280,17 @@ object AutoUpdater {
             .apply()
     }
 
+    fun recoverInstallBlockIfNeeded(context: Context) {
+        val prefs = context.getSharedPreferences(
+            "dpc_updater",
+            Context.MODE_PRIVATE
+        )
+        if (!prefs.getBoolean("install_in_progress", false)) return
+
+        Log.w(TAG, "Recovering stale install-in-progress state")
+        restoreInstallBlock(context)
+    }
+
     fun restoreInstallBlock(context: Context) {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
 
