@@ -182,7 +182,13 @@ root.addView(sectionLabel("יומן"))
         statusView.setTextColor(Color.parseColor(if (owner) OK else BAD))
 
         val enrolled = Config.deviceToken(this) != null
-        enrollStatusView.text = if (enrolled) "✓ המכשיר רשום בשרת" else "✕ המכשיר אינו רשום"
+        val existingId = Config.deviceId(this)
+        val recoverable = !enrolled && existingId.matches(Regex("\\d{10}"))
+        enrollStatusView.text = when {
+            enrolled -> "✓ המכשיר רשום בשרת"
+            recoverable -> "⚠ נדרש קוד שחזור למכשיר $existingId"
+            else -> "✕ המכשיר אינו רשום"
+        }
         enrollStatusView.setTextColor(Color.parseColor(if (enrolled) OK else BAD))
 
         // After enrollment, lock the server address so the device token
@@ -210,7 +216,13 @@ root.addView(sectionLabel("יומן"))
 
         Thread {
             try {
-                val result = ApiClient(Config.serverUrl(this@MainActivity)).enroll(code)
+                val client = ApiClient(Config.serverUrl(this@MainActivity))
+                val existingId = Config.deviceId(this@MainActivity)
+                val result = if (existingId.matches(Regex("\\d{10}"))) {
+                    client.recover(existingId, code)
+                } else {
+                    client.enroll(code)
+                }
                 Config.setEnrollmentCredentials(
                     this@MainActivity,
                     result.deviceId,

@@ -201,6 +201,7 @@ const DNS_PROVIDER_FILTERS_CONTENT = process.env.DNS_PROVIDER_FILTERS_CONTENT ==
   ? DNS_PROVIDER_HOST === DEFAULT_DNS_PROVIDER_HOST
   : process.env.DNS_PROVIDER_FILTERS_CONTENT === '1';
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
+const RECOVERY_TTL_MS = 30 * 60 * 1000;
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -415,6 +416,26 @@ app.get('/api/enrollments', requireAdmin, wrap(async (req, res) => {
   res.json(await db.listEnrollments());
 }));
 
+app.post('/api/devices/:deviceId/recovery-code', requireAdmin, wrap(async (req, res) => {
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) return res.status(404).json({ error: 'device not found' });
+
+  const token = crypto.randomBytes(16).toString('hex').toUpperCase();
+  const expiresAt = new Date(Date.now() + RECOVERY_TTL_MS);
+  await db.createEnrollment(
+    crypto.randomUUID(),
+    sha256(token),
+    expiresAt,
+    'RECOVERY',
+    device.deviceId,
+  );
+  res.json({
+    token,
+    deviceId: device.deviceId,
+    expiresAt: expiresAt.toISOString(),
+  });
+}));
+
 // ---------- device endpoints ----------
 
 const deviceRegistrationLimiter = rateLimit({
@@ -423,6 +444,14 @@ const deviceRegistrationLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'too many device registration attempts; try again later' },
+});
+
+const deviceRecoveryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many device recovery attempts; try again later' },
 });
 
 app.post('/api/devices/register', deviceRegistrationLimiter, wrap(async (req, res) => {
@@ -445,6 +474,24 @@ app.post('/api/devices/register', deviceRegistrationLimiter, wrap(async (req, re
   const deviceToken = crypto.randomBytes(32).toString('hex');
   await db.createDevice(deviceId, sha256(deviceToken));
   res.json({ status: 'enrolled', deviceId, deviceToken });
+}));
+
+app.post('/api/devices/:deviceId/recover', deviceRecoveryLimiter, wrap(async (req, res) => {
+  const { recoveryToken } = req.body;
+  if (typeof recoveryToken !== 'string' || !recoveryToken.trim()) {
+    return res.status(400).json({ error: 'recoveryToken is required' });
+  }
+
+  const deviceToken = crypto.randomBytes(32).toString('hex');
+  const recovered = await db.recoverDeviceAuthToken(
+    sha256(recoveryToken.trim().toUpperCase()),
+    req.params.deviceId,
+    sha256(deviceToken),
+  );
+  if (!recovered) {
+    return res.status(401).json({ error: 'invalid or expired recovery token' });
+  }
+  res.json({ status: 'recovered', deviceId: req.params.deviceId, deviceToken });
 }));
 
 app.get('/api/devices/:deviceId/policy', requireDevice, (req, res) => {

@@ -116,6 +116,17 @@ class ApiClient(
         return EnrollResult(json.getString("deviceId"), json.getString("deviceToken"))
     }
 
+    /** Rotates a lost device token without creating a second device record. */
+    fun recover(deviceId: String, recoveryToken: String): EnrollResult {
+        val body = request(
+            "POST",
+            "/api/devices/${segment(deviceId)}/recover",
+            JSONObject().put("recoveryToken", recoveryToken),
+        )
+        val json = JSONObject(body)
+        return EnrollResult(json.getString("deviceId"), json.getString("deviceToken"))
+    }
+
     /**
      * A whole sync cycle in one round trip: reports status, returns the policy and
      * any queued commands. The server marks those commands delivered.
