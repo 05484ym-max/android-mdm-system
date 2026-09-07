@@ -1,0 +1,57 @@
+name: Verify P0 store accessibility v2
+
+on:
+  push:
+    branches: [ fix/p0-store-accessibility-final-v2 ]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Apply production patch
+        run: python3 tools/patch-p0-store-accessibility-v2.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify markers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          c = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt').read_text()
+          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt').read_text()
+          block = c[c.index('private fun isInstalled'):c.index('private fun openInstalledApp')]
+          assert 'getApplicationInfo(packageName, 0)' in block
+          assert 'MATCH_UNINSTALLED_PACKAGES' not in block
+          assert 'isApplicationHidden(admin, packageName)' in block
+          assert 'getLaunchIntentForPackage(packageName)' in block
+          assert 'beginAccessibilitySetupWindow()' in c
+          assert 'finishAccessibilitySetupWindow()' in c
+          assert '1500L' in c
+          assert 'setPermittedAccessibilityServices(admin, null)' in p
+          assert 'setUninstallBlocked(admin, context.packageName, true)' in p
+          assert 'DISALLOW_FACTORY_RESET' in p
+          assert 'DISALLOW_DEBUGGING_FEATURES' in p
+          assert 'DISALLOW_SAFE_BOOT' in p
+          print('P0 store/accessibility v2 markers verified')
+          PY
+      - name: Commit production files only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt \
+                  dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt
+          git commit -m "Fix customer store state and secure accessibility setup" || exit 0
+          git push
