@@ -27,6 +27,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.net.URL
+import java.security.MessageDigest
 
 class AppStoreActivity : Activity() {
 
@@ -386,11 +387,9 @@ class AppStoreActivity : Activity() {
 
         val status = TextView(this).apply {
             text = when {
-                app.appSource == "APK" && installed -> "התקן/עדכן"
-                app.appSource == "APK" -> "התקנה"
                 !installed -> "התקנה"
-                updateAvailable -> "עדכן"
-                else -> "בדוק עדכון"
+                updateAvailable -> "עדכון"
+                else -> "מותקן"
             }
             textSize = 10.5f
             typeface = mediumFont
@@ -470,45 +469,67 @@ class AppStoreActivity : Activity() {
     private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
         if (!installed) return false
 
-        // Google Play's public metadata is catalog-level, not device-specific.
-        // A different version/timestamp can mean staged rollout, device/ABI
-        // targeting, regional rollout, or simply metadata that is newer than
-        // what this exact device is currently eligible to install.
-        //
-        // Therefore we deliberately do NOT label an installed app as "עדכן"
-        // from versionName/timestamp heuristics alone. False update prompts are
-        // worse than a conservative "מותקן". When we later have an
-        // authoritative device-specific update signal, this is the one place
-        // that should consume it.
+        if (app.appSource == "APK") {
+            val expectedSha = app.apkSha256?.trim()?.lowercase()
+            if (expectedSha.isNullOrBlank()) return false
+            return try {
+                val info = packageManager.getApplicationInfo(
+                    app.packageName,
+                    PackageManager.MATCH_UNINSTALLED_PACKAGES
+                )
+                val digest = MessageDigest.getInstance("SHA-256")
+                java.io.File(info.sourceDir).inputStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count <= 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                }
+                val installedSha = digest.digest().joinToString("") { "%02x".format(it) }
+                installedSha != expectedSha
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        val remote = app.playVersion?.trim().orEmpty()
+        if (remote.isBlank()) return false
+        val local = try {
+            packageManager.getPackageInfo(app.packageName, 0).versionName.orEmpty().trim()
+        } catch (_: Exception) {
+            return false
+        }
+        if (local.isBlank() || local == remote) return false
+
+        // Compare numeric components (e.g. 8.2.10 > 8.2.9). If either version
+        // has no numeric components, stay conservative and do not claim that an
+        // update is required.
+        val localParts = Regex("\\d+").findAll(local).map { it.value.toLongOrNull() ?: 0L }.toList()
+        val remoteParts = Regex("\\d+").findAll(remote).map { it.value.toLongOrNull() ?: 0L }.toList()
+        if (localParts.isEmpty() || remoteParts.isEmpty()) return false
+        val size = maxOf(localParts.size, remoteParts.size)
+        for (i in 0 until size) {
+            val l = localParts.getOrElse(i) { 0L }
+            val r = remoteParts.getOrElse(i) { 0L }
+            if (r != l) return r > l
+        }
         return false
     }
 
     private fun isInstalled(packageName: String): Boolean {
-        // Hidden packages can disappear from ordinary PackageManager lookups
-        // on some OEM builds even though they are still physically installed.
-        // MATCH_UNINSTALLED_PACKAGES lets us inspect their ApplicationInfo and
-        // FLAG_INSTALLED distinguishes a real installed package from retained
-        // metadata for an uninstalled package.
-        val installedByPackageManager = try {
+        // MATCH_UNINSTALLED_PACKAGES can return retained metadata after removal.
+        // FLAG_INSTALLED is the only authoritative installed-state signal here;
+        // DevicePolicyManager hidden-state must never be treated as proof that
+        // the package physically exists on the device.
+        return try {
             val info = packageManager.getApplicationInfo(
                 packageName,
                 PackageManager.MATCH_UNINSTALLED_PACKAGES
             )
             (info.flags and ApplicationInfo.FLAG_INSTALLED) != 0
-        } catch (_: Exception) {
+        } catch (_: PackageManager.NameNotFoundException) {
             false
-        }
-        if (installedByPackageManager) return true
-
-        // DevicePolicyManager is authoritative for apps hidden by this DPC.
-        // If Android says this package is hidden by our Device Owner policy,
-        // it necessarily exists on the device even if PackageManager omitted
-        // it from the normal visible-package view.
-        return try {
-            val dpm = getSystemService(DevicePolicyManager::class.java)
-            val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
-            dpm.isDeviceOwnerApp(this.packageName) &&
-                dpm.isApplicationHidden(admin, packageName)
         } catch (_: Exception) {
             false
         }
