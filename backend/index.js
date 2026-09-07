@@ -366,26 +366,15 @@ const requireDevice = wrap(async (req, res, next) => {
   next();
 });
 
-const loginAttempts = new Map();
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_MAX_ATTEMPTS = 10;
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many attempts, try again later' },
+});
 
-/** Slows down password guessing against the panel. */
-function loginRateLimited(ip) {
-  const now = Date.now();
-  const entry = loginAttempts.get(ip);
-  if (!entry || now - entry.first > LOGIN_WINDOW_MS) {
-    loginAttempts.set(ip, { first: now, count: 1 });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > LOGIN_MAX_ATTEMPTS;
-}
-
-app.post('/api/login', (req, res) => {
-  if (loginRateLimited(req.ip)) {
-    return res.status(429).json({ error: 'too many attempts, try again later' });
-  }
+app.post('/api/login', loginLimiter, (req, res) => {
   if (!AUTH_ENABLED) {
     return res.status(400).json({ error: 'authentication is not configured' });
   }
@@ -416,7 +405,7 @@ app.get('/health', (req, res) => {
 // ---------- enrollment (admin) ----------
 
 app.post('/api/enrollments', requireAdmin, wrap(async (req, res) => {
-  const token = crypto.randomBytes(4).toString('hex').toUpperCase();
+  const token = crypto.randomBytes(16).toString('hex').toUpperCase();
   const expiresAt = new Date(Date.now() + ENROLLMENT_TTL_MS);
   await db.createEnrollment(crypto.randomUUID(), sha256(token), expiresAt);
   res.json({ token, expiresAt: expiresAt.toISOString() });
@@ -428,7 +417,15 @@ app.get('/api/enrollments', requireAdmin, wrap(async (req, res) => {
 
 // ---------- device endpoints ----------
 
-app.post('/api/devices/register', wrap(async (req, res) => {
+const deviceRegistrationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'too many device registration attempts; try again later' },
+});
+
+app.post('/api/devices/register', deviceRegistrationLimiter, wrap(async (req, res) => {
   const { enrollmentToken } = req.body;
   if (typeof enrollmentToken !== 'string' || !enrollmentToken) {
     return res.status(400).json({ error: 'enrollmentToken is required' });
