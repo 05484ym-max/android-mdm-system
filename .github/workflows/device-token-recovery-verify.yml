@@ -1,0 +1,76 @@
+name: Verify device token recovery
+
+on:
+  push:
+    branches:
+      - fix/device-token-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Split backend DPC helper from admin helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/patch-device-token-recovery.py')
+          s = p.read_text(encoding='utf-8')
+          marker = '# ----- admin-panel/index.html -----'
+          if marker not in s:
+              raise SystemExit('split marker missing')
+          p.write_text(s.split(marker, 1)[0], encoding='utf-8')
+          PY
+      - name: Apply backend and DPC recovery patch
+        run: python tools/patch-device-token-recovery.py
+      - name: Apply admin recovery patch
+        run: python tools/patch-device-token-recovery-admin.py
+      - name: Verify backend syntax
+        run: |
+          node --check backend/index.js
+          node --check backend/db.js
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify recovery security markers
+        run: |
+          grep -F "purpose = 'RECOVERY'" backend/db.js
+          grep -F "purpose = 'ENROLL'" backend/db.js
+          grep -F 'async function recoverDeviceAuthToken' backend/db.js
+          grep -F "app.post('/api/devices/:deviceId/recovery-code'" backend/index.js
+          grep -F "app.post('/api/devices/:deviceId/recover'" backend/index.js
+          grep -F 'const deviceRecoveryLimiter = rateLimit({' backend/index.js
+          grep -F 'fun recover(deviceId: String, recoveryToken: String)' dpc-app/app/src/main/java/org/mdmopen/dpc/ApiClient.kt
+          grep -F 'client.recover(existingId, code)' dpc-app/app/src/main/java/org/mdmopen/dpc/MainActivity.kt
+          grep -F 'id="detailRecoveryCode"' admin-panel/index.html
+          grep -F '.cmd-btn[data-cmd]' admin-panel/index.html
+      - name: Commit production changes only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            backend/db.js \
+            backend/index.js \
+            dpc-app/app/src/main/java/org/mdmopen/dpc/ApiClient.kt \
+            dpc-app/app/src/main/java/org/mdmopen/dpc/MainActivity.kt \
+            admin-panel/index.html
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Add device-bound one-time token recovery'
+          git push
