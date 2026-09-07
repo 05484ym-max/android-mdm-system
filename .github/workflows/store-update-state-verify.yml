@@ -1,0 +1,45 @@
+name: Verify store installed and update state
+
+on:
+  push:
+    branches:
+      - fix/store-installed-update-state
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Apply store patch
+        run: python tools/patch-store-update-state.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify store markers
+        run: |
+          grep -F 'updateAvailable -> "עדכון"' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+          grep -F 'else -> "מותקן"' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+          grep -F 'PackageManager.NameNotFoundException' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+          ! grep -F 'dpm.isApplicationHidden(admin, packageName)' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+      - name: Commit production change only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Fix store installed state and show real updates'
+          git push
