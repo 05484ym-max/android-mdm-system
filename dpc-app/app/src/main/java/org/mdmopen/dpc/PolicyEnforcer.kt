@@ -159,11 +159,21 @@ class PolicyEnforcer(private val context: Context) {
         // Hidden (not merely suspended) so unapproved apps disappear from the
         // launcher entirely instead of showing as a greyed-out icon.
         val failed = mutableListOf<String>()
+
+        fun applyHiddenStateIfNeeded(pkg: String, shouldHide: Boolean) {
+            try {
+                if (dpm.isApplicationHidden(admin, pkg) == shouldHide) return
+                if (!dpm.setApplicationHidden(admin, pkg, shouldHide)) failed += pkg
+            } catch (_: Exception) {
+                failed += pkg
+            }
+        }
+
         for (pkg in toSuspend) {
-            if (!dpm.setApplicationHidden(admin, pkg, true)) failed += pkg
+            applyHiddenStateIfNeeded(pkg, true)
         }
         for (pkg in toUnsuspend) {
-            if (!dpm.setApplicationHidden(admin, pkg, false)) failed += pkg
+            applyHiddenStateIfNeeded(pkg, false)
         }
 
         val successfullyHidden = (toSuspend - failed.toSet()).toSet()
