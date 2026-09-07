@@ -11,11 +11,17 @@ import android.os.PersistableBundle
 import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** The two screens Android 12+ provisioning drives while setting up a device owner. */
 class ProvisioningActivity : Activity() {
 
+    companion object {
+        private const val COMPLIANCE_TIMEOUT_MS = 60_000L
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val complianceFinished = AtomicBoolean(false)
     private lateinit var statusView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +77,24 @@ class ProvisioningActivity : Activity() {
             return
         }
 
+        val timeout = Runnable {
+            if (complianceFinished.compareAndSet(false, true)) {
+                status("הרישום מתעכב. ההגדרה תסתיים וניתן להשלים את הרישום מתוך האפליקציה.")
+                mainHandler.postDelayed({ done() }, 1200)
+            }
+        }
+        mainHandler.postDelayed(timeout, COMPLIANCE_TIMEOUT_MS)
+
+        fun complete(message: String) {
+            mainHandler.post {
+                if (complianceFinished.compareAndSet(false, true)) {
+                    mainHandler.removeCallbacks(timeout)
+                    status(message)
+                    mainHandler.postDelayed({ done() }, 4000)
+                }
+            }
+        }
+
         status("רושם את המכשיר בשרת…")
         Thread {
             try {
@@ -79,11 +103,9 @@ class ProvisioningActivity : Activity() {
                 Config.setDeviceToken(this, result.deviceToken)
                 Config.clearPendingEnrollmentToken(this)
                 PolicySync.run(this)
-                post("המכשיר נרשם. מזהה מכשיר: ${result.deviceId}")
+                complete("המכשיר נרשם. מזהה מכשיר: ${result.deviceId}")
             } catch (e: Exception) {
-                post("הרישום לא הושלם: ${e.message}. אפשר להשלים מהאפליקציה.")
-            } finally {
-                mainHandler.postDelayed({ done() }, 4000)
+                complete("הרישום לא הושלם: ${e.message}. אפשר להשלים מהאפליקציה.")
             }
         }.start()
     }
@@ -104,8 +126,6 @@ class ProvisioningActivity : Activity() {
         setResult(RESULT_OK)
         finish()
     }
-
-    private fun post(message: String) = mainHandler.post { status(message) }
 
     private fun status(message: String) {
         statusView.text = message
