@@ -1,26 +1,89 @@
 package org.mdmopen.dpc
 
-import android.app.job.JobInfo
 import android.app.job.JobScheduler
-import android.content.ComponentName
 import android.content.Context
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import java.util.concurrent.TimeUnit
 
 object SyncScheduler {
 
-    private const val JOB_ID = 1001
+    private const val LEGACY_JOB_ID = 1001
+    private const val UNIQUE_PERIODIC_WORK = "policy-sync-periodic"
+    private const val UNIQUE_PUSH_WORK = "policy-sync-push"
+    private const val UNIQUE_RETRY_UPDATE_WORK = "policy-sync-retry-update"
+    private const val UNIQUE_PUSH_TOKEN_WORK = "push-token-registration"
+    private const val MIN_INTERVAL_MINUTES = 15L
 
-    /** JobScheduler clamps periodic jobs to a 15 minute minimum. */
-    private const val MIN_INTERVAL_MINUTES = 15
+    private fun networkConstraints() = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .build()
 
-    /** Reschedules the background sync to match the interval the server asked for. */
+    /**
+     * Keeps exactly one periodic policy sync. WorkManager survives reboot and
+     * retries transient failures with backoff instead of relying on a raw thread.
+     */
     fun schedule(context: Context) {
-        val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
-        val minutes = Config.syncIntervalMinutes(context).coerceAtLeast(MIN_INTERVAL_MINUTES)
-        val job = JobInfo.Builder(JOB_ID, ComponentName(context, SyncJobService::class.java))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setPeriodic(minutes * 60_000L)
-            .setPersisted(true)
+        val appContext = context.applicationContext
+
+        // Clean up the old persisted JobScheduler entry after upgrading from the
+        // legacy SyncJobService implementation.
+        appContext.getSystemService(JobScheduler::class.java)?.cancel(LEGACY_JOB_ID)
+
+        val minutes = Config.syncIntervalMinutes(appContext)
+            .coerceAtLeast(MIN_INTERVAL_MINUTES.toInt())
+            .toLong()
+
+        val request = PeriodicWorkRequestBuilder<PolicySyncWorker>(
+            minutes,
+            TimeUnit.MINUTES,
+        )
+            .setConstraints(networkConstraints())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
-        scheduler.schedule(job)
+
+        WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
+            UNIQUE_PERIODIC_WORK,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            request,
+        )
+    }
+
+    /** Coalesces bursts of FCM pushes while preserving an explicit retry-update. */
+    fun enqueueImmediate(context: Context, retryUpdate: Boolean = false) {
+        val appContext = context.applicationContext
+        val request = OneTimeWorkRequestBuilder<PolicySyncWorker>()
+            .setConstraints(networkConstraints())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setInputData(workDataOf(PolicySyncWorker.KEY_RETRY_UPDATE to retryUpdate))
+            .build()
+
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            if (retryUpdate) UNIQUE_RETRY_UPDATE_WORK else UNIQUE_PUSH_WORK,
+            ExistingWorkPolicy.KEEP,
+            request,
+        )
+    }
+
+    /** The latest Firebase token wins; transient network failures are retried. */
+    fun enqueuePushTokenRegistration(context: Context) {
+        val appContext = context.applicationContext
+        val request = OneTimeWorkRequestBuilder<PushTokenWorker>()
+            .setConstraints(networkConstraints())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            UNIQUE_PUSH_TOKEN_WORK,
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
     }
 }
