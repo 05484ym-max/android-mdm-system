@@ -1173,49 +1173,57 @@ class CustomerActivity : Activity() {
     }
 
     private fun openWhatsAppAccessibilitySettings() {
-        // Samsung/One UI is more reliable when opening the general Accessibility
-        // screen first. A details-only intent can be accepted without showing a
-        // usable screen on some devices.
-        val general = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            startActivity(general)
-            Toast.makeText(
-                this,
-                "בחרו 'יהודי כשר — הגנת WhatsApp' והפעילו את השירות",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        } catch (_: Exception) {
-        }
+        val attempts = listOf(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).setPackage("com.android.settings"),
+            Intent().setClassName(
+                "com.android.settings",
+                "com.samsung.android.settings.accessibility.AccessibilitySettingsActivity"
+            ),
+            Intent().setClassName(
+                "com.android.settings",
+                "com.android.settings.Settings\$AccessibilitySettingsActivity"
+            ),
+            Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
+                data = Uri.parse("package:$packageName")
+                setPackage("com.android.settings")
+            },
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+        )
 
-        // Fallback for devices that do support the per-service details screen.
-        val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
-            data = Uri.parse("package:$packageName")
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            startActivity(details)
-            return
-        } catch (_: Exception) {
-        }
-
-        // Last-resort Samsung settings component. resolveActivity is checked first
-        // so we never crash on non-Samsung devices.
-        val samsung = Intent().apply {
-            setClassName("com.android.settings", "com.samsung.android.settings.accessibility.AccessibilitySettingsActivity")
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            if (samsung.resolveActivity(packageManager) != null) {
-                startActivity(samsung)
+        fun launchAttempt(index: Int) {
+            if (index >= attempts.size) {
+                Toast.makeText(
+                    this,
+                    "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה",
+                    Toast.LENGTH_LONG
+                ).show()
                 return
             }
-        } catch (_: Exception) {
+
+            val intent = attempts[index].apply {
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+            try {
+                startActivity(intent)
+            } catch (_: Exception) {
+                launchAttempt(index + 1)
+                return
+            }
+
+            window.decorView.postDelayed({
+                if (hasWindowFocus()) {
+                    launchAttempt(index + 1)
+                }
+            }, 900L)
         }
 
-        Toast.makeText(this, "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה", Toast.LENGTH_LONG).show()
+        Toast.makeText(
+            this,
+            "בחרו 'יהודי כשר — הגנת WhatsApp' והפעילו את השירות",
+            Toast.LENGTH_LONG
+        ).show()
+        launchAttempt(0)
     }
 
     private fun compactPersonalIdentityCard(): LinearLayout = LinearLayout(this).apply {
