@@ -1230,9 +1230,11 @@ class CustomerActivity : Activity() {
             if (intent.resolveActivity(packageManager) == null) continue
             try {
                 startActivity(intent)
-                contentArea.postDelayed({
-                    try { PolicyEnforcer(this).allowManagedAccessibilityService() } catch (_: Exception) {}
-                }, 1500L)
+                // Do not re-apply the permitted-services allowlist on a fixed
+                // short timer while Samsung Settings is still open. On the A31
+                // that makes the Accessibility row non-clickable again. The
+                // service itself re-locks the allowlist as soon as Android
+                // confirms it is enabled; WorkManager remains a bounded fallback.
                 return
             } catch (_: Exception) {}
         }

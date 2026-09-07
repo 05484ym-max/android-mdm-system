@@ -20,6 +20,14 @@ class WhatsAppGuardService : AccessibilityService() {
         // accessibility settings against customer bypass and releases WhatsApp
         // again if it was suspended during the one-time setup step.
         WhatsAppGuardProtection.reconcile(this, WhatsAppGuardConfig.load(this))
+        try {
+            val enforcer = PolicyEnforcer(applicationContext)
+            if (enforcer.isDeviceOwner()) {
+                enforcer.allowManagedAccessibilityService()
+            }
+        } catch (_: Exception) {
+            // The bounded WorkManager failsafe will retry the local relock.
+        }
         scheduleRender()
     }
 

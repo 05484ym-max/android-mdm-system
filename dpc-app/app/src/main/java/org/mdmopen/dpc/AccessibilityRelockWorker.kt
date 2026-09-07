@@ -7,8 +7,9 @@ import androidx.work.WorkerParameters
 /**
  * Failsafe for the very short Samsung accessibility setup window.
  *
- * CustomerActivity normally re-applies the package-only accessibility allowlist
- * after 1.5 seconds and again when it resumes. This worker is deliberately
+ * WhatsAppGuardService re-applies the package-only accessibility allowlist as
+ * soon as Android confirms it is enabled, and CustomerActivity does so again on
+ * return. This worker is deliberately
  * independent of the Activity lifecycle so a process/activity death cannot leave
  * setPermittedAccessibilityServices(null) open indefinitely.
  */
