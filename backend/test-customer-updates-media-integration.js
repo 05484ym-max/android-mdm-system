@@ -180,7 +180,7 @@ async function adminMultipart(baseUrl, cookie, route, method, form) {
 
     await test('oversized image is rejected before GitHub storage', async () => {
       const before = github.assets.size;
-      const large = Buffer.concat([pngBytes(0), Buffer.alloc(10 * 1024 * 1024 + 1)]);
+      const large = Buffer.concat([pngBytes(0), Buffer.alloc(50 * 1024 * 1024 + 1)]);
       const res = await adminMultipart(base, cookie, '/api/customer-updates', 'POST',
         updateForm({
           title: 'תמונה גדולה', body: 'בדיקה', media: large,
