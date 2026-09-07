@@ -161,15 +161,24 @@ object AutoUpdater {
                 PackageManager.GET_SIGNING_CERTIFICATES
             )
 
+        val installedSigningInfo = installed.signingInfo
+            ?: error("Installed DPC signing information unavailable")
+        val archiveSigningInfo = archive.signingInfo
+            ?: error("Update APK signing information unavailable")
+
         val oldCerts =
-            installed.signingInfo.apkContentsSigners
+            installedSigningInfo.apkContentsSigners
                 .map { sha256(it.toByteArray()) }
                 .toSet()
 
         val newCerts =
-            archive.signingInfo.apkContentsSigners
+            archiveSigningInfo.apkContentsSigners
                 .map { sha256(it.toByteArray()) }
                 .toSet()
+
+        if (oldCerts.isEmpty() || newCerts.isEmpty()) {
+            error("APK signing certificate unavailable")
+        }
 
         if (oldCerts != newCerts) {
             error("APK signing certificate mismatch")
