@@ -1,0 +1,45 @@
+name: Verify updater signingInfo null safety
+
+on:
+  push:
+    branches:
+      - fix/updater-signinginfo-null-safety
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Apply null-safety patch
+        run: python tools/patch-updater-signinginfo-null.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify fail-closed markers
+        run: |
+          FILE=dpc-app/app/src/main/java/org/mdmopen/dpc/AutoUpdater.kt
+          grep -F 'Installed DPC signing information unavailable' "$FILE"
+          grep -F 'Update APK signing information unavailable' "$FILE"
+          grep -F 'oldCerts.isEmpty() || newCerts.isEmpty()' "$FILE"
+      - name: Commit production change only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/AutoUpdater.kt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Fail closed when updater signing info is unavailable'
+          git push
