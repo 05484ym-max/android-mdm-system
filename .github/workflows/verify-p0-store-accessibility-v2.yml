@@ -34,9 +34,10 @@ jobs:
           p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt').read_text()
           block = c[c.index('private fun isInstalled'):c.index('private fun openInstalledApp')]
           assert 'getApplicationInfo(packageName, 0)' in block
-          assert 'MATCH_UNINSTALLED_PACKAGES' not in block
+          assert 'getApplicationInfo(\n                packageName,\n                PackageManager.MATCH_UNINSTALLED_PACKAGES' not in block
           assert 'isApplicationHidden(admin, packageName)' in block
           assert 'getLaunchIntentForPackage(packageName)' in block
+          assert 'COMPONENT_ENABLED_STATE_DISABLED_USER' in block
           assert 'beginAccessibilitySetupWindow()' in c
           assert 'finishAccessibilitySetupWindow()' in c
           assert '1500L' in c
