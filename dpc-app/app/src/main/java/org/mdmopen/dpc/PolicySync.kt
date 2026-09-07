@@ -5,12 +5,16 @@ import android.content.Context
 object PolicySync {
 
     const val TAG = "DpcSync"
+    private val syncLock = Any()
 
     /**
      * A full cycle in one request: status out, policy and commands in. Status reaches
      * the server before any command runs, so a reboot or wipe cannot swallow it.
+     *
+     * All callers share one process-wide lock so manual, scheduled and push-triggered
+     * syncs cannot apply policy/config changes concurrently.
      */
-    fun run(context: Context): String {
+    fun run(context: Context): String = synchronized(syncLock) {
         val serverUrl = Config.serverUrl(context)
         require(serverUrl.isNotEmpty()) { "לא הוגדרה כתובת שרת" }
 
@@ -70,7 +74,7 @@ object PolicySync {
         // internally guarded against concurrent runs.
         AutoUpdater.check(context.applicationContext)
 
-        return buildString {
+        buildString {
             append("רקע: $wallpaperResult")
             append("\nמותרות ${result.policy.allowedApps.size} · ")
             append("הושעו ${enforcement.suspended.size} · ")
