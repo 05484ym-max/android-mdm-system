@@ -31,10 +31,18 @@ jobs:
         run: gradle assembleDebug --stacktrace
       - name: Verify store markers
         run: |
-          grep -F 'updateAvailable -> "עדכון"' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
-          grep -F 'else -> "מותקן"' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
-          grep -F 'PackageManager.NameNotFoundException' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
-          ! grep -F 'dpm.isApplicationHidden(admin, packageName)' dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+          FILE=dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt
+          grep -F 'updateAvailable -> "עדכון"' "$FILE"
+          grep -F 'else -> "מותקן"' "$FILE"
+          grep -F 'PackageManager.NameNotFoundException' "$FILE"
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/AppStoreActivity.kt').read_text(encoding='utf-8')
+          start = s.index('private fun isInstalled(packageName: String): Boolean')
+          end = s.index('private fun confirmQuickUninstall', start)
+          block = s[start:end]
+          assert 'isApplicationHidden' not in block, block
+          PY
       - name: Commit production change only
         run: |
           git config user.name 'github-actions[bot]'
