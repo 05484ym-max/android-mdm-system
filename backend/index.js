@@ -338,6 +338,32 @@ function publicDevice(device) {
 
 // ---------- authentication ----------
 
+const SAFE_ADMIN_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * Browser admin mutations authenticate with an HttpOnly session cookie, so a
+ * cross-site page must never be able to replay that cookie into a state-changing
+ * admin request. SameSite=Strict remains enabled on the cookie; this exact-origin
+ * check is a second independent CSRF barrier and also rejects same-site sibling
+ * origins. Non-browser maintenance clients that send neither Origin nor Fetch
+ * Metadata remain compatible, while an explicit cross-site browser request is
+ * always rejected.
+ */
+function isSameOriginAdminMutation(req) {
+  if (SAFE_ADMIN_METHODS.has(req.method)) return true;
+
+  const origin = req.get('origin');
+  const fetchSite = (req.get('sec-fetch-site') || '').toLowerCase();
+  if (!origin) return fetchSite !== 'cross-site';
+
+  try {
+    const expectedOrigin = new URL(`${req.protocol}://${req.get('host')}`).origin;
+    return new URL(origin).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
+}
+
 /** Guards the admin endpoints. Open when no credentials are configured. */
 function requireAdmin(req, res, next) {
   if (!AUTH_ENABLED) return next();
@@ -347,6 +373,9 @@ function requireAdmin(req, res, next) {
   }
   try {
     jwt.verify(token, JWT_SECRET);
+    if (!isSameOriginAdminMutation(req)) {
+      return res.status(403).json({ error: 'cross-site admin request rejected' });
+    }
     next();
   } catch {
     res.status(401).json({ error: 'invalid session' });
@@ -395,6 +424,9 @@ app.post('/api/login', loginLimiter, (req, res) => {
 });
 
 app.post('/api/logout', (req, res) => {
+  if (!isSameOriginAdminMutation(req)) {
+    return res.status(403).json({ error: 'cross-site admin request rejected' });
+  }
   res.clearCookie('session');
   res.json({ status: 'ok' });
 });
