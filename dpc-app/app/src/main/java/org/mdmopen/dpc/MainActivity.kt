@@ -211,8 +211,11 @@ root.addView(sectionLabel("יומן"))
         Thread {
             try {
                 val result = ApiClient(Config.serverUrl(this@MainActivity)).enroll(code)
-                Config.setDeviceId(this@MainActivity, result.deviceId)
-                Config.setDeviceToken(this@MainActivity, result.deviceToken)
+                Config.setEnrollmentCredentials(
+                    this@MainActivity,
+                    result.deviceId,
+                    result.deviceToken,
+                )
                 mainHandler.post {
                     enrollInput.setText("")
                     refreshStatus()
