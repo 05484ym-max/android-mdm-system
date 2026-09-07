@@ -518,16 +518,22 @@ class AppStoreActivity : Activity() {
     }
 
     private fun isInstalled(packageName: String): Boolean {
-        // MATCH_UNINSTALLED_PACKAGES can return retained metadata after removal.
-        // FLAG_INSTALLED is the only authoritative installed-state signal here;
-        // DevicePolicyManager hidden-state must never be treated as proof that
-        // the package physically exists on the device.
+        // Store status is customer-visible state, not retained package metadata.
+        // Do NOT use MATCH_UNINSTALLED_PACKAGES here: Samsung can return rows
+        // for packages removed/hidden for the current user, which made absent
+        // apps appear as "מותקן". Require a normal current-user lookup, not
+        // hidden by Device Owner, and a launchable activity.
         return try {
-            val info = packageManager.getApplicationInfo(
-                packageName,
-                PackageManager.MATCH_UNINSTALLED_PACKAGES
-            )
-            (info.flags and ApplicationInfo.FLAG_INSTALLED) != 0
+            val info = packageManager.getApplicationInfo(packageName, 0)
+            if ((info.flags and ApplicationInfo.FLAG_INSTALLED) == 0) return false
+
+            val dpm = getSystemService(DevicePolicyManager::class.java)
+            if (dpm.isDeviceOwnerApp(this.packageName)) {
+                val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+                if (dpm.isApplicationHidden(admin, packageName)) return false
+            }
+
+            packageManager.getLaunchIntentForPackage(packageName) != null
         } catch (_: PackageManager.NameNotFoundException) {
             false
         } catch (_: Exception) {
