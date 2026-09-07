@@ -49,6 +49,10 @@ class SecureWebViewClient(
         request: WebResourceRequest?
     ): WebResourceResponse? {
         val rawUrl = request?.url?.toString()
+        if (ImageSchemeHardening.isForbiddenImageUrl(rawUrl)) {
+            return BlockedResponse.imagePlaceholder()
+        }
+
         val result = policy.evaluate(rawUrl)
 
         var hostAllowed = result.decision == LocalDecision.ALLOW
