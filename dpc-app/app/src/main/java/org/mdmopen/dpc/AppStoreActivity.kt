@@ -484,31 +484,17 @@ class AppStoreActivity : Activity() {
     }
 
     private fun isInstalled(packageName: String): Boolean {
-        // Hidden packages can disappear from ordinary PackageManager lookups
-        // on some OEM builds even though they are still physically installed.
-        // MATCH_UNINSTALLED_PACKAGES lets us inspect their ApplicationInfo and
-        // FLAG_INSTALLED distinguishes a real installed package from retained
-        // metadata for an uninstalled package.
-        val installedByPackageManager = try {
+        // MATCH_UNINSTALLED_PACKAGES can return retained metadata after an app
+        // was removed, so FLAG_INSTALLED is the only signal used here. Policy
+        // hidden-state must never be treated as proof that an app is installed.
+        return try {
             val info = packageManager.getApplicationInfo(
                 packageName,
                 PackageManager.MATCH_UNINSTALLED_PACKAGES
             )
             (info.flags and ApplicationInfo.FLAG_INSTALLED) != 0
-        } catch (_: Exception) {
+        } catch (_: PackageManager.NameNotFoundException) {
             false
-        }
-        if (installedByPackageManager) return true
-
-        // DevicePolicyManager is authoritative for apps hidden by this DPC.
-        // If Android says this package is hidden by our Device Owner policy,
-        // it necessarily exists on the device even if PackageManager omitted
-        // it from the normal visible-package view.
-        return try {
-            val dpm = getSystemService(DevicePolicyManager::class.java)
-            val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
-            dpm.isDeviceOwnerApp(this.packageName) &&
-                dpm.isApplicationHidden(admin, packageName)
         } catch (_: Exception) {
             false
         }
