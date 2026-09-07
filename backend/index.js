@@ -600,7 +600,7 @@ app.get('/api/customer-updates/media/:assetId', wrap(async (req, res) => {
     range ? { Range: range } : {},
   );
   const contentType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  if (!['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm'].includes(contentType)) {
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'video/mp4', 'video/webm'].includes(contentType)) {
     throw new Error('GitHub media asset returned an invalid content type');
   }
   if (upstream.status === 206) res.status(206);
