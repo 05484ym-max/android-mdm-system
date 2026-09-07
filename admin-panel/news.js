@@ -282,9 +282,9 @@
         formError.textContent = 'יש לבחור תמונה או סרטון נתמכים';
         return;
       }
-      const limit = image ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+      const limit = 50 * 1024 * 1024;
       if (file.size > limit) {
-        formError.textContent = image ? 'התמונה גדולה מ-10MB' : 'הסרטון גדול מ-50MB';
+        formError.textContent = 'הקובץ גדול מ-50MB';
         return;
       }
     }

@@ -57,6 +57,7 @@ class CustomerActivity : Activity() {
     private lateinit var supportNavItem: NavItem
     private var isPersonalAreaActive = false
     private var isNewsActive = false
+    private var accessibilitySetupWindowOpen = false
     private var selectedStoreCategory = "all"
     private var storeSearchQuery = ""
     // Cache-first: showNews()/onCreate's badge check both read this rather
@@ -87,6 +88,16 @@ class CustomerActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (accessibilitySetupWindowOpen) {
+            accessibilitySetupWindowOpen = false
+            // Restore the cached kiosk policy immediately on return; no network
+            // dependency is required to close the temporary setup window.
+            try {
+                PolicyEnforcer(this).restoreCachedKioskPolicy()
+            } catch (_: Exception) {
+                SyncScheduler.enqueueImmediate(applicationContext)
+            }
+        }
         if (::contentArea.isInitialized && isPersonalAreaActive) {
             showPersonalArea()
         }
@@ -1173,36 +1184,45 @@ class CustomerActivity : Activity() {
     }
 
     private fun openWhatsAppAccessibilitySettings() {
-        // Ensure Device Owner explicitly permits our accessibility service before
-        // sending the customer into Settings. Older Samsung/One UI devices can
-        // otherwise label the service as blocked by the administrator.
         try {
             val enforcer = PolicyEnforcer(this)
-            if (enforcer.isDeviceOwner()) enforcer.allowManagedAccessibilityService()
-        } catch (_: Exception) {
-            // The Settings guidance below is still useful even if the OEM rejects it.
+            if (!enforcer.isDeviceOwner()) {
+                Toast.makeText(this, "המכשיר אינו במצב ניהול מלא", Toast.LENGTH_LONG).show()
+                return
+            }
+            enforcer.allowManagedAccessibilityService()
+            // Samsung A31 blocks/crashes the accessibility UI while our kiosk
+            // lock task is active. Open a very narrow temporary setup window:
+            // Device Owner and all user restrictions stay active; only kiosk/home
+            // pinning is suspended until this Activity resumes.
+            try { stopLockTask() } catch (_: Exception) {}
+            enforcer.disableKiosk()
+            accessibilitySetupWindowOpen = true
+        } catch (e: Exception) {
+            Toast.makeText(this, "לא ניתן לפתוח חלון נגישות: ${e.message}", Toast.LENGTH_LONG).show()
+            return
         }
 
-        // Galaxy A31 can crash com.android.settings when
-        // ACTION_ACCESSIBILITY_SETTINGS is invoked directly. Open only the public
-        // top-level Settings screen and guide the user from there.
-        val intent = Intent(Settings.ACTION_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
+        val attempts = listOf(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS),
+        )
         Toast.makeText(
             this,
-            "היכנסו: נגישות > שירותים מותקנים > יהודי כשר — הגנת WhatsApp",
+            "הפעילו: יהודי כשר — הגנת WhatsApp",
             Toast.LENGTH_LONG
         ).show()
-        try {
-            if (intent.resolveActivity(packageManager) != null) startActivity(intent)
-        } catch (_: Exception) {
-            Toast.makeText(
-                this,
-                "פתחו ידנית: הגדרות > נגישות > שירותים מותקנים > יהודי כשר — הגנת WhatsApp",
-                Toast.LENGTH_LONG
-            ).show()
+        for (intent in attempts) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            if (intent.resolveActivity(packageManager) == null) continue
+            try {
+                startActivity(intent)
+                return
+            } catch (_: Exception) {}
         }
+        accessibilitySetupWindowOpen = false
+        try { PolicyEnforcer(this).restoreCachedKioskPolicy() } catch (_: Exception) {}
+        Toast.makeText(this, "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה", Toast.LENGTH_LONG).show()
     }
 
     private fun compactPersonalIdentityCard(): LinearLayout = LinearLayout(this).apply {
