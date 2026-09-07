@@ -205,6 +205,33 @@ class PolicyEnforcer(private val context: Context) {
         }
     }
 
+    fun beginAccessibilitySetupWindow() {
+        check(isDeviceOwner()) { "Not device owner" }
+        // Belt-and-suspenders protection: Device Owner is already not removable
+        // through normal Settings, and this explicit block stays in force while
+        // kiosk is temporarily released.
+        try { dpm.setUninstallBlocked(admin, context.packageName, true) } catch (_: Exception) {}
+        try { dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET) } catch (_: Exception) {}
+        try { dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES) } catch (_: Exception) {}
+        try { dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT) } catch (_: Exception) {}
+
+        // Some Samsung/One UI builds refuse to construct the Accessibility page
+        // while a non-null permitted-services policy is active. Lift ONLY this
+        // one policy momentarily; CustomerActivity re-applies our package-only
+        // allowlist after 1.5s and finishAccessibilitySetupWindow() does it again.
+        try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
+        // Activity handler normally re-locks in 1.5s; WorkManager is a separate
+        // process/lifecycle failsafe so a crash cannot leave this relaxed.
+        SyncScheduler.enqueueAccessibilityRelock(context)
+    }
+
+    fun finishAccessibilitySetupWindow() {
+        check(isDeviceOwner()) { "Not device owner" }
+        allowManagedAccessibilityService()
+        try { dpm.setUninstallBlocked(admin, context.packageName, true) } catch (_: Exception) {}
+        restoreCachedKioskPolicy()
+    }
+
     private fun applyFullOpen(): EnforcementResult {
         // Reversible full-open mode: make the phone behave normally while keeping
         // Device Owner and anti-escape protections so the admin can re-apply policy remotely.

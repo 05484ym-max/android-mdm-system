@@ -20,6 +20,7 @@ object SyncScheduler {
     private const val UNIQUE_PUSH_WORK = "policy-sync-push"
     private const val UNIQUE_RETRY_UPDATE_WORK = "policy-sync-retry-update"
     private const val UNIQUE_PUSH_TOKEN_WORK = "push-token-registration"
+    private const val UNIQUE_ACCESSIBILITY_RELOCK_WORK = "accessibility-policy-relock"
     private const val MIN_INTERVAL_MINUTES = 15L
 
     private fun networkConstraints() = Constraints.Builder()
@@ -68,6 +69,25 @@ object SyncScheduler {
         WorkManager.getInstance(appContext).enqueueUniqueWork(
             if (retryUpdate) UNIQUE_RETRY_UPDATE_WORK else UNIQUE_PUSH_WORK,
             ExistingWorkPolicy.KEEP,
+            request,
+        )
+    }
+
+    /**
+     * Independent failsafe for Samsung accessibility setup. This intentionally
+     * has no network constraint: its only job is to restore the local Device
+     * Owner accessibility allowlist even if the Activity/process dies.
+     */
+    fun enqueueAccessibilityRelock(context: Context) {
+        val appContext = context.applicationContext
+        val request = OneTimeWorkRequestBuilder<AccessibilityRelockWorker>()
+            .setInitialDelay(8, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .build()
+
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            UNIQUE_ACCESSIBILITY_RELOCK_WORK,
+            ExistingWorkPolicy.REPLACE,
             request,
         )
     }
