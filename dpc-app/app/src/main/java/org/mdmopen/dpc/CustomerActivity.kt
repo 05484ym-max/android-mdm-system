@@ -1173,57 +1173,35 @@ class CustomerActivity : Activity() {
     }
 
     private fun openWhatsAppAccessibilitySettings() {
+        // Use only public Android Settings actions here. Explicit Samsung/
+        // Settings implementation Activity class names are not API contracts
+        // and can crash the Settings app on older One UI builds (Galaxy A31).
         val attempts = listOf(
-            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).setPackage("com.android.settings"),
-            Intent().setClassName(
-                "com.android.settings",
-                "com.samsung.android.settings.accessibility.AccessibilitySettingsActivity"
-            ),
-            Intent().setClassName(
-                "com.android.settings",
-                "com.android.settings.Settings\$AccessibilitySettingsActivity"
-            ),
-            Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
-                data = Uri.parse("package:$packageName")
-                setPackage("com.android.settings")
-            },
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS),
         )
 
-        fun launchAttempt(index: Int) {
-            if (index >= attempts.size) {
+        for (intent in attempts) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            if (intent.resolveActivity(packageManager) == null) continue
+            try {
                 Toast.makeText(
                     this,
-                    "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה",
+                    "בחרו 'נגישות' ואז 'יהודי כשר — הגנת WhatsApp' והפעילו את השירות",
                     Toast.LENGTH_LONG
                 ).show()
-                return
-            }
-
-            val intent = attempts[index].apply {
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-
-            try {
                 startActivity(intent)
-            } catch (_: Exception) {
-                launchAttempt(index + 1)
                 return
+            } catch (_: Exception) {
+                // Try the next public Settings action.
             }
-
-            window.decorView.postDelayed({
-                if (hasWindowFocus()) {
-                    launchAttempt(index + 1)
-                }
-            }, 900L)
         }
 
         Toast.makeText(
             this,
-            "בחרו 'יהודי כשר — הגנת WhatsApp' והפעילו את השירות",
+            "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה",
             Toast.LENGTH_LONG
         ).show()
-        launchAttempt(0)
     }
 
     private fun compactPersonalIdentityCard(): LinearLayout = LinearLayout(this).apply {
