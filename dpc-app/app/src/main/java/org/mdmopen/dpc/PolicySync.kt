@@ -65,6 +65,11 @@ object PolicySync {
             }
         }
 
+        // Successful manual, scheduled and push-triggered syncs all request an
+        // immediate signed DPC update check. AutoUpdater is asynchronous and
+        // internally guarded against concurrent runs.
+        AutoUpdater.check(context.applicationContext)
+
         return buildString {
             append("רקע: $wallpaperResult")
             append("\nמותרות ${result.policy.allowedApps.size} · ")
