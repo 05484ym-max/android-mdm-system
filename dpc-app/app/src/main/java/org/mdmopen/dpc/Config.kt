@@ -84,6 +84,18 @@ object Config {
         prefs(context).edit().putString(KEY_DEVICE_TOKEN, token).apply()
     }
 
+    /**
+     * Enrollment identity must be persisted atomically: a process death between
+     * separate async writes can otherwise leave a deviceId without its token.
+     */
+    fun setEnrollmentCredentials(context: Context, deviceId: String, deviceToken: String) {
+        val persisted = prefs(context).edit()
+            .putString(KEY_DEVICE_ID, deviceId)
+            .putString(KEY_DEVICE_TOKEN, deviceToken)
+            .commit()
+        check(persisted) { "Could not persist enrollment credentials" }
+    }
+
     /** Last policy pulled from the server, so the kiosk works offline too. */
     fun allowedApps(context: Context): List<String> =
         prefs(context).getStringSet(KEY_ALLOWED_APPS, emptySet()).orEmpty().sorted()

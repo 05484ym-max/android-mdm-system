@@ -99,8 +99,11 @@ class ProvisioningActivity : Activity() {
         Thread {
             try {
                 val result = ApiClient(serverUrl).enroll(enrollmentToken)
-                Config.setDeviceId(this, result.deviceId)
-                Config.setDeviceToken(this, result.deviceToken)
+                Config.setEnrollmentCredentials(
+                    this,
+                    result.deviceId,
+                    result.deviceToken,
+                )
                 Config.clearPendingEnrollmentToken(this)
                 PolicySync.run(this)
                 complete("המכשיר נרשם. מזהה מכשיר: ${result.deviceId}")
