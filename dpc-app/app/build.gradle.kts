@@ -28,6 +28,8 @@ android {
                 keyAlias = System.getenv("DPC_KEY_ALIAS")
                 keyPassword = System.getenv("DPC_KEYSTORE_PASSWORD")
             }
+            // minSdk 29 makes AGP drop v1 signing. Some OEM provisioning stacks still
+            // read the signature the old way, so keep all three schemes.
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
@@ -36,11 +38,15 @@ android {
 
     buildTypes {
         getByName("debug") {
-            if (keystorePath != null) signingConfig = signingConfigs.getByName("shared")
+            if (keystorePath != null) {
+                signingConfig = signingConfigs.getByName("shared")
+            }
         }
         getByName("release") {
             isMinifyEnabled = false
-            if (keystorePath != null) signingConfig = signingConfigs.getByName("shared")
+            if (keystorePath != null) {
+                signingConfig = signingConfigs.getByName("shared")
+            }
         }
     }
 
@@ -49,7 +55,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
