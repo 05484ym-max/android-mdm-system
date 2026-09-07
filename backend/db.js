@@ -1233,6 +1233,17 @@ async function listCustomerUpdatesForAdmin() {
   return rows.map(mapCustomerUpdateRow);
 }
 
+async function getCustomerUpdateMediaByStorageKey(storageKey) {
+  const { rows } = await pool.query(
+    `SELECT media_storage_key AS "mediaStorageKey", media_mime_type AS "mediaMimeType"
+       FROM customer_updates
+      WHERE media_storage_key = $1
+      LIMIT 1`,
+    [String(storageKey)],
+  );
+  return rows[0] || null;
+}
+
 async function getCustomerUpdateById(id) {
   const { rows } = await pool.query(
     `SELECT * FROM customer_updates WHERE id = $1`,
@@ -1733,6 +1744,7 @@ module.exports = {
   resolveAlert,
   listActiveAlerts,
   listCustomerUpdatesForAdmin,
+  getCustomerUpdateMediaByStorageKey,
   getCustomerUpdateById,
   createCustomerUpdate,
   updateCustomerUpdate,

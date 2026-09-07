@@ -85,7 +85,7 @@ const SUPPORT_SUBJECT_MAX_LENGTH = 120;
 const SUPPORT_MESSAGE_MAX_LENGTH = 5000;
 const SUPPORT_REPLY_MAX_LENGTH = 5000;
 const NEWS_MEDIA_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
-const NEWS_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const NEWS_IMAGE_MAX_BYTES = 50 * 1024 * 1024;
 
 const uploadNewsMediaField = multer({
   storage: multer.memoryStorage(),
@@ -592,6 +592,15 @@ app.get('/api/customer-updates/media/:assetId', wrap(async (req, res) => {
   if (!/^\d+$/.test(req.params.assetId)) {
     return res.status(400).json({ error: 'invalid media asset id' });
   }
+  const mediaMeta = await db.getCustomerUpdateMediaByStorageKey(req.params.assetId);
+  if (!mediaMeta || !mediaMeta.mediaMimeType) {
+    return res.status(404).json({ error: 'media asset not found' });
+  }
+  const allowedTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'video/mp4', 'video/webm']);
+  const contentType = String(mediaMeta.mediaMimeType).toLowerCase();
+  if (!allowedTypes.has(contentType)) {
+    return res.status(415).json({ error: 'unsupported stored media type' });
+  }
   const storageConfig = apkStorage.loadStorageConfig();
   const range = req.get('range');
   const upstream = await apkStorage.downloadApk(
@@ -599,10 +608,6 @@ app.get('/api/customer-updates/media/:assetId', wrap(async (req, res) => {
     req.params.assetId,
     range ? { Range: range } : {},
   );
-  const contentType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  if (!['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'video/mp4', 'video/webm'].includes(contentType)) {
-    throw new Error('GitHub media asset returned an invalid content type');
-  }
   if (upstream.status === 206) res.status(206);
   res.setHeader('Content-Type', contentType);
   for (const header of ['content-length', 'content-range', 'accept-ranges']) {

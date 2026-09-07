@@ -390,6 +390,15 @@ class PolicyEnforcer(private val context: Context) {
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
     }
 
+    fun restoreCachedKioskPolicy() {
+        check(isDeviceOwner()) { "Not device owner" }
+        if (Config.kioskEnabled(context)) {
+            enableKiosk(Config.allowedApps(context).toSet())
+        } else {
+            disableKiosk()
+        }
+    }
+
     /** Also used as a local escape hatch from the admin screen. */
     fun disableKiosk() {
         dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
