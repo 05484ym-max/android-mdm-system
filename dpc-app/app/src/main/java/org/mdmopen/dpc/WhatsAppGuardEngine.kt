@@ -10,9 +10,6 @@ class WhatsAppGuardEngine(
     private val service: AccessibilityService,
     private val overlays: WhatsAppOverlayController,
 ) {
-    private val statusWords = listOf("סטטוס", "status")
-    private val channelWords = listOf("ערוצים", "channels", "channel")
-
     fun render(root: AccessibilityNodeInfo?, policy: WhatsAppGuardPolicy) {
         if (root == null || !policy.enabled) {
             overlays.clear()
@@ -33,15 +30,14 @@ class WhatsAppGuardEngine(
         }
 
         // Status/channel blocking is intentionally scoped to the Updates screen.
-        // This avoids blocking similarly named text elsewhere in WhatsApp and,
-        // when both switches are enabled, blocks each section independently
-        // instead of disabling the entire Updates tab.
+        // Each section is handled independently; the whole Updates tab remains
+        // usable even when both switches are enabled.
         if (screen == WhatsAppScreen.UPDATES) {
             if (policy.blockStatuses) {
-                findBestSectionNode(nodes, statusWords)?.let { blockNode(it, transparent = false) }
+                findBestSectionNode(nodes, WhatsAppGuardTerms::isStatus)?.let { blockNode(it) }
             }
             if (policy.blockChannels) {
-                findBestSectionNode(nodes, channelWords)?.let { blockNode(it, transparent = false) }
+                findBestSectionNode(nodes, WhatsAppGuardTerms::isChannel)?.let { blockNode(it) }
             }
         }
 
@@ -92,14 +88,13 @@ class WhatsAppGuardEngine(
             ?.let { overlays.addMask(expand(it, dp(4), screen)) }
     }
 
-    private fun blockNode(node: AccessibilityNodeInfo, transparent: Boolean) {
+    private fun blockNode(node: AccessibilityNodeInfo) {
         val target = bestBlockingAncestor(node)
         val bounds = nodeBounds(target)
         if (bounds.isEmpty) return
         val clamped = clamp(bounds, boundsUnion())
         if (clamped.isEmpty) return
-        if (transparent) overlays.addTransparentTouchBlocker(clamped)
-        else overlays.addMask(clamped, touchable = true)
+        overlays.addMask(clamped, touchable = true)
     }
 
     private fun bestBlockingAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
@@ -118,15 +113,17 @@ class WhatsAppGuardEngine(
         return best
     }
 
-    private fun findBestSectionNode(nodes: List<AccessibilityNodeInfo>, words: List<String>): AccessibilityNodeInfo? {
+    private fun findBestSectionNode(
+        nodes: List<AccessibilityNodeInfo>,
+        matcher: (String?, String?) -> Boolean,
+    ): AccessibilityNodeInfo? {
         val candidates = nodes.filter { node ->
-            val text = WhatsAppScreenClassifier.nodeText(node)?.lowercase().orEmpty()
-            words.any { word -> text == word || text.contains(word) }
+            matcher(WhatsAppScreenClassifier.nodeText(node), node.viewIdResourceName)
         }
         if (candidates.isEmpty()) return null
 
         // Prefer clickable/important nodes with a real on-screen area. This is
-        // more stable than simply taking the first textual match from the tree.
+        // more stable than taking the first textual match in tree order.
         return candidates.maxByOrNull { node ->
             val r = nodeBounds(node)
             var score = 0
