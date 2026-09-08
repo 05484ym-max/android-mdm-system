@@ -87,13 +87,6 @@ function resolveChromiumExecutable() {
   const dirs = fs.readdirSync(base).filter(d => /^chromium-\d+$/.test(d));
   if (!dirs.length) throw new Error(`no chromium-* directory found under ${base}`);
   const versionDir = path.join(base, dirs.sort().pop());
-  // Playwright's own internal layout has changed across versions: older
-  // installs unzip to chrome-linux/chrome, newer ones (rebranded "Chrome
-  // for Testing") unzip to chrome-linux64/chrome - discovered for real via
-  // a CI failure (`browserType.launch: Failed to launch chromium because
-  // executable doesn't exist at .../chrome-linux/chrome`) after `npm ci`
-  // resolved a newer 1.x than this sandbox's pre-installed copy. Try both
-  // rather than hardcoding either, so this keeps working across versions.
   for (const dirName of ['chrome-linux', 'chrome-linux64']) {
     const candidate = path.join(versionDir, dirName, 'chrome');
     if (fs.existsSync(candidate)) return candidate;
@@ -101,9 +94,6 @@ function resolveChromiumExecutable() {
   throw new Error(`no chrome executable found under ${versionDir} (checked chrome-linux/ and chrome-linux64/)`);
 }
 
-// Polls for the actual expected state rather than a coarser signal that
-// could already be true before the real re-render happens - same
-// discipline as the other UI smoke suites in this project.
 async function waitForCount(getCount, expected, timeoutMs = 8000) {
   const start = Date.now();
   let last = null;
@@ -136,7 +126,8 @@ async function waitForCount(getCount, expected, timeoutMs = 8000) {
     await page.click('#loginBtn');
     await page.waitForSelector('.login-screen', { state: 'hidden', timeout: 10000 }).catch(() => {});
 
-    await page.click('[data-tab="news"]');
+    await page.click('#menuToggleBtn');
+    await page.click('#sideDrawer [data-tab="news"]');
     await page.waitForSelector('#newsList', { timeout: 10000 });
 
     await test('empty state shows a normal message, not an error', async () => {
@@ -159,9 +150,6 @@ async function waitForCount(getCount, expected, timeoutMs = 8000) {
       });
       await page.waitForSelector('#newsMediaPreview img');
       assert.strictEqual(await page.locator('#newsMediaPreview').isVisible(), true);
-
-      // Clear it again so the legacy text-only create below proves that the
-      // existing no-media path stays fully backward compatible.
       await input.setInputFiles([]);
     });
 
@@ -178,8 +166,6 @@ async function waitForCount(getCount, expected, timeoutMs = 8000) {
       const badges = await page.locator('.news-card .news-badge').allTextContents();
       assert.ok(badges.some(b => b.includes('פורסם')));
       assert.ok(badges.some(b => b.includes('חשוב')));
-
-      // Form must reset after a successful save.
       assert.strictEqual(await page.inputValue('#newsTitleInput'), '');
     });
 
@@ -201,10 +187,6 @@ async function waitForCount(getCount, expected, timeoutMs = 8000) {
       await page.click('#newsSaveBtn');
       await waitForCount(() => page.locator('.news-card').count(), 3);
 
-      // If this ever renders unescaped, the literal <img> tag would become
-      // a real broken image element instead of visible text - assert the
-      // visible text contains the raw markup as TEXT, and that no such
-      // element was actually created in the DOM.
       const titles = await page.locator('.news-card-title').allTextContents();
       assert.ok(titles.some(t => t.includes('<img src=x onerror=alert(1)>')));
       const injectedImages = await page.locator('.news-card-title img').count();
@@ -212,8 +194,6 @@ async function waitForCount(getCount, expected, timeoutMs = 8000) {
     });
 
     await test('editing an update pre-fills the form and PUT updates it in place (no duplicate)', async () => {
-      // Locate by the actual "טיוטה" title precisely (avoid matching the
-      // escaped-HTML card above by accident).
       const editBtn = page.locator('.news-card', { hasText: 'טיוטה' })
         .filter({ hasNotText: 'בדיקת בריחה' })
         .locator('[data-edit]');
@@ -222,7 +202,6 @@ async function waitForCount(getCount, expected, timeoutMs = 8000) {
       await page.fill('#newsTitleInput', 'טיוטה - עודכנה');
       await page.click('#newsSaveBtn');
       await waitForCount(() => page.locator('.news-card', { hasText: 'טיוטה - עודכנה' }).count(), 1);
-      // Still 3 cards total - an edit must never create a duplicate.
       await waitForCount(() => page.locator('.news-card').count(), 3);
     });
 
