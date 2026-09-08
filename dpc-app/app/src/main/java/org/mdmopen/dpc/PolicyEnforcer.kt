@@ -196,8 +196,20 @@ class PolicyEnforcer(private val context: Context) {
         )
     }
 
-    fun allowManagedAccessibilityService() {
+    /**
+     * Restores the package-only accessibility allowlist. While a Samsung setup
+     * window is active (see beginAccessibilitySetupWindow()), a normal call
+     * (force = false) - such as the one background PolicySync/apply() makes -
+     * is a no-op: Samsung's Accessibility Settings page must stay unlocked
+     * until setup actually finishes or the failsafe times out. Callers that
+     * ARE the finish/failsafe path (finishAccessibilitySetupWindow(),
+     * WhatsAppGuardService.onServiceConnected(), AccessibilityRelockWorker)
+     * pass force = true to restore unconditionally.
+     */
+    fun allowManagedAccessibilityService(force: Boolean = false) {
         check(isDeviceOwner()) { "Not device owner" }
+        val setupActive = Config.accessibilitySetupWindowActive(context)
+        if (!AccessibilitySetupWindow.shouldRestoreAllowlist(setupActive, force)) return
         try {
             dpm.setPermittedAccessibilityServices(admin, listOf(context.packageName))
         } catch (_: Exception) {
@@ -207,6 +219,12 @@ class PolicyEnforcer(private val context: Context) {
 
     fun beginAccessibilitySetupWindow() {
         check(isDeviceOwner()) { "Not device owner" }
+        // Marked BEFORE the allowlist is cleared below so a concurrent
+        // PolicySync (apply() -> allowManagedAccessibilityService()) that
+        // observes this flag never re-locks the Settings page mid-setup. This
+        // is persisted (not Activity-memory-only) so it survives process death.
+        Config.setAccessibilitySetupWindowActive(context, true)
+
         // Belt-and-suspenders protection: Device Owner is already not removable
         // through normal Settings, and this explicit block stays in force while
         // kiosk is temporarily released.
@@ -217,17 +235,31 @@ class PolicyEnforcer(private val context: Context) {
 
         // Some Samsung/One UI builds refuse to construct the Accessibility page
         // while a non-null permitted-services policy is active. Lift ONLY this
-        // one policy momentarily; CustomerActivity re-applies our package-only
-        // allowlist after 1.5s and finishAccessibilitySetupWindow() does it again.
+        // one policy momentarily; the setup-window flag above keeps it lifted
+        // until WhatsAppGuardService connects, finishAccessibilitySetupWindow()
+        // runs, or the relock failsafe times out.
         try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
-        // Activity handler normally re-locks in 1.5s; WorkManager is a separate
-        // process/lifecycle failsafe so a crash cannot leave this relaxed.
+        // Activity handler normally finishes setup once the guard service
+        // connects; WorkManager is a separate process/lifecycle failsafe so a
+        // crash cannot leave this relaxed indefinitely.
         SyncScheduler.enqueueAccessibilityRelock(context)
+    }
+
+    /** Earliest, most authoritative "setup succeeded" signal: the accessibility
+     *  service actually connected. Ends the setup window immediately so a
+     *  background sync is free to re-lock the allowlist again. */
+    fun markAccessibilitySetupComplete() {
+        check(isDeviceOwner()) { "Not device owner" }
+        Config.setAccessibilitySetupWindowActive(context, false)
+        allowManagedAccessibilityService(force = true)
     }
 
     fun finishAccessibilitySetupWindow() {
         check(isDeviceOwner()) { "Not device owner" }
-        allowManagedAccessibilityService()
+        // Clear the setup-window state first so the forced restore below (and
+        // any concurrent PolicySync) is no longer treated as mid-setup.
+        Config.setAccessibilitySetupWindowActive(context, false)
+        allowManagedAccessibilityService(force = true)
         try { dpm.setUninstallBlocked(admin, context.packageName, true) } catch (_: Exception) {}
         restoreCachedKioskPolicy()
     }

@@ -20,9 +20,13 @@ class AccessibilityRelockWorker(
 
     override fun doWork(): Result {
         return try {
+            // Timeout/failsafe only: if setup never properly finished (crash,
+            // abandoned flow, WhatsAppGuardService never connected), clear the
+            // setup-window state and force the allowlist back regardless.
             val enforcer = PolicyEnforcer(applicationContext)
             if (enforcer.isDeviceOwner()) {
-                enforcer.allowManagedAccessibilityService()
+                Config.setAccessibilitySetupWindowActive(applicationContext, false)
+                enforcer.allowManagedAccessibilityService(force = true)
             }
             Result.success()
         } catch (_: Exception) {

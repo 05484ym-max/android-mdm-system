@@ -81,7 +81,7 @@ object SyncScheduler {
     fun enqueueAccessibilityRelock(context: Context) {
         val appContext = context.applicationContext
         val request = OneTimeWorkRequestBuilder<AccessibilityRelockWorker>()
-            .setInitialDelay(60, TimeUnit.SECONDS)
+            .setInitialDelay(5, TimeUnit.MINUTES)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
             .build()
 
