@@ -138,7 +138,8 @@ async function waitForText(locator, predicate, timeoutMs = 15000) {
     await page.click('#loginBtn');
     await page.waitForSelector('.login-screen', { state: 'hidden', timeout: 10000 }).catch(() => {});
 
-    await page.click('[data-tab="catalog"]');
+    await page.click('#menuToggleBtn');
+    await page.click('#sideDrawer [data-tab="catalog"]');
     await page.waitForSelector('#catalogList', { timeout: 10000 });
 
     await test('APK upload button is enabled', async () => {
