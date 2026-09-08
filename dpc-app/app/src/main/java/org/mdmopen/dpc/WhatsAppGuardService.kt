@@ -31,10 +31,11 @@ class WhatsAppGuardService : AccessibilityService() {
             if (::overlays.isInitialized) overlays.clear()
             return
         }
-        // Window changes and clicks should react immediately. High-volume
-        // content/scroll events are coalesced below to avoid overlay flicker.
+        // Window topology/state changes and clicks should react immediately.
+        // High-volume content/scroll events are coalesced to avoid flicker.
         val immediate = when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_VIEW_CLICKED -> true
             else -> false
         }
