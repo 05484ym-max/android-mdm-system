@@ -1,0 +1,48 @@
+name: Verify DPC update SHA-256
+
+on:
+  push:
+    branches: [ security/dpc-update-sha256 ]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Apply production patch
+        run: python3 tools/patch-dpc-update-sha256.py
+      - name: Build DPC
+        working-directory: dpc-app
+        run: gradle assembleDebug --stacktrace
+      - name: Verify update integrity markers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          updater = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/AutoUpdater.kt').read_text()
+          workflow = Path('.github/workflows/build-dpc.yml').read_text()
+          assert 'expectedSha256' in updater
+          assert 'verifyFileSha256(apk, expectedSha256)' in updater
+          assert 'Update APK SHA-256 mismatch' in updater
+          assert 'APK_SHA256=$(sha256sum "$APK"' in workflow
+          assert '"sha256": apk_sha256' in workflow
+          print('DPC update SHA-256 markers verified')
+          PY
+      - name: Commit production files only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/build-dpc.yml dpc-app/app/src/main/java/org/mdmopen/dpc/AutoUpdater.kt
+          git commit -m "Pin DPC updates to published SHA-256" || exit 0
+          git push
