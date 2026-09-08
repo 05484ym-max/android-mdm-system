@@ -41,6 +41,7 @@ jobs:
           engine = (base / 'WhatsAppGuardEngine.kt').read_text()
           service = (base / 'WhatsAppGuardService.kt').read_text()
           policy = (base / 'WhatsAppGuardPolicy.kt').read_text()
+          matcher = (base / 'WhatsAppGuardTerms.kt').read_text()
           xml = Path('dpc-app/app/src/main/res/xml/whatsapp_guard_accessibility.xml').read_text()
 
           checks = {
@@ -50,9 +51,12 @@ jobs:
               'statuses handled independently': 'if (policy.blockStatuses)' in engine,
               'channels handled independently': 'if (policy.blockChannels)' in engine,
               'legacy whole-updates blocker removed': 'updatesWords' not in engine,
+              'view-id fallback exists': 'viewIdResourceName' in engine and 'idTokens' in matcher,
               'render root verified as WhatsApp': 'root?.packageName?.toString() != WHATSAPP_PACKAGE' in service,
               'service re-locks managed accessibility': 'allowManagedAccessibilityService()' in service,
               'device owner required by guard protection': 'isDeviceOwnerApp' in policy,
+              'post-setup accessibility loss fails closed': 'ACCESSIBILITY_LOST_BLOCK' in policy and 'setGuardSuspended(context, dpm, admin, true)' in policy,
+              'first setup remains separately modeled': 'FIRST_SETUP_PENDING' in policy,
           }
           failed = [name for name, ok in checks.items() if not ok]
           for name, ok in checks.items():
