@@ -1,5 +1,6 @@
 package org.mdmopen.dpc
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,5 +50,29 @@ class WhatsAppGuardTextPolicyTest {
         assertFalse(WhatsAppGuardTerms.isStatus("צ'אטים", "com.whatsapp:id/chat_list"))
         assertFalse(WhatsAppGuardTerms.isChannel("הגדרות", "com.whatsapp:id/settings"))
         assertFalse(WhatsAppGuardTerms.isUpdates("שיחה חדשה", "com.whatsapp:id/new_chat"))
+    }
+
+    @Test
+    fun guard_decision_allows_only_first_time_setup_to_remain_open() {
+        assertEquals(
+            WhatsAppGuardDecision.FIRST_SETUP_PENDING,
+            WhatsAppGuardProtection.decide(policyEnabled = true, accessibilityEnabled = false, wasProtected = false),
+        )
+        assertEquals(
+            WhatsAppGuardDecision.ACCESSIBILITY_LOST_BLOCK,
+            WhatsAppGuardProtection.decide(policyEnabled = true, accessibilityEnabled = false, wasProtected = true),
+        )
+    }
+
+    @Test
+    fun guard_decision_protected_and_admin_disabled_paths_are_explicit() {
+        assertEquals(
+            WhatsAppGuardDecision.PROTECTED,
+            WhatsAppGuardProtection.decide(policyEnabled = true, accessibilityEnabled = true, wasProtected = true),
+        )
+        assertEquals(
+            WhatsAppGuardDecision.DISABLED,
+            WhatsAppGuardProtection.decide(policyEnabled = false, accessibilityEnabled = false, wasProtected = true),
+        )
     }
 }
