@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.Application
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -17,8 +19,8 @@ import java.util.WeakHashMap
  * Visual-only polish for CustomerActivity.
  *
  * Keeps the existing customer/store behavior untouched while replacing the old
- * text-glyph bottom navigation with consistent vector icons and normalising
- * two-column store card geometry.
+ * text-glyph bottom navigation with consistent vector icons, normalising
+ * two-column store card geometry and sharpening the transparent gold header emblem.
  */
 class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
 
@@ -44,8 +46,57 @@ class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
     }
 
     private fun polish(activity: Activity, root: View) {
+        polishHeaderLogo(activity, root)
         polishNavigation(activity, root)
         equaliseStoreCards(activity, root)
+    }
+
+    /**
+     * Keep the exact existing transparent emblem, but render it a little larger
+     * and with slightly stronger saturation/contrast so the gold remains crisp
+     * against the warm cream background on lower-density Samsung displays.
+     */
+    private fun polishHeaderLogo(activity: Activity, view: View) {
+        if (view is ImageView) {
+            val parent = view.parent as? LinearLayout
+            val lp = view.layoutParams
+            val old38 = dp(activity, 38)
+            val tolerance = dp(activity, 3)
+            val isHeaderEmblem = parent?.orientation == LinearLayout.HORIZONTAL &&
+                parent.childCount == 3 &&
+                lp != null &&
+                lp.width in (old38 - tolerance)..(old38 + tolerance) &&
+                lp.height in (old38 - tolerance)..(old38 + tolerance)
+
+            if (isHeaderEmblem) {
+                val target = dp(activity, 46)
+                if (lp.width != target || lp.height != target) {
+                    lp.width = target
+                    lp.height = target
+                    view.layoutParams = lp
+                }
+                view.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                view.setPadding(0, 0, 0, 0)
+                view.alpha = 1f
+
+                val saturation = ColorMatrix().apply { setSaturation(1.28f) }
+                val contrastScale = 1.10f
+                val translate = 255f * (1f - contrastScale) * 0.5f
+                val contrast = ColorMatrix(
+                    floatArrayOf(
+                        contrastScale, 0f, 0f, 0f, translate,
+                        0f, contrastScale, 0f, 0f, translate,
+                        0f, 0f, contrastScale, 0f, translate,
+                        0f, 0f, 0f, 1f, 0f,
+                    )
+                )
+                saturation.postConcat(contrast)
+                view.colorFilter = ColorMatrixColorFilter(saturation)
+            }
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) polishHeaderLogo(activity, view.getChildAt(i))
+        }
     }
 
     private fun polishNavigation(activity: Activity, view: View) {
