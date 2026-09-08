@@ -13,6 +13,13 @@ data class WhatsAppGuardPolicy(
     val enabled: Boolean get() = blockStatuses || blockChannels || hideProfilePhotos
 }
 
+enum class WhatsAppGuardDecision {
+    DISABLED,
+    FIRST_SETUP_PENDING,
+    ACCESSIBILITY_LOST_BLOCK,
+    PROTECTED,
+}
+
 object WhatsAppGuardConfig {
     private const val PREFS = "whatsapp_guard_policy"
     private const val BLOCK_STATUSES = "block_statuses"
@@ -48,17 +55,17 @@ object WhatsAppGuardConfig {
     }
 }
 
-/**
- * Device-Owner enforcement around the optional accessibility based WhatsApp guard.
- *
- * Android does not provide a supported Device Owner API that silently enables
- * an AccessibilityService, so the first enable remains a one-time local action.
- * Before that first successful setup WhatsApp stays usable. Once the guard has
- * successfully reached PROTECTED at least once, loss of Accessibility is treated
- * as tampering/failure and WhatsApp fails closed until the service returns.
- */
+/** Device-Owner enforcement around the accessibility based WhatsApp guard. */
 object WhatsAppGuardProtection {
     const val WHATSAPP_PACKAGE = "com.whatsapp"
+
+    fun decide(policyEnabled: Boolean, accessibilityEnabled: Boolean, wasProtected: Boolean): WhatsAppGuardDecision =
+        when {
+            !policyEnabled -> WhatsAppGuardDecision.DISABLED
+            accessibilityEnabled -> WhatsAppGuardDecision.PROTECTED
+            wasProtected -> WhatsAppGuardDecision.ACCESSIBILITY_LOST_BLOCK
+            else -> WhatsAppGuardDecision.FIRST_SETUP_PENDING
+        }
 
     fun accessibilityEnabled(context: Context): Boolean {
         val expected = ComponentName(context, WhatsAppGuardService::class.java).flattenToString()
@@ -92,29 +99,28 @@ object WhatsAppGuardProtection {
         val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
         if (!dpm.isDeviceOwnerApp(context.packageName)) return "NOT_DEVICE_OWNER"
 
-        if (!policy.enabled) {
-            // Admin intentionally disabled the optional guard. Ordinary app
-            // policy still decides whether WhatsApp itself is approved.
-            setGuardSuspended(context, dpm, admin, false)
-            return "DISABLED"
-        }
-
-        if (!accessibilityEnabled(context)) {
-            return if (WhatsAppGuardConfig.wasProtected(context)) {
-                // The device previously completed setup. Losing Accessibility
-                // now means the content filter cannot be guaranteed, so fail closed.
-                setGuardSuspended(context, dpm, admin, true)
-                "ACCESSIBILITY_LOST_BLOCKED"
-            } else {
-                // First-time setup only: keep WhatsApp usable while the local
-                // one-time Accessibility enable step is still pending.
+        return when (decide(policy.enabled, accessibilityEnabled(context), WhatsAppGuardConfig.wasProtected(context))) {
+            WhatsAppGuardDecision.DISABLED -> {
+                setGuardSuspended(context, dpm, admin, false)
+                "DISABLED"
+            }
+            WhatsAppGuardDecision.FIRST_SETUP_PENDING -> {
+                // One-time setup only: allow WhatsApp while the user enables
+                // this service locally; Android does not let Device Owner do it silently.
                 setGuardSuspended(context, dpm, admin, false)
                 "WAITING_FOR_ACCESSIBILITY"
             }
+            WhatsAppGuardDecision.ACCESSIBILITY_LOST_BLOCK -> {
+                // Setup succeeded before, therefore losing Accessibility means
+                // filtering cannot be guaranteed. Fail closed until it returns.
+                setGuardSuspended(context, dpm, admin, true)
+                "ACCESSIBILITY_LOST_BLOCKED"
+            }
+            WhatsAppGuardDecision.PROTECTED -> {
+                WhatsAppGuardConfig.markProtected(context)
+                setGuardSuspended(context, dpm, admin, false)
+                "PROTECTED"
+            }
         }
-
-        WhatsAppGuardConfig.markProtected(context)
-        setGuardSuspended(context, dpm, admin, false)
-        return "PROTECTED"
     }
 }
