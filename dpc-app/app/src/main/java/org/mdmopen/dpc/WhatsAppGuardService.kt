@@ -22,7 +22,12 @@ class WhatsAppGuardService : AccessibilityService() {
             // most authoritative signal that setup succeeded - end the setup
             // window immediately instead of waiting for the Activity to resume.
             val enforcer = PolicyEnforcer(applicationContext)
-            if (enforcer.isDeviceOwner()) enforcer.markAccessibilitySetupComplete()
+            if (enforcer.isDeviceOwner()) {
+                enforcer.markAccessibilitySetupComplete()
+                // Keep the relock explicit here as a belt-and-suspenders call and
+                // so the production invariant continues to verify the service itself.
+                enforcer.allowManagedAccessibilityService()
+            }
         } catch (_: Exception) {
             // The bounded WorkManager failsafe will retry the local relock.
         }
