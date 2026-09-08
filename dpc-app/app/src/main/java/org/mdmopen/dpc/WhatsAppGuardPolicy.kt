@@ -18,6 +18,7 @@ object WhatsAppGuardConfig {
     private const val BLOCK_STATUSES = "block_statuses"
     private const val BLOCK_CHANNELS = "block_channels"
     private const val HIDE_PROFILE_PHOTOS = "hide_profile_photos"
+    private const val WAS_PROTECTED = "was_protected"
 
     fun load(context: Context): WhatsAppGuardPolicy {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -35,6 +36,16 @@ object WhatsAppGuardConfig {
             .putBoolean(HIDE_PROFILE_PHOTOS, policy.hideProfilePhotos)
             .apply()
     }
+
+    fun wasProtected(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(WAS_PROTECTED, false)
+
+    fun markProtected(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(WAS_PROTECTED, true)
+            .apply()
+    }
 }
 
 /**
@@ -42,9 +53,9 @@ object WhatsAppGuardConfig {
  *
  * Android does not provide a supported Device Owner API that silently enables
  * an AccessibilityService, so the first enable remains a one-time local action.
- * WhatsApp itself must stay usable while the optional guard is disabled, and it
- * must also stay usable while the requested guard is waiting for Accessibility.
- * The admin UI reports that pending state until the service is enabled.
+ * Before that first successful setup WhatsApp stays usable. Once the guard has
+ * successfully reached PROTECTED at least once, loss of Accessibility is treated
+ * as tampering/failure and WhatsApp fails closed until the service returns.
  */
 object WhatsAppGuardProtection {
     const val WHATSAPP_PACKAGE = "com.whatsapp"
@@ -58,16 +69,20 @@ object WhatsAppGuardProtection {
         return raw.split(':').any { it.equals(expected, ignoreCase = true) }
     }
 
-    private fun releaseLegacyGuardSuspension(
+    private fun approvedByOrdinaryPolicy(context: Context): Boolean =
+        WHATSAPP_PACKAGE in Config.allowedApps(context)
+
+    private fun setGuardSuspended(
         context: Context,
         dpm: DevicePolicyManager,
         admin: ComponentName,
+        suspended: Boolean,
     ) {
-        // Never override the ordinary app allowlist. Only release WhatsApp when
-        // it is already approved there; otherwise PolicyEnforcer remains authoritative.
-        if (WHATSAPP_PACKAGE !in Config.allowedApps(context)) return
+        // Never override the ordinary app allowlist. PolicyEnforcer remains
+        // authoritative for whether WhatsApp is approved/visible at all.
+        if (!approvedByOrdinaryPolicy(context)) return
         runCatching {
-            dpm.setPackagesSuspended(admin, arrayOf(WHATSAPP_PACKAGE), false)
+            dpm.setPackagesSuspended(admin, arrayOf(WHATSAPP_PACKAGE), suspended)
         }
     }
 
@@ -78,24 +93,28 @@ object WhatsAppGuardProtection {
         if (!dpm.isDeviceOwnerApp(context.packageName)) return "NOT_DEVICE_OWNER"
 
         if (!policy.enabled) {
-            // Recover devices that were suspended by the previous fail-closed
-            // WhatsApp Guard behavior. Ordinary app policy still decides whether
-            // WhatsApp is approved/visible at all.
-            releaseLegacyGuardSuspension(context, dpm, admin)
+            // Admin intentionally disabled the optional guard. Ordinary app
+            // policy still decides whether WhatsApp itself is approved.
+            setGuardSuspended(context, dpm, admin, false)
             return "DISABLED"
         }
 
         if (!accessibilityEnabled(context)) {
-            // Optional guard requested, but setup is not complete yet. Keep
-            // WhatsApp usable and report the pending state instead of greying/
-            // suspending the whole app.
-            releaseLegacyGuardSuspension(context, dpm, admin)
-            return "WAITING_FOR_ACCESSIBILITY"
+            return if (WhatsAppGuardConfig.wasProtected(context)) {
+                // The device previously completed setup. Losing Accessibility
+                // now means the content filter cannot be guaranteed, so fail closed.
+                setGuardSuspended(context, dpm, admin, true)
+                "ACCESSIBILITY_LOST_BLOCKED"
+            } else {
+                // First-time setup only: keep WhatsApp usable while the local
+                // one-time Accessibility enable step is still pending.
+                setGuardSuspended(context, dpm, admin, false)
+                "WAITING_FOR_ACCESSIBILITY"
+            }
         }
 
-        // PolicyEnforcer normally releases approved apps. Releasing here too
-        // closes the setup transition immediately when Accessibility connects.
-        releaseLegacyGuardSuspension(context, dpm, admin)
+        WhatsAppGuardConfig.markProtected(context)
+        setGuardSuspended(context, dpm, admin, false)
         return "PROTECTED"
     }
 }
