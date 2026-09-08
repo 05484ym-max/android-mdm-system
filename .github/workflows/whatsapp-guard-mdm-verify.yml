@@ -1,20 +1,19 @@
-name: Verify MDM WhatsApp Guard
+name: WhatsApp Guard MDM Verify
 
 on:
-  push:
-    branches: [ feature/whatsapp-guard-mdm ]
+  pull_request:
     paths:
       - 'dpc-app/**'
-      - 'backend/index.js'
-      - 'admin-panel/customer-search.js'
-      - 'admin-panel/news.css'
       - '.github/workflows/whatsapp-guard-mdm-verify.yml'
-
-permissions:
-  contents: read
+  push:
+    branches: [ main ]
+    paths:
+      - 'dpc-app/**'
+      - '.github/workflows/whatsapp-guard-mdm-verify.yml'
+  workflow_dispatch:
 
 jobs:
-  verify:
+  verify-whatsapp-guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,16 +21,38 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Install SDK
-        run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+          cache: gradle
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-      - name: Compile DPC
+
+      - name: Compile DPC and run unit tests
         working-directory: dpc-app
-        run: gradle assembleDebug --stacktrace
-      - name: Check backend syntax
-        run: node --check backend/index.js
-      - name: Check admin JavaScript
-        run: node --check admin-panel/customer-search.js
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+
+      - name: Verify WhatsApp guard production invariants
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          base = Path('dpc-app/app/src/main/java/org/mdmopen/dpc')
+          engine = (base / 'WhatsAppGuardEngine.kt').read_text()
+          service = (base / 'WhatsAppGuardService.kt').read_text()
+          policy = (base / 'WhatsAppGuardPolicy.kt').read_text()
+          xml = Path('dpc-app/app/src/main/res/xml/whatsapp_guard_accessibility.xml').read_text()
+
+          checks = {
+              'service scoped to WhatsApp package': 'android:packageNames="com.whatsapp"' in xml,
+              'window topology events observed': 'typeWindowsChanged' in xml,
+              'status blocking scoped to updates screen': 'screen == WhatsAppScreen.UPDATES' in engine,
+              'statuses handled independently': 'if (policy.blockStatuses)' in engine,
+              'channels handled independently': 'if (policy.blockChannels)' in engine,
+              'legacy whole-updates blocker removed': 'updatesWords' not in engine,
+              'render root verified as WhatsApp': 'root?.packageName?.toString() != WHATSAPP_PACKAGE' in service,
+              'service re-locks managed accessibility': 'allowManagedAccessibilityService()' in service,
+              'device owner required by guard protection': 'isDeviceOwnerApp' in policy,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          for name, ok in checks.items():
+              print(('OK   ' if ok else 'FAIL ') + name)
+          if failed:
+              raise SystemExit('WhatsApp guard invariant failure: ' + ', '.join(failed))
+          PY
