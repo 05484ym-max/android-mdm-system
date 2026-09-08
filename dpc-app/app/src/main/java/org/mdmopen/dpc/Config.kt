@@ -51,6 +51,7 @@ object Config {
     private const val KEY_STORE_ACCESS_ALLOWED = "store_access_allowed"
     private const val KEY_SUBSCRIPTION_EXPIRY_DATE = "subscription_expiry_date"
     private const val KEY_POLICY_HIDDEN_APPS = "policy_hidden_apps"
+    private const val KEY_ACCESSIBILITY_SETUP_ACTIVE = "accessibility_setup_window_active"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -247,6 +248,16 @@ object Config {
 
     fun setKioskEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_KIOSK, enabled).apply()
+    }
+
+    // Persisted (not Activity-memory-only) so a background PolicySync and the
+    // AccessibilityRelockWorker failsafe can both observe an in-progress Samsung
+    // accessibility setup window even after the Activity/process has died.
+    fun accessibilitySetupWindowActive(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ACCESSIBILITY_SETUP_ACTIVE, false)
+
+    fun setAccessibilitySetupWindowActive(context: Context, active: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ACCESSIBILITY_SETUP_ACTIVE, active).apply()
     }
 
     fun syncIntervalMinutes(context: Context): Int =

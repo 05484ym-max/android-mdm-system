@@ -18,8 +18,11 @@ class WhatsAppGuardService : AccessibilityService() {
         engine = WhatsAppGuardEngine(this, overlays)
         WhatsAppGuardProtection.reconcile(this, WhatsAppGuardConfig.load(this))
         try {
+            // The accessibility service actually connecting is the earliest,
+            // most authoritative signal that setup succeeded - end the setup
+            // window immediately instead of waiting for the Activity to resume.
             val enforcer = PolicyEnforcer(applicationContext)
-            if (enforcer.isDeviceOwner()) enforcer.allowManagedAccessibilityService()
+            if (enforcer.isDeviceOwner()) enforcer.markAccessibilitySetupComplete()
         } catch (_: Exception) {
             // The bounded WorkManager failsafe will retry the local relock.
         }
