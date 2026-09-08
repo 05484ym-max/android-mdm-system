@@ -158,7 +158,8 @@ async function createTestDevice(label, allowedApps) {
     await page.click('#loginBtn');
     await page.waitForSelector('.login-screen', { state: 'hidden', timeout: 10000 }).catch(() => {});
 
-    await page.click('[data-tab="catalog"]');
+    await page.click('#menuToggleBtn');
+    await page.click('#sideDrawer [data-tab="catalog"]');
     await page.waitForSelector('#catalogList .catalog-tile', { timeout: 10000 });
 
     await test('the add-app area (Play search / upload APK / manual add) appears before the catalog list in the DOM', async () => {
@@ -215,17 +216,13 @@ async function createTestDevice(label, allowedApps) {
     });
 
     await test('confirming removal deletes the app from the catalog, from the device that had it allowed, and shows a success message', async () => {
-      // Two dialogs fire in sequence for this flow: the confirm() prompt,
-      // then (once the DELETE request succeeds) the success alert() - a
-      // persistent listener that accepts and records every one covers both.
       const dialogMessages = [];
       page.on('dialog', dialog => {
         dialogMessages.push(dialog.message());
         dialog.accept();
       });
 
-      await page.locator('[data-remove-app="com.catmgmt.beta"]').click(); // triggers confirm -> accepted
-      // A second dialog (the success alert) follows once the request completes.
+      await page.locator('[data-remove-app="com.catmgmt.beta"]').click();
       await waitForCount(() => page.locator('[data-remove-app="com.catmgmt.beta"]').count(), 0, 10000);
 
       assert.ok(
@@ -268,8 +265,6 @@ async function expectVisible(locator) {
   assert.strictEqual(visible, true);
 }
 
-// Reuses the browser's own session cookie for a plain fetch() verification
-// call (outside the page) - Playwright's browser context cookie jar.
 async function getCookie(page) {
   const cookies = await page.context().cookies();
   const session = cookies.find(c => c.name === 'session');
