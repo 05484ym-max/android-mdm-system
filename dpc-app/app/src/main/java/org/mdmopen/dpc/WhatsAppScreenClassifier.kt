@@ -6,7 +6,6 @@ import android.view.accessibility.AccessibilityNodeInfo
 enum class WhatsAppScreen { CHAT_LIST, CHAT, UPDATES, CONTACT_INFO, UNKNOWN }
 
 object WhatsAppScreenClassifier {
-    private val updatesWords = setOf("עדכונים", "updates", "status", "סטטוס", "channels", "ערוצים")
     private val chatsWords = setOf("צ'אטים", "שיחות", "chats")
     private val infoWords = setOf("פרטי איש קשר", "contact info", "פרטי קבוצה", "group info")
 
@@ -16,7 +15,11 @@ object WhatsAppScreenClassifier {
         val texts = nodes.mapNotNull(::nodeText).map(String::lowercase)
         if (texts.any { text -> infoWords.any(text::contains) }) return WhatsAppScreen.CONTACT_INFO
         if (nodes.any(::isComposer)) return WhatsAppScreen.CHAT
-        if (texts.any { text -> updatesWords.any { text == it || text.contains(it) } }) return WhatsAppScreen.UPDATES
+        if (nodes.any { node -> WhatsAppGuardTerms.isUpdates(nodeText(node), node.viewIdResourceName) } ||
+            nodes.any { node -> WhatsAppGuardTerms.isStatus(nodeText(node), node.viewIdResourceName) } ||
+            nodes.any { node -> WhatsAppGuardTerms.isChannel(nodeText(node), node.viewIdResourceName) }) {
+            return WhatsAppScreen.UPDATES
+        }
         if (texts.any { text -> chatsWords.any { text == it || text.contains(it) } }) return WhatsAppScreen.CHAT_LIST
         val rowCount = nodes.count {
             val r = Rect(); it.getBoundsInScreen(r)
