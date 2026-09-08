@@ -184,14 +184,21 @@ class PolicyEnforcer(private val context: Context) {
         val stillTracked = (Config.policyHiddenApps(context) + successfullyHidden) - toUnsuspend.toSet()
         Config.setPolicyHiddenApps(context, stillTracked)
 
-        if (policy.kioskEnabled) enableKiosk(allowed) else disableKiosk()
+        // Samsung/One UI can keep nested Settings pages effectively blocked if
+        // lock-task/kiosk policy is restored while the Accessibility setup flow
+        // is still in progress. Keep kiosk fully released for the whole persisted
+        // setup window; the service-connect success path or the bounded failsafe
+        // restores it later.
+        val setupActive = Config.accessibilitySetupWindowActive(context)
+        val effectiveKiosk = policy.kioskEnabled && !setupActive
+        if (effectiveKiosk) enableKiosk(allowed) else disableKiosk()
 
         return EnforcementResult(
             suspended = toSuspend - failed.toSet(),
             unsuspended = (toUnsuspend + directlyUnhidden + legacyRecovered).distinct() - failed.toSet(),
             failed = failed,
             systemAppsSkipped = systemSkipped,
-            kioskEnabled = policy.kioskEnabled,
+            kioskEnabled = effectiveKiosk,
             wouldHideNoLauncher = noLauncherCandidates,
         )
     }
@@ -233,6 +240,11 @@ class PolicyEnforcer(private val context: Context) {
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES) } catch (_: Exception) {}
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT) } catch (_: Exception) {}
 
+        // Release kiosk at the policy layer before launching Samsung Settings.
+        // CustomerActivity also calls stopLockTask(); this makes the invariant
+        // survive any concurrent PolicySync or another direct kiosk call.
+        disableKiosk()
+
         // Some Samsung/One UI builds refuse to construct the Accessibility page
         // while a non-null permitted-services policy is active. Lift ONLY this
         // one policy momentarily; the setup-window flag above keeps it lifted
@@ -252,12 +264,23 @@ class PolicyEnforcer(private val context: Context) {
         check(isDeviceOwner()) { "Not device owner" }
         Config.setAccessibilitySetupWindowActive(context, false)
         allowManagedAccessibilityService(force = true)
+        restoreCachedKioskPolicy()
     }
 
     fun finishAccessibilitySetupWindow() {
         check(isDeviceOwner()) { "Not device owner" }
-        // Clear the setup-window state first so the forced restore below (and
-        // any concurrent PolicySync) is no longer treated as mid-setup.
+        // CustomerActivity.onResume() can fire for transient Samsung Settings
+        // task/lifecycle transitions before the customer has toggled the service.
+        // Do not treat Activity resume as setup completion. Only a real enabled
+        // accessibility service, markAccessibilitySetupComplete(), or the 5-minute
+        // failsafe is allowed to close this persisted setup window.
+        if (Config.accessibilitySetupWindowActive(context) &&
+            !WhatsAppGuardProtection.accessibilityEnabled(context)
+        ) {
+            disableKiosk()
+            return
+        }
+
         Config.setAccessibilitySetupWindowActive(context, false)
         allowManagedAccessibilityService(force = true)
         try { dpm.setUninstallBlocked(admin, context.packageName, true) } catch (_: Exception) {}
@@ -415,6 +438,14 @@ class PolicyEnforcer(private val context: Context) {
         if (!PlayStoreGate.isWindowClosed(context)) setOf("com.android.vending") else emptySet()
 
     private fun enableKiosk(allowed: Set<String>) {
+        // Never let any caller re-enable lock-task while Samsung Accessibility
+        // setup is active. This protects against background sync and future
+        // call sites, not just the current CustomerActivity flow.
+        if (Config.accessibilitySetupWindowActive(context)) {
+            disableKiosk()
+            return
+        }
+
         // Without the essentials, a customer with nothing approved yet (or
         // whose approved apps aren't installed) gets locked into a kiosk
         // screen with literally nothing reachable - not even Settings.
@@ -451,6 +482,10 @@ class PolicyEnforcer(private val context: Context) {
 
     fun restoreCachedKioskPolicy() {
         check(isDeviceOwner()) { "Not device owner" }
+        if (Config.accessibilitySetupWindowActive(context)) {
+            disableKiosk()
+            return
+        }
         if (Config.kioskEnabled(context)) {
             enableKiosk(Config.allowedApps(context).toSet())
         } else {
