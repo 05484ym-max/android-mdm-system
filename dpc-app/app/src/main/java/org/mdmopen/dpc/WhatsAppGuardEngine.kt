@@ -12,7 +12,6 @@ class WhatsAppGuardEngine(
 ) {
     private val statusWords = listOf("סטטוס", "status")
     private val channelWords = listOf("ערוצים", "channels", "channel")
-    private val updatesWords = listOf("עדכונים", "updates")
 
     fun render(root: AccessibilityNodeInfo?, policy: WhatsAppGuardPolicy) {
         if (root == null || !policy.enabled) {
@@ -33,11 +32,17 @@ class WhatsAppGuardEngine(
             }
         }
 
-        if (policy.blockStatuses && policy.blockChannels) {
-            findTextNode(nodes, updatesWords)?.let { blockNode(it, nodes, transparent = true) }
-        } else {
-            if (policy.blockStatuses) findTextNode(nodes, statusWords)?.let { blockNode(it, nodes, transparent = false) }
-            if (policy.blockChannels) findTextNode(nodes, channelWords)?.let { blockNode(it, nodes, transparent = false) }
+        // Status/channel blocking is intentionally scoped to the Updates screen.
+        // This avoids blocking similarly named text elsewhere in WhatsApp and,
+        // when both switches are enabled, blocks each section independently
+        // instead of disabling the entire Updates tab.
+        if (screen == WhatsAppScreen.UPDATES) {
+            if (policy.blockStatuses) {
+                findBestSectionNode(nodes, statusWords)?.let { blockNode(it, transparent = false) }
+            }
+            if (policy.blockChannels) {
+                findBestSectionNode(nodes, channelWords)?.let { blockNode(it, transparent = false) }
+            }
         }
 
         overlays.endFrame()
@@ -87,20 +92,51 @@ class WhatsAppGuardEngine(
             ?.let { overlays.addMask(expand(it, dp(4), screen)) }
     }
 
-    private fun blockNode(node: AccessibilityNodeInfo, nodes: List<AccessibilityNodeInfo>, transparent: Boolean) {
-        var target = node
-        repeat(2) { target.parent?.let { target = it } }
+    private fun blockNode(node: AccessibilityNodeInfo, transparent: Boolean) {
+        val target = bestBlockingAncestor(node)
         val bounds = nodeBounds(target)
         if (bounds.isEmpty) return
         val clamped = clamp(bounds, boundsUnion())
-        if (transparent) overlays.addTransparentTouchBlocker(clamped) else overlays.addMask(clamped, touchable = true)
+        if (clamped.isEmpty) return
+        if (transparent) overlays.addTransparentTouchBlocker(clamped)
+        else overlays.addMask(clamped, touchable = true)
     }
 
-    private fun findTextNode(nodes: List<AccessibilityNodeInfo>, words: List<String>): AccessibilityNodeInfo? =
-        nodes.firstOrNull { node ->
-            val text = WhatsAppScreenClassifier.nodeText(node)?.lowercase().orEmpty()
-            words.any { text == it || text.contains(it) }
+    private fun bestBlockingAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        var current = node
+        var best = node
+        repeat(3) {
+            val parent = current.parent ?: return@repeat
+            val r = nodeBounds(parent)
+            // Prefer a meaningful row/section container, but never climb into
+            // a near-full-screen root which would over-block the Updates page.
+            if (!r.isEmpty && r.width() >= dp(120) && r.height() in dp(36)..dp(220)) {
+                best = parent
+            }
+            current = parent
         }
+        return best
+    }
+
+    private fun findBestSectionNode(nodes: List<AccessibilityNodeInfo>, words: List<String>): AccessibilityNodeInfo? {
+        val candidates = nodes.filter { node ->
+            val text = WhatsAppScreenClassifier.nodeText(node)?.lowercase().orEmpty()
+            words.any { word -> text == word || text.contains(word) }
+        }
+        if (candidates.isEmpty()) return null
+
+        // Prefer clickable/important nodes with a real on-screen area. This is
+        // more stable than simply taking the first textual match from the tree.
+        return candidates.maxByOrNull { node ->
+            val r = nodeBounds(node)
+            var score = 0
+            if (node.isClickable) score += 100
+            if (node.isImportantForAccessibility) score += 30
+            if (!r.isEmpty) score += 20
+            if (r.height() in dp(24)..dp(160)) score += 10
+            score
+        }
+    }
 
     private fun imageCandidates(nodes: List<AccessibilityNodeInfo>, minDp: Int, maxDp: Int): List<Rect> {
         val min = dp(minDp); val max = dp(maxDp)
