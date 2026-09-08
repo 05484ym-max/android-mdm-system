@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
@@ -25,16 +26,15 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.MediaController
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import android.widget.VideoView
-import android.widget.MediaController
-import android.net.Uri
-import java.net.URL
-import java.net.HttpURLConnection
 import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Locale
@@ -55,24 +55,27 @@ class CustomerActivity : Activity() {
     private lateinit var adminNavItem: NavItem
     private lateinit var newsNavItem: NavItem
     private lateinit var supportNavItem: NavItem
+
     private var isPersonalAreaActive = false
     private var isNewsActive = false
     private var accessibilitySetupWindowOpen = false
     private var selectedStoreCategory = "all"
     private var storeSearchQuery = ""
-    // Cache-first: showNews()/onCreate's badge check both read this rather
-    // than re-fetching - a background refresh (refreshNews) is what keeps
-    // it current and is also the only thing allowed to write it.
     private var newsItems: List<UpdateItem> = emptyList()
 
-    private val BG = "#F2F1E6"
-    private val CARD = "#FFFFFF"
-    private val BORDER = "#EAE8DC"
-    private val TEXT = "#1C1C1C"
-    private val MUTED = "#8C8C86"
-    private val ACCENT = "#4B6B45"
-    private val ACCENT_TINT = "#E7ECDD"
-    private val OK = "#328A52"
+    // Palette taken from the approved mockup: warm cream, deep green, pale olive and subtle gold.
+    private val BG = "#F7F2E8"
+    private val CARD = "#FFFDFC"
+    private val CARD_SOFT = "#FBF8F0"
+    private val BORDER = "#E8E1D4"
+    private val TEXT = "#1C231D"
+    private val MUTED = "#85867E"
+    private val ACCENT = "#245E38"
+    private val ACCENT_DARK = "#17472B"
+    private val ACCENT_TINT = "#EEF2E1"
+    private val ACCENT_TINT_STRONG = "#E4EAD3"
+    private val GOLD = "#BFA15B"
+    private val OK = "#2F7A48"
 
     private val heavyFont = Typeface.create("sans-serif-black", Typeface.NORMAL)
     private val mediumFont = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -90,105 +93,89 @@ class CustomerActivity : Activity() {
         super.onResume()
         if (accessibilitySetupWindowOpen) {
             accessibilitySetupWindowOpen = false
-            // Restore the cached kiosk policy immediately on return; no network
-            // dependency is required to close the temporary setup window.
             try {
                 PolicyEnforcer(this).finishAccessibilitySetupWindow()
             } catch (_: Exception) {
                 SyncScheduler.enqueueImmediate(applicationContext)
             }
         }
-        if (::contentArea.isInitialized && isPersonalAreaActive) {
-            showPersonalArea()
-        }
+        if (::contentArea.isInitialized && isPersonalAreaActive) showPersonalArea()
     }
+
+    // ---------------------------------------------------------------------
+    // Shell / navigation
+    // ---------------------------------------------------------------------
 
     private fun buildUi(): View {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor(BG))
-            // The manifest doesn't declare supportsRtl, so the system never
-            // mirrors add-order-based layout on its own even under a Hebrew
-            // locale - forced explicitly here instead of relying on that.
             layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setBackgroundColor(Color.parseColor(BG))
         }
 
-        page.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(24), dp(18), dp(24), dp(14))
-
-            // Right side: the app's own emblem (it already carries the
-            // "יהודי כשר" lettering) plus a label naming the active screen -
-            // replaces the old static wordmark so the header stays useful
-            // as a per-tab indicator instead of a repeated brand name.
-            addView(LinearLayout(this@CustomerActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-
-                addView(ImageView(this@CustomerActivity).apply {
-                    setImageResource(R.mipmap.ic_launcher)
-                    alpha = 0.85f
-                    layoutParams = LinearLayout.LayoutParams(dp(38), dp(38)).apply {
-                        marginEnd = dp(14)
-                    }
-                })
-
-                headerLabelView = TextView(this@CustomerActivity).apply {
-                    textSize = 17f
-                    typeface = heavyFont
-                    setTextColor(Color.parseColor(TEXT))
-                    gravity = Gravity.RIGHT
-                }
-                addView(headerLabelView)
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-            addView(headerSyncBadge())
-        })
+        page.addView(buildTopBar())
 
         contentArea = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(4), dp(20), dp(24))
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(18), dp(4), dp(18), dp(28))
         }
 
-        val scroll = ScrollView(this).apply { addView(contentArea) }
-
-        page.addView(
-            scroll,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        )
-
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            addView(contentArea)
+        }
+        page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         page.addView(buildBottomBar())
-
         return page
     }
 
-    /** Small fixed badge in the header, present on every screen (built once
-     * in buildUi, not per-tab) instead of the old full-width button that only
-     * lived inside the personal-area tab. */
+    private fun buildTopBar(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(12))
+
+            // RTL add-order: logo is on the right, then title, then sync button on the left.
+            addView(ImageView(this@CustomerActivity).apply {
+                setImageResource(R.mipmap.ic_launcher)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+            }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(10) })
+
+            headerLabelView = TextView(this@CustomerActivity).apply {
+                textSize = 20f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(ACCENT_DARK))
+                gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+                maxLines = 1
+            }
+            addView(headerLabelView, LinearLayout.LayoutParams(0, dp(48), 1f))
+            addView(headerSyncBadge())
+        }
+    }
+
     private fun headerSyncBadge(): TextView {
         lateinit var badge: TextView
         badge = TextView(this).apply {
-            text = "↻ סינכרון"
+            text = "↻  סינכרון"
             textSize = 12.5f
             typeface = heavyFont
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            background = flatRounded(ACCENT, dp(12).toFloat())
-            setPadding(dp(14), dp(11), dp(14), dp(11))
+            background = rounded(ACCENT, 15)
+            setPadding(dp(15), dp(10), dp(15), dp(10))
             isClickable = true
             isFocusable = true
 
             setOnClickListener {
                 isClickable = false
                 text = "⏳ מסנכרן..."
-
                 Thread {
                     try {
                         val result = PolicySync.run(applicationContext)
                         AutoUpdater.check(applicationContext)
                         Config.setLastSyncNow(applicationContext)
-
                         runOnUiThread {
                             text = "✓ סונכרן"
                             Toast.makeText(
@@ -197,15 +184,14 @@ class CustomerActivity : Activity() {
                                 Toast.LENGTH_LONG
                             ).show()
                             refreshLastSyncLabelIfShown()
-
                             postDelayed({
-                                text = "↻ סינכרון"
+                                text = "↻  סינכרון"
                                 isClickable = true
                             }, 1800)
                         }
                     } catch (e: Exception) {
                         runOnUiThread {
-                            text = "↻ סינכרון"
+                            text = "↻  סינכרון"
                             isClickable = true
                             Toast.makeText(
                                 this@CustomerActivity,
@@ -221,12 +207,9 @@ class CustomerActivity : Activity() {
     }
 
     private fun buildBottomBar(): LinearLayout {
-        val bar = LinearLayout(this)
-        bar.apply {
+        val bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor(CARD))
-            minimumHeight = dp(80)
-
             addView(View(this@CustomerActivity).apply {
                 setBackgroundColor(Color.parseColor(BORDER))
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
@@ -235,36 +218,18 @@ class CustomerActivity : Activity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(12), dp(10), dp(12), dp(14))
+            setPadding(dp(8), dp(8), dp(8), dp(10))
         }
 
-        personalNavItem = navButton("👤", "אזור אישי") { showPersonalArea() }
-        storeNavItem = navButton("▦", "חנות אפליקציות") { showAppStore() }
-        newsNavItem = navButton("📰", "חדשות ועדכונים") { showNews() }
-        supportNavItem = navButton("💬", "תמיכה") { showSupport() }
-        adminNavItem = navButton("🔒", "כניסת מנהל") { showAdminLogin() }
+        personalNavItem = navButton("●", "אזור אישי") { showPersonalArea() }
+        storeNavItem = navButton("▦", "חנות\nאפליקציות") { showAppStore() }
+        newsNavItem = navButton("▤", "חדשות\nועדכונים") { showNews() }
+        supportNavItem = navButton("♧", "תמיכה") { showSupport() }
+        adminNavItem = navButton("▱", "כניסת\nמנהל") { showAdminLogin() }
 
-        row.addView(
-            personalNavItem.container,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        row.addView(
-            storeNavItem.container,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        row.addView(
-            newsNavItem.container,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        row.addView(
-            supportNavItem.container,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        row.addView(
-            adminNavItem.container,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-
+        listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem).forEach {
+            row.addView(it.container, LinearLayout.LayoutParams(0, dp(66), 1f))
+        }
         bar.addView(row)
         return bar
     }
@@ -272,36 +237,34 @@ class CustomerActivity : Activity() {
     private fun navButton(icon: String, label: String, action: () -> Unit): NavItem {
         val iconView = TextView(this).apply {
             text = icon
-            textSize = 18f
+            textSize = 20f
             gravity = Gravity.CENTER
+            typeface = heavyFont
+            setTextColor(Color.parseColor(MUTED))
         }
-        // Small unread-indicator dot, top-end of the icon - GONE by default,
-        // only news's badge is ever actually shown (see updateNewsBadge()),
-        // but every nav item gets one for a uniform, reusable NavItem shape.
         val badgeDot = View(this).apply {
-            background = flatCircle("#B3432C")
+            background = circle("#B52F24")
             visibility = View.GONE
         }
         val iconFrame = FrameLayout(this).apply {
-            addView(iconView, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.CENTER })
-            addView(badgeDot, FrameLayout.LayoutParams(dp(9), dp(9)).apply {
+            addView(iconView, FrameLayout.LayoutParams(dp(28), dp(26)).apply { gravity = Gravity.CENTER })
+            addView(badgeDot, FrameLayout.LayoutParams(dp(8), dp(8)).apply {
                 gravity = Gravity.TOP or Gravity.END
+                marginEnd = dp(1)
             })
         }
         val labelView = TextView(this).apply {
             text = label
-            textSize = 11f
+            textSize = 10.5f
             typeface = mediumFont
             setTextColor(Color.parseColor(MUTED))
             gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, 0)
+            setLineSpacing(0f, 0.92f)
         }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(10), dp(10), dp(10), dp(6))
+            setPadding(dp(3), dp(6), dp(3), dp(5))
             isClickable = true
             isFocusable = true
             addView(iconFrame)
@@ -312,15 +275,647 @@ class CustomerActivity : Activity() {
     }
 
     private fun setActiveNav(active: NavItem) {
-        for (item in listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem)) {
-            val isActive = item === active
-            item.icon.alpha = if (isActive) 1f else 0.5f
-            item.label.typeface = if (isActive) heavyFont else mediumFont
-            item.label.setTextColor(Color.parseColor(if (isActive) ACCENT else MUTED))
-            item.container.background =
-                if (isActive) flatRounded(ACCENT_TINT, dp(14).toFloat()) else null
+        listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem).forEach { item ->
+            val selected = item === active
+            item.icon.setTextColor(Color.parseColor(if (selected) ACCENT_DARK else MUTED))
+            item.icon.alpha = if (selected) 1f else 0.82f
+            item.label.typeface = if (selected) heavyFont else mediumFont
+            item.label.setTextColor(Color.parseColor(if (selected) ACCENT_DARK else MUTED))
+            item.container.background = if (selected) rounded(ACCENT_TINT, 13) else null
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Personal area - approved redesign
+    // ---------------------------------------------------------------------
+
+    private fun showPersonalArea() {
+        isPersonalAreaActive = true
+        isNewsActive = false
+        headerLabelView.text = "אזור אישי"
+        setActiveNav(personalNavItem)
+        contentArea.removeAllViews()
+
+        contentArea.addView(personalWelcomeCard())
+
+        val rows = mutableListOf<Triple<String, String, String>>()
+        rows += Triple("✓", "מצב מנוי", if (Config.storeAccessAllowed(this)) "פעיל" else "פג תוקף")
+        Config.subscriptionExpiryDate(this)?.takeIf { it.isNotBlank() }?.let {
+            rows += Triple("▣", "תוקף מנוי", compactSubscriptionDate(it))
+        }
+        rows += Triple("▯", "מזהה מכשיר", Config.deviceId(this))
+        rows += Triple("◷", "עדכון אחרון", lastSyncLabelCompact())
+
+        contentArea.addView(sectionCardTitle("פרטי המנוי שלי"))
+        contentArea.addView(personalDetailsCard(rows))
+
+        val guardPolicy = WhatsAppGuardConfig.load(this)
+        if (guardPolicy.enabled) {
+            contentArea.addView(whatsAppFeaturedCard(), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(14) })
+        }
+
+        // Keep DNS functionality intact, below the approved hero content so the first screen
+        // remains visually identical to the mockup while advanced controls remain available.
+        contentArea.addView(sectionTitle("סינון DNS"))
+        contentArea.addView(dnsToggleCard())
+        val dnsStatus = AdBlockDns.currentStatus(this)
+        contentArea.addView(personalDetailsCard(listOf(
+            Triple("◈", "מצב הסינון", dnsModeLabel(dnsStatus.dnsMode))
+        )))
+    }
+
+    private fun personalWelcomeCard(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = cardBackground()
+            setPadding(dp(18), dp(15), dp(18), dp(15))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(14)
+            }
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = "●"
+                textSize = 20f
+                typeface = heavyFont
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor("#64745D"))
+                background = circle(ACCENT_TINT_STRONG)
+            }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(12) })
+
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.RIGHT
+                addView(TextView(this@CustomerActivity).apply {
+                    text = "יהודי כשר"
+                    textSize = 17f
+                    typeface = heavyFont
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                })
+                addView(TextView(this@CustomerActivity).apply {
+                    text = "האזור האישי שלך"
+                    textSize = 12.5f
+                    typeface = mediumFont
+                    setTextColor(Color.parseColor(MUTED))
+                    gravity = Gravity.RIGHT
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+    }
+
+    private fun sectionCardTitle(title: String): TextView {
+        return TextView(this).apply {
+            text = title
+            textSize = 16f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.RIGHT
+            setPadding(dp(4), 0, dp(4), dp(9))
+        }
+    }
+
+    private fun personalDetailsCard(rows: List<Triple<String, String, String>>): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBackground()
+            setPadding(dp(12), dp(5), dp(12), dp(5))
+            rows.forEachIndexed { index, (icon, label, value) ->
+                addView(LinearLayout(this@CustomerActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(4), dp(9), dp(4), dp(9))
+
+                    addView(TextView(this@CustomerActivity).apply {
+                        text = icon
+                        textSize = 14f
+                        typeface = heavyFont
+                        setTextColor(Color.parseColor(ACCENT_DARK))
+                        gravity = Gravity.CENTER
+                        background = circle(ACCENT_TINT)
+                    }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(11) })
+
+                    addView(LinearLayout(this@CustomerActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.RIGHT
+                        addView(TextView(this@CustomerActivity).apply {
+                            text = label
+                            textSize = 11.5f
+                            typeface = mediumFont
+                            setTextColor(Color.parseColor(MUTED))
+                            gravity = Gravity.RIGHT
+                        })
+                        addView(TextView(this@CustomerActivity).apply {
+                            text = value
+                            textSize = 15f
+                            typeface = heavyFont
+                            setTextColor(Color.parseColor(TEXT))
+                            gravity = Gravity.RIGHT
+                            maxLines = 2
+                        })
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                })
+                if (index < rows.lastIndex) {
+                    addView(View(this@CustomerActivity).apply {
+                        setBackgroundColor(Color.parseColor(BORDER))
+                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
+                        marginStart = dp(49)
+                    })
+                }
+            }
+        }
+    }
+
+    private fun whatsAppFeaturedCard(): LinearLayout {
+        val enabled = WhatsAppGuardProtection.accessibilityEnabled(this)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = featuredCardBackground()
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(TextView(this@CustomerActivity).apply {
+                    text = if (enabled) "✓" else "◈"
+                    textSize = 25f
+                    typeface = heavyFont
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                    background = circle(if (enabled) OK else ACCENT_DARK)
+                }, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(13) })
+
+                addView(LinearLayout(this@CustomerActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.RIGHT
+                    addView(TextView(this@CustomerActivity).apply {
+                        text = "הגנת WhatsApp"
+                        textSize = 18f
+                        typeface = heavyFont
+                        setTextColor(Color.parseColor(ACCENT_DARK))
+                        gravity = Gravity.RIGHT
+                    })
+                    addView(TextView(this@CustomerActivity).apply {
+                        text = if (enabled) {
+                            "ההגנה פעילה במכשיר זה"
+                        } else {
+                            "הפעלה חד-פעמית של שירות ‘יהודי כשר’ להגנת WhatsApp במכשיר זה."
+                        }
+                        textSize = 12.5f
+                        typeface = mediumFont
+                        setTextColor(Color.parseColor(MUTED))
+                        gravity = Gravity.RIGHT
+                        maxLines = 3
+                        setPadding(0, dp(4), 0, 0)
+                    })
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            })
+
+            if (!enabled) {
+                addView(Button(this@CustomerActivity).apply {
+                    text = "◉   הפעל הגנת WhatsApp"
+                    textSize = 15f
+                    isAllCaps = false
+                    typeface = heavyFont
+                    setTextColor(Color.WHITE)
+                    background = rounded(ACCENT, 14)
+                    setOnClickListener { openWhatsAppAccessibilitySettings() }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
+                    topMargin = dp(14)
+                })
+            }
+        }
+    }
+
+    private fun openWhatsAppAccessibilitySettings() {
+        try {
+            val enforcer = PolicyEnforcer(this)
+            if (!enforcer.isDeviceOwner()) {
+                Toast.makeText(this, "המכשיר אינו במצב ניהול מלא", Toast.LENGTH_LONG).show()
+                return
+            }
+            enforcer.beginAccessibilitySetupWindow()
+            try { stopLockTask() } catch (_: Exception) {}
+            enforcer.disableKiosk()
+            accessibilitySetupWindowOpen = true
+        } catch (e: Exception) {
+            Toast.makeText(this, "לא ניתן לפתוח חלון נגישות: ${e.message}", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val attempts = listOf(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS),
+        )
+        Toast.makeText(this, "הפעילו: יהודי כשר — הגנת WhatsApp", Toast.LENGTH_LONG).show()
+        for (intent in attempts) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            if (intent.resolveActivity(packageManager) == null) continue
+            try {
+                startActivity(intent)
+                return
+            } catch (_: Exception) {}
+        }
+        accessibilitySetupWindowOpen = false
+        try { PolicyEnforcer(this).finishAccessibilitySetupWindow() } catch (_: Exception) {}
+        Toast.makeText(this, "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה", Toast.LENGTH_LONG).show()
+    }
+
+    // ---------------------------------------------------------------------
+    // App Store - approved two-column card redesign
+    // ---------------------------------------------------------------------
+
+    private fun showAppStore() {
+        isPersonalAreaActive = false
+        isNewsActive = false
+        headerLabelView.text = "חנות אפליקציות"
+        setActiveNav(storeNavItem)
+        contentArea.removeAllViews()
+
+        if (!Config.storeAccessAllowed(this)) {
+            renderLockedStore()
+            return
+        }
+
+        val apps = approvedApps().sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
+
+        val searchWrap = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = cardBackground()
+            setPadding(dp(14), dp(2), dp(14), dp(2))
+        }
+        val searchIcon = TextView(this).apply {
+            text = "⌕"
+            textSize = 24f
+            setTextColor(Color.parseColor(ACCENT_DARK))
+            gravity = Gravity.CENTER
+        }
+        val search = EditText(this).apply {
+            hint = "חיפוש אפליקציות..."
+            textSize = 14f
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            setSingleLine(true)
+            gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT
+            background = null
+            setPadding(dp(8), dp(10), dp(8), dp(10))
+            setText(storeSearchQuery)
+            setSelection(text.length)
+        }
+        searchWrap.addView(searchIcon, LinearLayout.LayoutParams(dp(36), dp(48)))
+        searchWrap.addView(search, LinearLayout.LayoutParams(0, dp(52), 1f))
+        contentArea.addView(searchWrap, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = dp(8)
+            bottomMargin = dp(13)
+        })
+
+        val categories = linkedMapOf("all" to "הכל")
+        apps.forEach { app ->
+            if (app.category.isNotBlank() && app.category !in categories) {
+                categories[app.category] = app.categoryLabel.ifBlank { "אחר" }
+            }
+        }
+        if (selectedStoreCategory !in categories) selectedStoreCategory = "all"
+
+        val categoryRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        categories.forEach { (key, label) ->
+            val active = key == selectedStoreCategory
+            categoryRow.addView(TextView(this).apply {
+                text = label
+                textSize = 12.5f
+                typeface = if (active) heavyFont else mediumFont
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor(if (active) Color.WHITE.toHex() else TEXT))
+                background = if (active) rounded(ACCENT, 22) else roundedBordered(CARD, BORDER, 22, 1)
+                setPadding(dp(22), dp(9), dp(22), dp(9))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    selectedStoreCategory = key
+                    showAppStore()
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)).apply {
+                marginEnd = dp(8)
+            })
+        }
+        contentArea.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            addView(categoryRow)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)).apply {
+            bottomMargin = dp(12)
+        })
+
+        val listContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        contentArea.addView(listContainer)
+
+        fun render() = renderStoreContent(listContainer, apps)
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                storeSearchQuery = s?.toString().orEmpty()
+                render()
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        render()
+    }
+
+    private fun renderStoreContent(container: LinearLayout, apps: List<CatalogApp>) {
+        container.removeAllViews()
+        val query = storeSearchQuery.trim().lowercase()
+        val filtered = apps.filter { app ->
+            val categoryMatches = selectedStoreCategory == "all" || app.category == selectedStoreCategory
+            val textMatches = query.isEmpty() ||
+                app.name.lowercase().contains(query) ||
+                app.packageName.lowercase().contains(query) ||
+                app.categoryLabel.lowercase().contains(query)
+            categoryMatches && textMatches
+        }.sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
+
+        if (filtered.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = if (apps.isEmpty()) "עדיין לא אושרו אפליקציות למכשיר זה" else "לא נמצאו אפליקציות תואמות"
+                textSize = 14f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(34), 0, dp(34))
+            })
+            return
+        }
+
+        if (selectedStoreCategory == "all" && query.isEmpty()) {
+            val updates = filtered.filter { app ->
+                val installed = isInstalled(app.packageName)
+                installed && isUpdateAvailable(app, installed)
+            }
+            if (updates.isNotEmpty()) {
+                addStoreSectionTitle(container, "עדכונים")
+                addStoreGrid(container, updates)
+            }
+            val recommended = filtered.filter { it.isRecommended }
+            if (recommended.isNotEmpty()) {
+                addStoreSectionTitle(container, "מומלצות")
+                addStoreGrid(container, recommended)
+            }
+        }
+
+        // The approved mockup intentionally has no redundant “כל האפליקציות” heading.
+        if (query.isNotEmpty()) addStoreSectionTitle(container, "תוצאות")
+        else if (selectedStoreCategory != "all") {
+            addStoreSectionTitle(container, filtered.firstOrNull()?.categoryLabel?.ifBlank { "אפליקציות" } ?: "אפליקציות")
+        }
+        addStoreGrid(container, filtered)
+    }
+
+    private fun addStoreSectionTitle(parent: LinearLayout, title: String) {
+        parent.addView(TextView(this).apply {
+            text = title
+            textSize = 15f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(TEXT))
+            gravity = Gravity.RIGHT
+            setPadding(dp(2), dp(8), dp(2), dp(10))
+        })
+    }
+
+    private fun addStoreGrid(parent: LinearLayout, apps: List<CatalogApp>) {
+        apps.chunked(2).forEach { rowApps ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+            }
+            rowApps.forEachIndexed { index, app ->
+                row.addView(appTile(app), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (index == 0) marginEnd = dp(6) else marginStart = dp(6)
+                })
+            }
+            if (rowApps.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
+            parent.addView(row, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(13) })
+        }
+    }
+
+    private fun approvedApps(): List<CatalogApp> {
+        val allowed = Config.allowedApps(this).toSet()
+        return Config.appCatalog(this).filter { it.packageName in allowed }
+    }
+
+    private fun appTile(app: CatalogApp): LinearLayout {
+        val installed = isInstalled(app.packageName)
+        val updateAvailable = isUpdateAvailable(app, installed)
+
+        val icon = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setImageResource(android.R.drawable.sym_def_app_icon)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+        }
+        loadIcon(app, installed, icon)
+
+        val statusLabel = when {
+            !installed -> "התקנה"
+            updateAvailable -> "עדכן"
+            else -> "✓  מותקן"
+        }
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = cardBackground()
+            setPadding(dp(10), dp(15), dp(10), dp(10))
+            isClickable = true
+            isFocusable = true
+
+            addView(icon, LinearLayout.LayoutParams(dp(82), dp(82)))
+            addView(TextView(this@CustomerActivity).apply {
+                text = app.name
+                textSize = 13.5f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.CENTER
+                maxLines = 2
+                setPadding(dp(2), dp(9), dp(2), 0)
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = app.categoryLabel.ifBlank { "אפליקציה" }
+                textSize = 11.5f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+                maxLines = 1
+                setPadding(dp(2), dp(3), dp(2), dp(10))
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = statusLabel
+                textSize = 12.5f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(if (installed && !updateAvailable) ACCENT_DARK else Color.WHITE.toHex()))
+                gravity = Gravity.CENTER
+                background = if (installed && !updateAvailable) rounded(ACCENT_TINT, 10) else rounded(ACCENT, 10)
+                isClickable = !installed || updateAvailable
+                isFocusable = !installed || updateAvailable
+                if (!installed || updateAvailable) setOnClickListener { installApp(app) }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+
+            setOnClickListener {
+                if (installed) openInstalledApp(app.packageName) else installApp(app)
+            }
+        }
+    }
+
+    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
+        if (!installed) return false
+        return false
+    }
+
+    private fun isInstalled(packageName: String): Boolean {
+        return try {
+            val info = packageManager.getApplicationInfo(packageName, 0)
+            if ((info.flags and ApplicationInfo.FLAG_INSTALLED) == 0 || !info.enabled) return false
+            val enabledSetting = try {
+                packageManager.getApplicationEnabledSetting(packageName)
+            } catch (_: Exception) {
+                PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+            }
+            if (enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
+                enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER ||
+                enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED) return false
+
+            val dpm = getSystemService(DevicePolicyManager::class.java)
+            if (dpm.isDeviceOwnerApp(this.packageName)) {
+                val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
+                if (dpm.isApplicationHidden(admin, packageName)) return false
+            }
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
+            launchIntent.resolveActivity(packageManager) != null
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun openInstalledApp(packageName: String) {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        if (launchIntent != null) startActivity(launchIntent) else openPlayStoreForInstall(packageName)
+    }
+
+    private fun renderLockedStore() {
+        val raw = Config.subscriptionExpiryDate(this)
+        val expiryLabel = raw?.take(10)?.split('-')?.takeIf { it.size == 3 }
+            ?.let { "${it[2]}/${it[1]}/${it[0]}" } ?: "תאריך המנוי"
+
+        contentArea.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = cardBackground()
+            setPadding(dp(24), dp(30), dp(24), dp(30))
+            addView(TextView(this@CustomerActivity).apply {
+                text = "▱"
+                textSize = 38f
+                setTextColor(Color.parseColor(GOLD))
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = "חנות האפליקציות נעולה"
+                textSize = 19f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(10), 0, dp(8))
+            })
+            addView(TextView(this@CustomerActivity).apply {
+                text = "המנוי פג בתאריך $expiryLabel.\nכדי להוריד אפליקציות או לקבל עדכונים דרך החנות יש לחדש את המנוי.\n\nשאר המכשיר והאפליקציות שכבר מותקנות ממשיכים לעבוד כרגיל."
+                textSize = 13.5f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.CENTER
+            })
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(20)
+        })
+    }
+
+    private fun openPlayStoreForInstall(packageName: String) {
+        if (!Config.storeAccessAllowed(this)) {
+            Toast.makeText(this, "המנוי פג — חנות האפליקציות נעולה עד לחידוש", Toast.LENGTH_LONG).show()
+            showAppStore()
+            return
+        }
+        PlayStoreGate.openForInstall(this, packageName)
+    }
+
+    private fun installApp(app: CatalogApp) {
+        if (!Config.storeAccessAllowed(this)) {
+            Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
+            showAppStore()
+            return
+        }
+        if (app.appSource != "APK") {
+            openPlayStoreForInstall(app.packageName)
+            return
+        }
+        val apkUrl = app.apkUrl
+        val apkSha256 = app.apkSha256
+        if (apkUrl.isNullOrBlank() || apkSha256.isNullOrBlank()) {
+            Toast.makeText(this, "קובץ ההתקנה אינו זמין כרגע", Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
+                runOnUiThread {
+                    Toast.makeText(this@CustomerActivity, "ההתקנה נשלחה למכשיר", Toast.LENGTH_LONG).show()
+                    showAppStore()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this@CustomerActivity, "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun loadIcon(app: CatalogApp, installed: Boolean, target: ImageView) {
+        if (installed) {
+            try {
+                val drawable = packageManager.getApplicationIcon(app.packageName)
+                target.setImageDrawable(drawable)
+                AppIconCache.save(this, app.packageName, drawable)
+                return
+            } catch (_: Exception) {}
+        }
+        AppIconCache.get(this, app.packageName)?.let { target.setImageBitmap(it) }
+        val url = app.iconUrl ?: return
+        Thread {
+            val bitmap: Bitmap? = try {
+                URL(url).openStream().use { BitmapFactory.decodeStream(it) }
+            } catch (_: Exception) { null }
+            if (bitmap != null && !isFinishing) runOnUiThread { target.setImageBitmap(bitmap) }
+        }.start()
+    }
+
+    // ---------------------------------------------------------------------
+    // Support - functionality preserved
+    // ---------------------------------------------------------------------
 
     private fun showSupport() {
         isPersonalAreaActive = false
@@ -332,71 +927,33 @@ class CustomerActivity : Activity() {
         contentArea.addView(TextView(this).apply {
             text = "צריכים עזרה? שלחו פנייה והיא תגיע ישירות לצוות התמיכה."
             textSize = 14f
+            typeface = mediumFont
             setTextColor(Color.parseColor(MUTED))
             gravity = Gravity.RIGHT
-            setPadding(dp(4), dp(8), dp(4), dp(14))
+            setPadding(dp(3), dp(8), dp(3), dp(14))
         })
 
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = flatRounded(CARD, dp(18).toFloat())
-            setPadding(dp(16), dp(16), dp(16), dp(16))
+            background = cardBackground()
+            setPadding(dp(15), dp(15), dp(15), dp(15))
         }
-        val subject = EditText(this).apply {
-            hint = "נושא הפנייה"
-            textSize = 14f
-            setTextColor(Color.parseColor(TEXT))
-            setHintTextColor(Color.parseColor(MUTED))
-            setSingleLine(true)
-            gravity = Gravity.RIGHT
-            background = flatRounded(BG, dp(12).toFloat())
-            setPadding(dp(14), dp(11), dp(14), dp(11))
-        }
-        val message = EditText(this).apply {
-            hint = "כתבו כאן במה אפשר לעזור..."
-            textSize = 14f
-            setTextColor(Color.parseColor(TEXT))
-            setHintTextColor(Color.parseColor(MUTED))
-            gravity = Gravity.TOP or Gravity.RIGHT
-            minLines = 5
-            maxLines = 10
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            background = flatRounded(BG, dp(12).toFloat())
-            setPadding(dp(14), dp(11), dp(14), dp(11))
-        }
-        val send = Button(this).apply {
-            text = "שליחת פנייה"
-            textSize = 14f
-            typeface = heavyFont
-            setTextColor(Color.WHITE)
-            background = flatRounded(ACCENT, dp(12).toFloat())
-            isAllCaps = false
-        }
+        val subject = styledInput("נושא הפנייה", false)
+        val message = styledInput("כתבו כאן במה אפשר לעזור...", true)
+        val send = primaryButton("שליחת פנייה") {}
         form.addView(subject, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
         form.addView(message, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) })
-        form.addView(send, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
-        contentArea.addView(form, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(18) })
+        form.addView(send)
+        contentArea.addView(form)
 
-        val historyTitle = TextView(this).apply {
-            text = "הפניות שלי"
-            textSize = 17f
-            typeface = heavyFont
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.RIGHT
-            setPadding(dp(4), dp(6), dp(4), dp(10))
-        }
+        val historyTitle = sectionTitle("הפניות שלי")
         val history = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         contentArea.addView(historyTitle)
         contentArea.addView(history)
 
         fun loadTickets() {
             history.removeAllViews()
-            history.addView(TextView(this).apply {
-                text = "טוען פניות..."
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(24), 0, dp(24))
-            })
+            history.addView(loadingText("טוען פניות..."))
             val deviceId = Config.deviceId(this)
             val serverUrl = Config.serverUrl(this)
             val token = Config.deviceToken(this)
@@ -407,12 +964,7 @@ class CustomerActivity : Activity() {
                 } catch (_: Exception) {
                     runOnUiThread {
                         history.removeAllViews()
-                        history.addView(TextView(this).apply {
-                            text = "לא ניתן לטעון כרגע את הפניות. נסו שוב מאוחר יותר."
-                            setTextColor(Color.parseColor(MUTED))
-                            gravity = Gravity.CENTER
-                            setPadding(0, dp(24), 0, dp(24))
-                        })
+                        history.addView(loadingText("לא ניתן לטעון כרגע את הפניות. נסו שוב מאוחר יותר."))
                     }
                 }
             }.start()
@@ -454,30 +1006,21 @@ class CustomerActivity : Activity() {
                 }
             }.start()
         }
-
         loadTickets()
     }
 
     private fun renderSupportTickets(container: LinearLayout, tickets: List<SupportTicket>) {
         container.removeAllViews()
         if (tickets.isEmpty()) {
-            container.addView(TextView(this).apply {
-                text = "עדיין לא נשלחו פניות"
-                textSize = 14f
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(24), 0, dp(24))
-            })
+            container.addView(loadingText("עדיין לא נשלחו פניות"))
             return
         }
-
         tickets.forEach { ticket ->
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = flatRounded(CARD, dp(18).toFloat())
+                background = cardBackground()
                 setPadding(dp(14), dp(14), dp(14), dp(14))
             }
-
             val statusText = when (ticket.status) {
                 "RESOLVED" -> "טופל"
                 "IN_PROGRESS" -> "בטיפול"
@@ -490,521 +1033,40 @@ class CustomerActivity : Activity() {
                 setTextColor(Color.parseColor(TEXT))
                 gravity = Gravity.RIGHT
             })
-
             val chat = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = flatRounded("#F5F4ED", dp(16).toFloat())
-                setPadding(dp(10), dp(10), dp(10), dp(10))
+                background = rounded(CARD_SOFT, 14)
+                setPadding(dp(9), dp(9), dp(9), dp(9))
             }
-
             fun addBubble(message: String, sender: String, whenIso: String, mine: Boolean) {
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = if (mine) Gravity.RIGHT else Gravity.LEFT
                 }
-                val bubble = TextView(this).apply {
+                row.addView(TextView(this).apply {
                     text = "$sender\n$message\n${formatUpdateDate(whenIso)}"
-                    textSize = 13.5f
+                    textSize = 13f
+                    typeface = mediumFont
                     setTextColor(Color.parseColor(TEXT))
                     gravity = Gravity.RIGHT
-                    background = flatRounded(if (mine) "#DFF1D8" else "#FFFFFF", dp(16).toFloat())
-                    setPadding(dp(12), dp(9), dp(12), dp(8))
-                }
-                row.addView(
-                    bubble,
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.84f)
-                )
-                chat.addView(
-                    row,
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        bottomMargin = dp(8)
-                    }
-                )
+                    background = rounded(if (mine) ACCENT_TINT else CARD, 14)
+                    setPadding(dp(11), dp(9), dp(11), dp(8))
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.84f))
+                chat.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(7) })
             }
-
             addBubble(ticket.message, "אתם", ticket.createdAt, true)
             ticket.adminReply?.takeIf { it.isNotBlank() }?.let {
                 addBubble(it, "תמיכה — יהודי כשר", ticket.updatedAt, false)
             }
-
-            card.addView(
-                chat,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    topMargin = dp(12)
-                }
-            )
-            container.addView(
-                card,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(12)
-                }
-            )
+            card.addView(chat, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(11) })
+            container.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(11) })
         }
     }
 
-    private fun showAppStore() {
-        isPersonalAreaActive = false
-        isNewsActive = false
-        headerLabelView.text = "חנות אפליקציות"
-        setActiveNav(storeNavItem)
-        contentArea.removeAllViews()
+    // ---------------------------------------------------------------------
+    // Admin login - functionality preserved
+    // ---------------------------------------------------------------------
 
-        if (!Config.storeAccessAllowed(this)) {
-            renderLockedStore()
-            return
-        }
-
-        val apps = approvedApps()
-            .sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
-
-        val search = EditText(this).apply {
-            hint = "חפש אפליקציה"
-            textSize = 14f
-            setTextColor(Color.parseColor(TEXT))
-            setHintTextColor(Color.parseColor(MUTED))
-            setSingleLine(true)
-            gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT
-            background = flatRounded(CARD, dp(14).toFloat())
-            setPadding(dp(16), dp(11), dp(16), dp(11))
-            setText(storeSearchQuery)
-            setSelection(text.length)
-        }
-        contentArea.addView(
-            search,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(8)
-                bottomMargin = dp(10)
-            }
-        )
-
-        val categories = linkedMapOf("all" to "הכל")
-        apps.forEach { app ->
-            if (app.category.isNotBlank() && app.category !in categories) {
-                categories[app.category] = app.categoryLabel.ifBlank { "אחר" }
-            }
-        }
-        if (selectedStoreCategory !in categories) selectedStoreCategory = "all"
-
-        val categoryRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        categories.forEach { (key, label) ->
-            val active = key == selectedStoreCategory
-            categoryRow.addView(TextView(this).apply {
-                text = label
-                textSize = 12f
-                typeface = mediumFont
-                gravity = Gravity.CENTER
-                setTextColor(Color.parseColor(if (active) CARD else ACCENT))
-                background = flatRounded(if (active) ACCENT else CARD, dp(18).toFloat())
-                setPadding(dp(14), dp(8), dp(14), dp(8))
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    selectedStoreCategory = key
-                    showAppStore()
-                }
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginEnd = dp(8)
-                bottomMargin = dp(4)
-            })
-        }
-
-        contentArea.addView(
-            HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = false
-                layoutDirection = View.LAYOUT_DIRECTION_RTL
-                addView(categoryRow)
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(8) }
-        )
-
-        val listContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        contentArea.addView(
-            listContainer,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-
-        fun render() {
-            renderStoreContent(listContainer, apps)
-        }
-
-        search.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                storeSearchQuery = s?.toString().orEmpty()
-                render()
-            }
-            override fun afterTextChanged(s: Editable?) = Unit
-        })
-
-        render()
-    }
-
-    private fun renderStoreContent(container: LinearLayout, apps: List<CatalogApp>) {
-        container.removeAllViews()
-
-        val query = storeSearchQuery.trim().lowercase()
-        val filtered = apps.filter { app ->
-            val categoryMatches =
-                selectedStoreCategory == "all" || app.category == selectedStoreCategory
-            val textMatches =
-                query.isEmpty() ||
-                    app.name.lowercase().contains(query) ||
-                    app.packageName.lowercase().contains(query) ||
-                    app.categoryLabel.lowercase().contains(query)
-            categoryMatches && textMatches
-        }.sortedWith(compareBy<CatalogApp> { it.sortOrder }.thenBy { it.name })
-
-        if (filtered.isEmpty()) {
-            container.addView(TextView(this).apply {
-                text = if (apps.isEmpty()) {
-                    "עדיין לא אושרו אפליקציות למכשיר זה"
-                } else {
-                    "לא נמצאו אפליקציות תואמות"
-                }
-                textSize = 14f
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(34), 0, 0)
-            })
-            return
-        }
-
-        if (selectedStoreCategory == "all" && query.isEmpty()) {
-            val updates = filtered.filter { app ->
-                val installed = isInstalled(app.packageName)
-                installed && isUpdateAvailable(app, installed)
-            }
-            if (updates.isNotEmpty()) {
-                addStoreSectionTitle(container, "עדכונים")
-                addStoreGrid(container, updates)
-            }
-
-            val recommended = filtered.filter { it.isRecommended }
-            if (recommended.isNotEmpty()) {
-                addStoreSectionTitle(container, "מומלצות")
-                addStoreGrid(container, recommended)
-            }
-        }
-
-        val title = when {
-            query.isNotEmpty() -> "תוצאות"
-            selectedStoreCategory != "all" ->
-                filtered.firstOrNull()?.categoryLabel?.ifBlank { "אפליקציות" } ?: "אפליקציות"
-            else -> "כל האפליקציות"
-        }
-        addStoreSectionTitle(container, title)
-        addStoreGrid(container, filtered)
-    }
-
-    private fun addStoreSectionTitle(parent: LinearLayout, title: String) {
-        parent.addView(TextView(this).apply {
-            text = title
-            textSize = 15f
-            typeface = heavyFont
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.RIGHT
-            setPadding(dp(2), dp(10), dp(2), dp(12))
-        })
-    }
-
-    private fun addStoreGrid(parent: LinearLayout, apps: List<CatalogApp>) {
-        val columns = 2
-        apps.chunked(columns).forEach { rowApps ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            rowApps.forEach { app ->
-                row.addView(
-                    appTile(app),
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply {
-                            marginStart = dp(6)
-                            marginEnd = dp(6)
-                        }
-                )
-            }
-            repeat(columns - rowApps.size) {
-                row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
-            }
-            parent.addView(
-                row,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(20) }
-            )
-        }
-    }
-
-    /** Approved-app metadata reaches the device from the server on every sync
-     * (see PolicySync / Config.appCatalog), so the list here is intersected
-     * with the current allowlist rather than trusted blindly. */
-    private fun approvedApps(): List<CatalogApp> {
-        val allowed = Config.allowedApps(this).toSet()
-        return Config.appCatalog(this).filter { it.packageName in allowed }
-    }
-
-    /** One tile, icon framed in a rounded green square (2 per row) - name and
-     * status live under it instead of a separate row with its own button. */
-    private fun appTile(app: CatalogApp): LinearLayout {
-        val installed = isInstalled(app.packageName)
-
-        val icon = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(96), dp(96))
-            background = flatRoundedBordered(ACCENT_TINT, ACCENT, dp(20).toFloat())
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-            setImageResource(android.R.drawable.sym_def_app_icon)
-        }
-        loadIcon(app, installed, icon)
-
-        val name = TextView(this).apply {
-            text = app.name
-            textSize = 13f
-            typeface = mediumFont
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.CENTER
-            maxLines = 2
-            setPadding(0, dp(8), 0, 0)
-        }
-
-        val updateAvailable = isUpdateAvailable(app, installed)
-        val status = TextView(this).apply {
-            text = when {
-                !installed -> "התקנה"
-                updateAvailable -> "עדכן"
-                else -> "✓ מותקן"
-            }
-            textSize = 11f
-            typeface = mediumFont
-            setTextColor(Color.parseColor(if (installed && !updateAvailable) OK else ACCENT))
-            gravity = Gravity.CENTER
-            setPadding(0, dp(3), 0, 0)
-            if (!installed || updateAvailable) {
-                isClickable = true
-                isFocusable = true
-                setOnClickListener { installApp(app) }
-            }
-        }
-
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(6), 0, dp(6), 0)
-            isClickable = true
-            isFocusable = true
-            addView(icon)
-            addView(name)
-            addView(status)
-            setOnClickListener {
-                if (installed) openInstalledApp(app.packageName)
-                else installApp(app)
-            }
-        }
-    }
-
-    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
-        if (!installed) return false
-
-        // Google Play's public metadata is catalog-level, not device-specific.
-        // A different version/timestamp can mean staged rollout, device/ABI
-        // targeting, regional rollout, or simply metadata that is newer than
-        // what this exact device is currently eligible to install.
-        //
-        // Therefore we deliberately do NOT label an installed app as "עדכן"
-        // from versionName/timestamp heuristics alone. False update prompts are
-        // worse than a conservative "מותקן". When we later have an
-        // authoritative device-specific update signal, this is the one place
-        // that should consume it.
-        return false
-    }
-
-    private fun isInstalled(packageName: String): Boolean {
-        // Customer-visible truth only. Do not use MATCH_UNINSTALLED_PACKAGES and
-        // do not treat a Device Owner-hidden package as installed: Samsung keeps
-        // retained package rows for removed/disabled apps, which caused false
-        // "✓ מותקן" states in this actual customer store screen.
-        return try {
-            val info = packageManager.getApplicationInfo(packageName, 0)
-            if ((info.flags and ApplicationInfo.FLAG_INSTALLED) == 0) return false
-            if (!info.enabled) return false
-
-            val enabledSetting = try {
-                packageManager.getApplicationEnabledSetting(packageName)
-            } catch (_: Exception) {
-                PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
-            }
-            if (enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
-                enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER ||
-                enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED) {
-                return false
-            }
-
-            val dpm = getSystemService(DevicePolicyManager::class.java)
-            if (dpm.isDeviceOwnerApp(this.packageName)) {
-                val admin = ComponentName(this, DpcDeviceAdminReceiver::class.java)
-                if (dpm.isApplicationHidden(admin, packageName)) return false
-            }
-
-            val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
-            launchIntent.resolveActivity(packageManager) != null
-        } catch (_: PackageManager.NameNotFoundException) {
-            false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun openInstalledApp(packageName: String) {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-        if (launchIntent != null) startActivity(launchIntent) else openPlayStoreForInstall(packageName)
-    }
-
-    private fun renderLockedStore() {
-        val raw = Config.subscriptionExpiryDate(this)
-        val expiryLabel = raw?.take(10)?.split('-')?.takeIf { it.size == 3 }
-            ?.let { "${it[2]}/${it[1]}/${it[0]}" } ?: "תאריך המנוי"
-
-        contentArea.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = flatRounded(CARD, dp(20).toFloat())
-            setPadding(dp(24), dp(32), dp(24), dp(32))
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = "🔒"
-                textSize = 36f
-                gravity = Gravity.CENTER
-            })
-            addView(TextView(this@CustomerActivity).apply {
-                text = "חנות האפליקציות נעולה"
-                textSize = 20f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(TEXT))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(12), 0, dp(8))
-            })
-            addView(TextView(this@CustomerActivity).apply {
-                text = "המנוי פג בתאריך $expiryLabel.\nכדי להוריד אפליקציות או לקבל עדכונים דרך החנות יש לחדש את המנוי.\n\nשאר המכשיר והאפליקציות שכבר מותקנות ממשיכים לעבוד כרגיל."
-                textSize = 14f
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.CENTER
-            })
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(22)
-        })
-    }
-
-    /** Play Store is hidden by default like any unapproved app - this briefly
-     * reveals it, opens the install page, and lets it hide itself again once
-     * the window closes (see PlayStoreGate). */
-    private fun openPlayStoreForInstall(packageName: String) {
-        if (!Config.storeAccessAllowed(this)) {
-            Toast.makeText(this, "המנוי פג — חנות האפליקציות נעולה עד לחידוש", Toast.LENGTH_LONG).show()
-            showAppStore()
-            return
-        }
-        PlayStoreGate.openForInstall(this, packageName)
-    }
-
-    /** Routes an install/update tap by where the app actually comes from.
-     * A PLAY-sourced app has a real Play Store listing, so that path is
-     * unchanged. An APK-sourced app (uploaded directly by an admin, see
-     * apkManifest.js/apkStorage.js on the server) was never published to
-     * Play - sending it through openPlayStoreForInstall opens Play Store to
-     * a listing that doesn't exist, which is what customers were seeing as
-     * a "no connection" error from Play Store itself. This mirrors
-     * AppStoreActivity.installCustomApk(), the admin-only screen that
-     * already installs APK-sourced apps correctly via
-     * AppInstaller.installFromUrl - customers reach the store through this
-     * screen instead, so it needs the same handling. */
-    private fun installApp(app: CatalogApp) {
-        if (!Config.storeAccessAllowed(this)) {
-            Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
-            showAppStore()
-            return
-        }
-        if (app.appSource != "APK") {
-            openPlayStoreForInstall(app.packageName)
-            return
-        }
-
-        val apkUrl = app.apkUrl
-        val apkSha256 = app.apkSha256
-        if (apkUrl.isNullOrBlank() || apkSha256.isNullOrBlank()) {
-            Toast.makeText(this, "קובץ ההתקנה אינו זמין כרגע", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
-        Thread {
-            try {
-                AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
-                runOnUiThread {
-                    Toast.makeText(this@CustomerActivity, "ההתקנה נשלחה למכשיר", Toast.LENGTH_LONG).show()
-                    showAppStore()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(
-                        this@CustomerActivity,
-                        "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }.start()
-    }
-
-    private fun loadIcon(app: CatalogApp, installed: Boolean, target: ImageView) {
-        if (installed) {
-            try {
-                val drawable = packageManager.getApplicationIcon(app.packageName)
-                target.setImageDrawable(drawable)
-                // Cached now so the icon still has something real to fall
-                // back to later if the customer uninstalls this app - the
-                // server's scraped iconUrl isn't always reliable.
-                AppIconCache.save(this, app.packageName, drawable)
-                return
-            } catch (_: Exception) {
-                // Fall through to the remote/cached icon below.
-            }
-        }
-
-        val cached = AppIconCache.get(this, app.packageName)
-        if (cached != null) target.setImageBitmap(cached)
-
-        val url = app.iconUrl ?: return
-        Thread {
-            val bitmap: Bitmap? = try {
-                URL(url).openStream().use { BitmapFactory.decodeStream(it) }
-            } catch (_: Exception) {
-                null
-            }
-            if (bitmap != null && !isFinishing) {
-                runOnUiThread { target.setImageBitmap(bitmap) }
-            }
-        }.start()
-    }
-
-    /** A full tab like the other two, rather than a popup dialog - centered
-     * PIN field, styled to match the rest of the app. Business logic (first-time
-     * PIN setup vs. checking an existing one) is unchanged from the old dialog. */
     private fun showAdminLogin() {
         isPersonalAreaActive = false
         isNewsActive = false
@@ -1013,24 +1075,21 @@ class CustomerActivity : Activity() {
         contentArea.removeAllViews()
 
         val hasPin = Config.hasAdminPin(this)
-
         contentArea.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(24), dp(36), dp(24), dp(36))
-            background = roundedCardWithBorder()
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, dp(24), 0, dp(16)) }
+            background = cardBackground()
+            setPadding(dp(22), dp(30), dp(22), dp(30))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(22) }
 
             addView(TextView(this@CustomerActivity).apply {
-                text = "🔒"
-                textSize = 26f
+                text = "▱"
+                textSize = 30f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(ACCENT_DARK))
                 gravity = Gravity.CENTER
-                background = flatCircle(ACCENT_TINT)
-                layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
-            })
+                background = circle(ACCENT_TINT)
+            }, LinearLayout.LayoutParams(dp(62), dp(62)))
 
             addView(TextView(this@CustomerActivity).apply {
                 text = if (hasPin) "כניסת מנהל" else "הגדרת קוד מנהל"
@@ -1038,364 +1097,79 @@ class CustomerActivity : Activity() {
                 typeface = heavyFont
                 setTextColor(Color.parseColor(TEXT))
                 gravity = Gravity.CENTER
-                setPadding(0, dp(18), 0, dp(6))
+                setPadding(0, dp(16), 0, dp(5))
             })
-
             addView(TextView(this@CustomerActivity).apply {
-                text = if (hasPin) "הכנס את קוד המנהל כדי להמשיך"
-                       else "בחר קוד מנהל חדש בן 4 ספרות לפחות"
-                textSize = 13f
+                text = if (hasPin) "הכנס את קוד המנהל כדי להמשיך" else "בחר קוד מנהל חדש בן 4 ספרות לפחות"
+                textSize = 12.5f
                 typeface = mediumFont
                 setTextColor(Color.parseColor(MUTED))
                 gravity = Gravity.CENTER
-                setPadding(dp(12), 0, dp(12), dp(22))
+                setPadding(0, 0, 0, dp(18))
             })
-
             val input = EditText(this@CustomerActivity).apply {
                 hint = if (hasPin) "קוד מנהל" else "קוד חדש"
-                inputType =
-                    InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
                 setSingleLine()
-                textSize = 20f
+                textSize = 19f
                 typeface = heavyFont
                 gravity = Gravity.CENTER
                 setTextColor(Color.parseColor(TEXT))
-                background = roundedCardWithBorder()
-                setPadding(dp(16), dp(14), dp(16), dp(14))
-                layoutParams = LinearLayout.LayoutParams(
-                    dp(180),
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
+                background = roundedBordered(CARD_SOFT, BORDER, 13, 1)
+                setPadding(dp(14), dp(12), dp(14), dp(12))
             }
-            addView(input)
-
-            addView(primaryButton(if (hasPin) "היכנס" else "שמור והמשך") {
+            addView(input, LinearLayout.LayoutParams(dp(180), ViewGroup.LayoutParams.WRAP_CONTENT))
+            val button = primaryButton(if (hasPin) "היכנס" else "שמור והמשך") {
                 val pin = input.text.toString()
-
                 if (!hasPin) {
                     if (pin.length < 4) {
-                        Toast.makeText(
-                            this@CustomerActivity,
-                            "הקוד חייב להכיל לפחות 4 ספרות",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        Toast.makeText(this@CustomerActivity, "הקוד חייב להכיל לפחות 4 ספרות", Toast.LENGTH_SHORT).show()
                         return@primaryButton
                     }
-
                     Config.setAdminPin(this@CustomerActivity, pin)
-
-                    // Grants access in-process, right before MainActivity
-                    // starts - not via an Intent extra, which any external
-                    // caller could set regardless of who sent the Intent.
                     AdminAccess.grant()
                     startActivity(Intent(this@CustomerActivity, MainActivity::class.java))
                 } else if (Config.checkAdminPin(this@CustomerActivity, pin)) {
                     AdminAccess.grant()
                     startActivity(Intent(this@CustomerActivity, MainActivity::class.java))
                 } else {
-                    Toast.makeText(
-                        this@CustomerActivity,
-                        "קוד שגוי",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this@CustomerActivity, "קוד שגוי", Toast.LENGTH_SHORT).show()
                 }
-            })
+            }
+            addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply { topMargin = dp(16) })
         })
     }
 
-    private fun showPersonalArea() {
-        isPersonalAreaActive = true
-        isNewsActive = false
-        headerLabelView.text = "אזור אישי"
-        setActiveNav(personalNavItem)
-        contentArea.removeAllViews()
+    // ---------------------------------------------------------------------
+    // DNS - functionality preserved
+    // ---------------------------------------------------------------------
 
-        // Keep the same visual language, but avoid stacking large cards that
-        // repeat the same information or show placeholders the device does not
-        // actually know. The customer screen should be a quick status glance;
-        // deep DNS diagnostics stay in the admin/health surfaces.
-        contentArea.addView(compactPersonalIdentityCard())
-
-        val expiry = Config.subscriptionExpiryDate(this)
-        val subscriptionRows = mutableListOf<Triple<String, String, String>>()
-        subscriptionRows += Triple(
-            "✓",
-            "מצב המנוי",
-            if (Config.storeAccessAllowed(this)) "פעיל" else "פג תוקף"
-        )
-        if (!expiry.isNullOrBlank()) {
-            subscriptionRows += Triple("◷", "תוקף המנוי", compactSubscriptionDate(expiry))
-        }
-        contentArea.addView(sectionTitle("המנוי שלי"))
-        contentArea.addView(compactInfoRowCard(subscriptionRows))
-
-        contentArea.addView(sectionTitle("המכשיר שלי"))
-        contentArea.addView(
-            compactInfoRowCard(
-                listOf(
-                    Triple("#", "מזהה מכשיר", Config.deviceId(this)),
-                    Triple("↻", "עדכון אחרון", lastSyncLabel()),
-                )
-            )
-        )
-
-        val guardPolicy = WhatsAppGuardConfig.load(this)
-        if (guardPolicy.enabled) {
-            contentArea.addView(sectionTitle("הגנת WhatsApp"))
-            contentArea.addView(whatsAppGuardSetupCard())
-        }
-
-        contentArea.addView(sectionTitle("סינון DNS"))
-        contentArea.addView(dnsToggleCard())
-        val dnsStatus = AdBlockDns.currentStatus(this)
-        contentArea.addView(
-            compactInfoRowCard(
-                listOf(
-                    Triple("◈", "מצב הסינון", dnsModeLabel(dnsStatus.dnsMode))
-                )
-            )
-        )
-    }
-
-    private fun whatsAppGuardSetupCard(): LinearLayout {
-        val enabled = WhatsAppGuardProtection.accessibilityEnabled(this)
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = roundedCardWithBorder()
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(10) }
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = if (enabled) "✓ הגנת WhatsApp פעילה" else "הגנת WhatsApp ממתינה להפעלה"
-                textSize = 15f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(if (enabled) OK else TEXT))
-                gravity = Gravity.RIGHT
-            })
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = if (enabled) {
-                    "שירות הנגישות פעיל והסינון יכול להגן על WhatsApp לפי מדיניות המנהל."
-                } else {
-                    "נדרשת הפעלה חד-פעמית של שירות ‘יהודי כשר — הגנת WhatsApp’."
-                }
-                textSize = 12f
-                typeface = mediumFont
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.RIGHT
-                setPadding(0, dp(5), 0, if (enabled) 0 else dp(10))
-            })
-
-            if (!enabled) {
-                addView(primaryButton("הפעל הגנת WhatsApp") {
-                    openWhatsAppAccessibilitySettings()
-                })
-            }
-        }
-    }
-
-    private fun openWhatsAppAccessibilitySettings() {
-        try {
-            val enforcer = PolicyEnforcer(this)
-            if (!enforcer.isDeviceOwner()) {
-                Toast.makeText(this, "המכשיר אינו במצב ניהול מלא", Toast.LENGTH_LONG).show()
-                return
-            }
-            enforcer.beginAccessibilitySetupWindow()
-            // Samsung A31 needs LockTask/home pinning released before Settings
-            // can enter Accessibility. Device Owner and anti-removal protections
-            // remain active throughout this temporary setup window.
-            try { stopLockTask() } catch (_: Exception) {}
-            enforcer.disableKiosk()
-            accessibilitySetupWindowOpen = true
-        } catch (e: Exception) {
-            Toast.makeText(this, "לא ניתן לפתוח חלון נגישות: ${e.message}", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        val attempts = listOf(
-            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
-            Intent(Settings.ACTION_SETTINGS),
-        )
-        Toast.makeText(
-            this,
-            "הפעילו: יהודי כשר — הגנת WhatsApp",
-            Toast.LENGTH_LONG
-        ).show()
-        for (intent in attempts) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            if (intent.resolveActivity(packageManager) == null) continue
-            try {
-                startActivity(intent)
-                // Do not re-apply the permitted-services allowlist on a fixed
-                // short timer while Samsung Settings is still open. On the A31
-                // that makes the Accessibility row non-clickable again. The
-                // service itself re-locks the allowlist as soon as Android
-                // confirms it is enabled; WorkManager remains a bounded fallback.
-                return
-            } catch (_: Exception) {}
-        }
-        accessibilitySetupWindowOpen = false
-        try { PolicyEnforcer(this).finishAccessibilitySetupWindow() } catch (_: Exception) {}
-        Toast.makeText(this, "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה", Toast.LENGTH_LONG).show()
-    }
-
-    private fun compactPersonalIdentityCard(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        background = roundedCardWithBorder()
-        setPadding(dp(14), dp(12), dp(14), dp(12))
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply {
-            topMargin = dp(8)
-            bottomMargin = dp(8)
-        }
-
-        addView(TextView(this@CustomerActivity).apply {
-            text = "י"
-            textSize = 15f
-            typeface = heavyFont
-            setTextColor(Color.parseColor(ACCENT))
-            gravity = Gravity.CENTER
-            background = flatCircle(ACCENT_TINT)
-        }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(10) })
-
-        addView(LinearLayout(this@CustomerActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(TextView(this@CustomerActivity).apply {
-                text = "יהודי כשר"
-                textSize = 15f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(TEXT))
-                gravity = Gravity.RIGHT
-            })
-            addView(TextView(this@CustomerActivity).apply {
-                text = "האזור האישי שלך"
-                textSize = 11.5f
-                typeface = mediumFont
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.RIGHT
-                setPadding(0, dp(2), 0, 0)
-            })
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-    }
-
-    private fun compactInfoRowCard(rows: List<Triple<String, String, String>>): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = roundedCardWithBorder()
-            setPadding(dp(14), dp(5), dp(14), dp(5))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(10) }
-
-            rows.forEachIndexed { index, row ->
-                val (icon, label, value) = row
-                addView(LinearLayout(this@CustomerActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(0, dp(8), 0, dp(8))
-
-                    addView(TextView(this@CustomerActivity).apply {
-                        text = icon
-                        textSize = 13f
-                        typeface = heavyFont
-                        setTextColor(Color.parseColor(ACCENT))
-                        gravity = Gravity.CENTER
-                        background = flatCircle(ACCENT_TINT)
-                    }, LinearLayout.LayoutParams(dp(34), dp(34)).apply { marginEnd = dp(10) })
-
-                    addView(LinearLayout(this@CustomerActivity).apply {
-                        orientation = LinearLayout.VERTICAL
-                        addView(TextView(this@CustomerActivity).apply {
-                            text = label
-                            textSize = 11.5f
-                            typeface = mediumFont
-                            setTextColor(Color.parseColor(MUTED))
-                            gravity = Gravity.RIGHT
-                        })
-                        addView(TextView(this@CustomerActivity).apply {
-                            text = value
-                            textSize = 14f
-                            typeface = heavyFont
-                            setTextColor(Color.parseColor(TEXT))
-                            gravity = Gravity.RIGHT
-                            maxLines = 2
-                        })
-                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                })
-
-                if (index < rows.lastIndex) {
-                    addView(View(this@CustomerActivity).apply {
-                        setBackgroundColor(Color.parseColor(BORDER))
-                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                        marginStart = dp(44)
-                    })
-                }
-            }
-        }
-
-    private fun compactSubscriptionDate(raw: String): String {
-        return try {
-            val instant = java.time.Instant.parse(raw)
-            java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")
-                .withZone(java.time.ZoneId.systemDefault())
-                .format(instant)
-        } catch (_: Exception) {
-            raw.take(10).split('-').let { parts ->
-                if (parts.size == 3) "${parts[2]}/${parts[1]}/${parts[0]}" else raw
-            }
-        }
-    }
-
-    /** Header row with the on/off switch - a separate small card from the
-     * read-only status rows below it, same split as statusCard()/infoRowCard()
-     * above (one bespoke interactive card, one generic read-only list). */
     private fun dnsToggleCard(): LinearLayout {
         val allowToggle = Config.dnsAllowCustomerToggle(this)
         val actualOn = AdBlockDns.currentStatus(this).dnsFilteringActual
-        // Never claim ad/content blocking is happening unless the server has
-        // explicitly confirmed the configured provider actually filters
-        // content - a plain encrypted resolver (the current placeholder,
-        // dns.google) is not that, and the title/subtitle must not imply it.
         val providerFilters = Config.dnsDesiredProviderFilters(this)
-
         lateinit var switchView: Switch
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(16), dp(20), dp(16))
-            background = roundedCardWithBorder()
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, dp(10), 0, dp(16)) }
-
+            background = cardBackground()
+            setPadding(dp(16), dp(14), dp(16), dp(14))
             addView(LinearLayout(this@CustomerActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-
                 addView(TextView(this@CustomerActivity).apply {
                     text = if (providerFilters) "חסימת אתרים ופרסומות" else "DNS מאובטח"
-                    textSize = 15f
+                    textSize = 14.5f
                     typeface = heavyFont
                     setTextColor(Color.parseColor(TEXT))
                     gravity = Gravity.RIGHT
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
                 switchView = Switch(this@CustomerActivity).apply {
                     isChecked = actualOn
                     isEnabled = allowToggle
                 }
                 addView(switchView)
             })
-
             addView(TextView(this@CustomerActivity).apply {
                 text = when {
                     !allowToggle -> "ההגדרה מנוהלת על ידי מנהל המערכת"
@@ -1414,66 +1188,29 @@ class CustomerActivity : Activity() {
             if (!allowToggle) return@setOnCheckedChangeListener
             switchView.isEnabled = false
             Thread {
-                // Applied locally right away regardless of network (the switch
-                // must feel instant), and separately marked pending so the
-                // server's own desired-state record catches up as soon as a
-                // sync succeeds - see Config.setDnsPendingCustomerRequest() and
-                // DeviceHealth.collect(). Without this, the server would still
-                // think the old value is desired and the next scheduled sync's
-                // reconcile() would silently undo this exact action.
                 Config.setDnsPendingCustomerRequest(applicationContext, isChecked)
                 if (isChecked) {
-                    Config.dnsDesiredProviderHost(applicationContext)
-                        ?.let { AdBlockDns.enable(applicationContext, it) }
+                    Config.dnsDesiredProviderHost(applicationContext)?.let { AdBlockDns.enable(applicationContext, it) }
                 } else {
                     AdBlockDns.disable(applicationContext)
                 }
-                // Eager sync so the server's desired-state record catches up
-                // immediately when there's a connection - also lets reconcile()
-                // finish the job below if the local attempt above couldn't (e.g.
-                // no provider host was known yet locally but the server has one).
                 val syncFailed = try {
                     PolicySync.run(applicationContext)
                     false
-                } catch (e: Exception) {
-                    true
-                }
-                // Message is built from the actual post-attempt truth, not from
-                // whichever intermediate step happened to run - so a case like
-                // "no host known locally yet, but the eager sync's own
-                // reconcile() picked one up from the server and applied it"
-                // still reports success rather than the earlier local failure.
+                } catch (_: Exception) { true }
                 val status = AdBlockDns.currentStatus(applicationContext)
                 val message = when {
-                    status.dnsFilteringActual == isChecked ->
-                        if (isChecked) "סינון DNS הופעל" else "סינון DNS כובה (עבר ל-Opportunistic)"
+                    status.dnsFilteringActual == isChecked -> if (isChecked) "סינון DNS הופעל" else "סינון DNS כובה (עבר ל-Opportunistic)"
                     syncFailed -> "הבקשה נשמרה במכשיר - תושלם בשרת כשהחיבור יחזור"
                     else -> "הפעולה לא הושלמה - נסה שוב"
                 }
                 runOnUiThread {
                     Toast.makeText(this@CustomerActivity, message, Toast.LENGTH_LONG).show()
-                    // Rebuilds with the real post-action state, same pattern as
-                    // the sync badges elsewhere in this app.
                     refreshPersonalAreaIfShown()
                 }
             }.start()
         }
-
         return card
-    }
-
-    private fun dnsStatusCard(): LinearLayout {
-        val status = AdBlockDns.currentStatus(this)
-        return infoRowCard(
-            listOf(
-                Triple("◈", "מצב", dnsModeLabel(status.dnsMode)),
-                Triple("⌂", "ספק", status.dnsActualProviderHost ?: "—"),
-                Triple("📶", "חיבור", dnsNetworkLabel(status.currentNetworkType)),
-                Triple("✓", "DNS תקין", dnsResolutionLabel(status.dnsResolutionOk)),
-                Triple("⚑", "Fail-safe", dnsFailSafeLabel(status.dnsFailSafeState, status.dnsMode)),
-                Triple("↻", "עודכן", dnsUpdatedLabel(status.lastDnsCheckAt)),
-            )
-        )
     }
 
     private fun dnsModeLabel(mode: DnsMode): String = when (mode) {
@@ -1484,50 +1221,14 @@ class CustomerActivity : Activity() {
         DnsMode.ERROR -> "שגיאת קריאה"
     }
 
-    private fun dnsNetworkLabel(type: DnsNetworkType): String = when (type) {
-        DnsNetworkType.WIFI -> "Wi-Fi"
-        DnsNetworkType.CELLULAR -> "סלולרי"
-        DnsNetworkType.OTHER -> "אחר"
-        DnsNetworkType.NONE -> "אין חיבור"
-    }
-
-    private fun dnsResolutionLabel(ok: Boolean?): String = when (ok) {
-        true -> "כן"
-        false -> "לא"
-        null -> "טרם נבדק"
-    }
-
-    /** Deliberately just three outcomes for the customer, matching the design
-     * spec exactly - the admin panel shows the full four-state detail instead. */
-    private fun dnsFailSafeLabel(state: DnsFailSafeState, mode: DnsMode): String = when {
-        mode == DnsMode.ERROR -> "תקלה"
-        state == DnsFailSafeState.ROLLED_BACK -> "בוצע rollback"
-        state == DnsFailSafeState.RECOVERING -> "בתהליך התאוששות"
-        else -> "תקין"
-    }
-
-    private fun dnsUpdatedLabel(lastCheckAt: Long?): String {
-        if (lastCheckAt == null) return "טרם נבדק"
-        val minutes = ((System.currentTimeMillis() - lastCheckAt) / 60000).toInt()
-        return when {
-            minutes < 1 -> "לפני פחות מדקה"
-            minutes < 60 -> "לפני $minutes דקות"
-            else -> "לפני ${minutes / 60} שעות"
-        }
-    }
-
-    /** Same rebuild-in-place idea as refreshLastSyncLabelIfShown() - a no-op
-     * if some other tab is showing when the DNS toggle's own action finishes. */
     private fun refreshPersonalAreaIfShown() {
         if (isPersonalAreaActive) showPersonalArea()
     }
 
-    // ---------- "חדשות ועדכונים" ----------
+    // ---------------------------------------------------------------------
+    // News - functionality preserved
+    // ---------------------------------------------------------------------
 
-    /** Renders whatever is currently cached in newsItems immediately (so
-     * opening this tab never shows a blank/loading screen), then kicks a
-     * background refresh - same cache-first pattern as the app store tab's
-     * approvedApps()/Config.appCatalog(). */
     private fun showNews() {
         isPersonalAreaActive = false
         isNewsActive = true
@@ -1539,28 +1240,13 @@ class CustomerActivity : Activity() {
 
     private fun renderNewsList() {
         contentArea.removeAllViews()
-        // Requirement: the screen must work with zero updates too - a plain
-        // empty state, never an error, same MUTED-centered-text convention
-        // as "עדיין לא אושרו אפליקציות למכשיר זה" elsewhere in this file.
         if (newsItems.isEmpty()) {
-            contentArea.addView(TextView(this).apply {
-                text = "אין עדכונים כרגע"
-                textSize = 14f
-                typeface = mediumFont
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.CENTER
-                setPadding(0, dp(40), 0, 0)
-            })
+            contentArea.addView(loadingText("אין עדכונים כרגע"))
             return
         }
         newsItems.forEach { item -> contentArea.addView(newsCard(item)) }
     }
 
-    /** Background GET against the dedicated /updates endpoint (never folded
-     * into PolicySync's main sync - see ApiClient.fetchUpdates). Best-effort:
-     * a failed refresh silently keeps showing whatever was already cached/
-     * rendered rather than replacing it with an error - the cache (or the
-     * empty state above) is always a valid thing to show offline. */
     private fun refreshNews() {
         val deviceId = Config.deviceId(this)
         val serverUrl = Config.serverUrl(this)
@@ -1574,119 +1260,74 @@ class CustomerActivity : Activity() {
                     updateNewsBadge()
                     if (isNewsActive) renderNewsList()
                 }
-            } catch (e: Exception) {
-                // Offline/server error - the tab already shows the last
-                // known-good cache (or the empty state), which stays as-is.
-            }
+            } catch (_: Exception) {}
         }.start()
     }
 
-    /** Small red dot on the bottom-nav icon, visible whenever at least one
-     * cached update hasn't been opened yet (see Config.isUpdateRead). */
     private fun updateNewsBadge() {
         val hasUnread = newsItems.any { !Config.isUpdateRead(this, it.id) }
         newsNavItem.badge.visibility = if (hasUnread) View.VISIBLE else View.GONE
     }
 
-    /** Marking as read happens here - the moment the customer actually opens
-     * an update for full reading, not merely from it appearing in the list
-     * (which would make the "new" indicator disappear before it was ever
-     * actually seen). Read-state is local-only, per this feature's own
-     * scope - see Config.markUpdateRead. */
     private fun showNewsDetail(item: UpdateItem) {
         Config.markUpdateRead(this, item.id)
         updateNewsBadge()
         contentArea.removeAllViews()
-
         contentArea.addView(TextView(this).apply {
             text = "→ חזרה"
             textSize = 13f
             typeface = mediumFont
             setTextColor(Color.parseColor(ACCENT))
             gravity = Gravity.RIGHT
-            setPadding(dp(2), 0, dp(2), dp(18))
+            setPadding(dp(2), 0, dp(2), dp(16))
             isClickable = true
-            isFocusable = true
             setOnClickListener { showNews() }
         })
-
-        if (item.pinned) {
-            contentArea.addView(
-                newsBadge("★ חשוב", "#FBEEDD", "#A5661D"),
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(10) }
-            )
-        }
-
+        if (item.pinned) contentArea.addView(newsBadge("★ חשוב", "#F8ECD1", "#956A20"))
         contentArea.addView(TextView(this).apply {
             text = item.title
             textSize = 19f
             typeface = heavyFont
             setTextColor(Color.parseColor(TEXT))
             gravity = Gravity.RIGHT
-            setPadding(0, 0, 0, dp(6))
+            setPadding(0, dp(8), 0, dp(5))
         })
-
         contentArea.addView(TextView(this).apply {
             text = formatUpdateDate(item.publishedAt)
             textSize = 12f
             typeface = mediumFont
             setTextColor(Color.parseColor(MUTED))
             gravity = Gravity.RIGHT
-            setPadding(0, 0, 0, dp(18))
+            setPadding(0, 0, 0, dp(15))
         })
-
-        // Plain TextView.text assignment - never Html.fromHtml or a WebView -
-        // so admin-authored body content is always rendered as literal text,
-        // exactly what the server stores (see backend/index.js's
-        // customer-updates validation: title/body are stored/returned as
-        // plain strings, no markup interpretation anywhere in this pipeline).
         val detailCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = flatRounded("#DFF1D8", dp(18).toFloat())
-            setPadding(dp(16), dp(14), dp(16), dp(12))
+            background = cardBackground()
+            setPadding(dp(15), dp(14), dp(15), dp(13))
             addView(TextView(this@CustomerActivity).apply {
                 text = item.body
-                textSize = 15f
+                textSize = 14.5f
                 typeface = mediumFont
                 setTextColor(Color.parseColor(TEXT))
                 gravity = Gravity.RIGHT
-                setLineSpacing(dp(4).toFloat(), 1f)
+                setLineSpacing(dp(3).toFloat(), 1f)
             })
         }
-        addNewsMedia(detailCard, item, detail = true)
-        contentArea.addView(
-            detailCard,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginStart = dp(34)
-                bottomMargin = dp(14)
-            }
-        )
+        addNewsMedia(detailCard, item, true)
+        contentArea.addView(detailCard)
     }
 
     private fun newsCard(item: UpdateItem): LinearLayout {
         val isRead = Config.isUpdateRead(this, item.id)
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
-            background = flatRounded("#DFF1D8", dp(18).toFloat())
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginStart = dp(34)
-                bottomMargin = dp(14)
-            }
+            background = cardBackground()
+            setPadding(dp(15), dp(14), dp(15), dp(14))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(11) }
             isClickable = true
-            isFocusable = true
-
             addView(LinearLayout(this@CustomerActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-
                 addView(TextView(this@CustomerActivity).apply {
                     text = item.title
                     textSize = 15f
@@ -1695,25 +1336,9 @@ class CustomerActivity : Activity() {
                     gravity = Gravity.RIGHT
                     maxLines = 2
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-                if (!isRead) {
-                    addView(
-                        newsBadge("חדש", ACCENT_TINT, ACCENT),
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply { marginStart = dp(6) }
-                    )
-                }
-                if (item.pinned) {
-                    addView(
-                        newsBadge("★", "#FBEEDD", "#A5661D"),
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply { marginStart = dp(6) }
-                    )
-                }
+                if (!isRead) addView(newsBadge("חדש", ACCENT_TINT, ACCENT))
+                if (item.pinned) addView(newsBadge("★", "#F8ECD1", "#956A20"))
             })
-
             addView(TextView(this@CustomerActivity).apply {
                 text = item.body
                 textSize = 13f
@@ -1724,18 +1349,15 @@ class CustomerActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 setPadding(0, dp(6), 0, 0)
             })
-
-            addNewsMedia(this, item, detail = false)
-
+            addNewsMedia(this, item, false)
             addView(TextView(this@CustomerActivity).apply {
                 text = formatUpdateDate(item.publishedAt)
                 textSize = 11f
                 typeface = mediumFont
                 setTextColor(Color.parseColor(MUTED))
                 gravity = Gravity.LEFT
-                setPadding(0, dp(8), 0, 0)
+                setPadding(0, dp(7), 0, 0)
             })
-
             setOnClickListener { showNewsDetail(item) }
         }
     }
@@ -1748,56 +1370,39 @@ class CustomerActivity : Activity() {
                     adjustViewBounds = true
                     minimumHeight = dp(if (detail) 260 else 170)
                     scaleType = ImageView.ScaleType.FIT_CENTER
-                    setBackgroundColor(Color.parseColor("#F7F7F4"))
+                    setBackgroundColor(Color.parseColor(CARD_SOFT))
                     setPadding(dp(4), dp(4), dp(4), dp(4))
                 }
-                container.addView(
-                    image,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { topMargin = dp(14) }
-                )
+                container.addView(image, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
                 Thread {
                     val bitmap = loadNewsImageSafely(mediaUrl)
-                    if (bitmap != null && !isFinishing) {
-                        runOnUiThread { image.setImageBitmap(bitmap) }
-                    }
+                    if (bitmap != null && !isFinishing) runOnUiThread { image.setImageBitmap(bitmap) }
                 }.start()
             }
             "VIDEO" -> {
                 if (!detail) {
                     container.addView(TextView(this).apply {
-                        text = "🎬 סרטון מצורף · לחץ לצפייה"
+                        text = "▶ סרטון מצורף · לחץ לצפייה"
                         textSize = 12.5f
                         typeface = mediumFont
                         setTextColor(Color.parseColor(ACCENT))
                         gravity = Gravity.RIGHT
-                        background = flatRounded(ACCENT_TINT, dp(12).toFloat())
-                        setPadding(dp(12), dp(9), dp(12), dp(9))
-                    }, LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { topMargin = dp(12) })
+                        background = rounded(ACCENT_TINT, 11)
+                        setPadding(dp(11), dp(8), dp(11), dp(8))
+                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
                     return
                 }
-
                 val play = TextView(this).apply {
                     text = "▶ נגן סרטון"
                     textSize = 13.5f
                     typeface = heavyFont
                     setTextColor(Color.WHITE)
                     gravity = Gravity.CENTER
-                    background = flatRounded(ACCENT, dp(12).toFloat())
-                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    background = rounded(ACCENT, 12)
+                    setPadding(dp(13), dp(11), dp(13), dp(11))
                     isClickable = true
-                    isFocusable = true
                 }
-                container.addView(play, LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(14) })
-
+                container.addView(play, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
                 play.setOnClickListener {
                     play.isEnabled = false
                     play.text = "טוען סרטון..."
@@ -1814,18 +1419,11 @@ class CustomerActivity : Activity() {
                             play.isEnabled = true
                             play.visibility = View.VISIBLE
                             play.text = "▶ נסה שוב"
-                            Toast.makeText(
-                                this@CustomerActivity,
-                                "לא ניתן לנגן את הסרטון כרגע",
-                                Toast.LENGTH_LONG
-                            ).show()
+                            Toast.makeText(this@CustomerActivity, "לא ניתן לנגן את הסרטון כרגע", Toast.LENGTH_LONG).show()
                             true
                         }
                     }
-                    container.addView(video, LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(240)
-                    ).apply { topMargin = dp(10) })
+                    container.addView(video, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(240)).apply { topMargin = dp(9) })
                     video.requestFocus()
                 }
             }
@@ -1871,126 +1469,55 @@ class CustomerActivity : Activity() {
             textSize = 10.5f
             typeface = mediumFont
             setTextColor(Color.parseColor(fg))
-            background = flatRounded(bg, dp(10).toFloat())
+            background = rounded(bg, 10)
             setPadding(dp(8), dp(3), dp(8), dp(3))
             gravity = Gravity.CENTER
         }
     }
 
-    private fun formatUpdateDate(iso: String): String {
-        return try {
-            val millis = Instant.parse(iso).toEpochMilli()
-            SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("he", "IL")).format(java.util.Date(millis))
-        } catch (e: Exception) {
-            iso
+    // ---------------------------------------------------------------------
+    // Shared helpers
+    // ---------------------------------------------------------------------
+
+    private fun styledInput(hintText: String, multiLine: Boolean): EditText {
+        return EditText(this).apply {
+            hint = hintText
+            textSize = 14f
+            setTextColor(Color.parseColor(TEXT))
+            setHintTextColor(Color.parseColor(MUTED))
+            gravity = if (multiLine) Gravity.TOP or Gravity.RIGHT else Gravity.CENTER_VERTICAL or Gravity.RIGHT
+            inputType = if (multiLine) {
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            } else InputType.TYPE_CLASS_TEXT
+            if (!multiLine) setSingleLine(true) else {
+                minLines = 5
+                maxLines = 10
+            }
+            background = rounded(CARD_SOFT, 12)
+            setPadding(dp(13), dp(11), dp(13), dp(11))
         }
     }
 
-    private fun identityCard(subtitle: String): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(18), dp(20), dp(18))
-            background = roundedCardWithBorder()
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, dp(10), 0, dp(16)) }
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = "י"
-                textSize = 18f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(ACCENT))
-                gravity = Gravity.CENTER
-                background = flatCircle(ACCENT_TINT)
-                layoutParams = LinearLayout.LayoutParams(dp(46), dp(46)).apply {
-                    marginStart = dp(14)
-                }
-            })
-
-            addView(LinearLayout(this@CustomerActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.RIGHT
-                addView(TextView(this@CustomerActivity).apply {
-                    text = "יהודי כשר"
-                    textSize = 16f
-                    typeface = heavyFont
-                    setTextColor(Color.parseColor(TEXT))
-                    gravity = Gravity.RIGHT
-                })
-                addView(TextView(this@CustomerActivity).apply {
-                    text = subtitle
-                    textSize = 12.5f
-                    typeface = mediumFont
-                    setTextColor(Color.parseColor(MUTED))
-                    gravity = Gravity.RIGHT
-                    setPadding(0, dp(2), 0, 0)
-                })
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+    private fun loadingText(textValue: String): TextView {
+        return TextView(this).apply {
+            text = textValue
+            textSize = 14f
+            typeface = mediumFont
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(28), dp(8), dp(28))
         }
     }
 
-    private fun statusCard(): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = roundedCardWithBorder()
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 0, dp(14)) }
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = "✓"
-                textSize = 24f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(ACCENT))
-                gravity = Gravity.CENTER
-                background = flatCircle(ACCENT_TINT)
-                layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
-                    marginStart = dp(16)
-                }
-            })
-
-            addView(LinearLayout(this@CustomerActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.RIGHT
-                addView(TextView(this@CustomerActivity).apply {
-                    text = "המנוי שלך"
-                    textSize = 13f
-                    typeface = mediumFont
-                    setTextColor(Color.parseColor(MUTED))
-                    gravity = Gravity.RIGHT
-                })
-                addView(TextView(this@CustomerActivity).apply {
-                    text = "פעיל"
-                    textSize = 26f
-                    typeface = heavyFont
-                    setTextColor(Color.parseColor(TEXT))
-                    gravity = Gravity.RIGHT
-                    setPadding(0, dp(4), 0, 0)
-                })
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        }
-    }
-
-    /** Rebuilds the personal-area tab so its "last synced" row picks up a
-     * sync that just completed via the header badge - a no-op if some other
-     * tab is showing. */
-    private fun refreshLastSyncLabelIfShown() {
-        if (isPersonalAreaActive) showPersonalArea()
-    }
-
-    private fun lastSyncLabel(): String {
-        val last = Config.lastSyncAt(this)
-        if (last == 0L) return "טרם סונכרן"
-        val minutes = ((System.currentTimeMillis() - last) / 60000).toInt()
-        return when {
-            minutes < 1 -> "עדכון אחרון: הרגע"
-            minutes < 60 -> "עדכון אחרון: לפני $minutes דקות"
-            else -> "עדכון אחרון: לפני ${minutes / 60} שעות"
+    private fun primaryButton(label: String, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            textSize = 14.5f
+            isAllCaps = false
+            typeface = heavyFont
+            setTextColor(Color.WHITE)
+            background = rounded(ACCENT, 14)
+            setOnClickListener { onClick() }
         }
     }
 
@@ -1999,126 +1526,84 @@ class CustomerActivity : Activity() {
             text = title
             textSize = 13.5f
             typeface = mediumFont
-            letterSpacing = 0.04f
             setTextColor(Color.parseColor(MUTED))
             gravity = Gravity.RIGHT
-            setPadding(dp(2), dp(18), dp(2), dp(10))
+            setPadding(dp(3), dp(18), dp(3), dp(9))
         }
     }
 
-    /** Icon, label, value triples rendered as rows inside one shared card. */
-    private fun infoRowCard(rows: List<Triple<String, String, String>>): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = roundedCardWithBorder()
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 0, 0, dp(4)) }
-
-            rows.forEachIndexed { index, (icon, label, value) ->
-                addView(infoRow(icon, label, value))
-                if (index < rows.size - 1) {
-                    addView(View(this@CustomerActivity).apply {
-                        setBackgroundColor(Color.parseColor(BORDER))
-                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                        marginStart = dp(20)
-                        marginEnd = dp(20)
-                    })
-                }
+    private fun compactSubscriptionDate(raw: String): String {
+        return try {
+            java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")
+                .withZone(java.time.ZoneId.systemDefault())
+                .format(java.time.Instant.parse(raw))
+        } catch (_: Exception) {
+            raw.take(10).split('-').let { parts ->
+                if (parts.size == 3) "${parts[2]}/${parts[1]}/${parts[0]}" else raw
             }
         }
     }
 
-    private fun infoRow(icon: String, label: String, value: String): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = icon
-                textSize = 15f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(ACCENT))
-                gravity = Gravity.CENTER
-                background = flatCircle(ACCENT_TINT)
-                layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply {
-                    marginStart = dp(14)
-                }
-            })
-
-            addView(LinearLayout(this@CustomerActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.RIGHT
-                addView(TextView(this@CustomerActivity).apply {
-                    text = label
-                    textSize = 12.5f
-                    typeface = mediumFont
-                    setTextColor(Color.parseColor(MUTED))
-                    gravity = Gravity.RIGHT
-                })
-                addView(TextView(this@CustomerActivity).apply {
-                    text = value
-                    textSize = 16.5f
-                    typeface = heavyFont
-                    setTextColor(Color.parseColor(TEXT))
-                    gravity = Gravity.RIGHT
-                    setPadding(0, dp(3), 0, 0)
-                })
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+    private fun lastSyncLabelCompact(): String {
+        val last = Config.lastSyncAt(this)
+        if (last == 0L) return "טרם סונכרן"
+        val minutes = ((System.currentTimeMillis() - last) / 60000).toInt()
+        return when {
+            minutes < 1 -> "הרגע"
+            minutes < 60 -> "לפני $minutes דקות"
+            else -> "לפני ${minutes / 60} שעות"
         }
     }
 
-    private fun primaryButton(label: String, onClick: () -> Unit): Button {
-        return Button(this).apply {
-            text = label
-            textSize = 15f
-            isAllCaps = false
-            typeface = mediumFont
-            setTextColor(Color.WHITE)
-            background = flatRounded(ACCENT, dp(14).toFloat())
-            setPadding(dp(18), dp(14), dp(18), dp(14))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(56)
-            ).apply { setMargins(0, dp(4), 0, 0) }
-            setOnClickListener { onClick() }
+    private fun refreshLastSyncLabelIfShown() {
+        if (isPersonalAreaActive) showPersonalArea()
+    }
+
+    private fun formatUpdateDate(iso: String): String {
+        return try {
+            val millis = Instant.parse(iso).toEpochMilli()
+            SimpleDateFormat("dd/MM/yyyy HH:mm", Locale("he", "IL")).format(java.util.Date(millis))
+        } catch (_: Exception) { iso }
+    }
+
+    private fun cardBackground(): GradientDrawable = roundedBordered(CARD, BORDER, 17, 1)
+
+    private fun featuredCardBackground(): GradientDrawable {
+        return GradientDrawable().apply {
+            orientation = GradientDrawable.Orientation.TL_BR
+            colors = intArrayOf(
+                Color.parseColor("#F8F7EE"),
+                Color.parseColor("#EEF1DF"),
+                Color.parseColor("#FFFDFC")
+            )
+            cornerRadius = dp(18).toFloat()
+            setStroke(dp(1), Color.parseColor("#E3DCCB"))
         }
     }
 
-    private fun flatCircle(color: String): GradientDrawable {
+    private fun circle(color: String): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(Color.parseColor(color))
         }
     }
 
-    private fun flatRounded(color: String, radius: Float): GradientDrawable {
+    private fun rounded(color: String, radiusDp: Int): GradientDrawable {
         return GradientDrawable().apply {
             setColor(Color.parseColor(color))
-            cornerRadius = radius
+            cornerRadius = dp(radiusDp).toFloat()
         }
     }
 
-    private fun flatRoundedBordered(fill: String, border: String, radius: Float): GradientDrawable {
+    private fun roundedBordered(fill: String, border: String, radiusDp: Int, strokeDp: Int): GradientDrawable {
         return GradientDrawable().apply {
             setColor(Color.parseColor(fill))
-            setStroke(dp(2), Color.parseColor(border))
-            cornerRadius = radius
+            cornerRadius = dp(radiusDp).toFloat()
+            setStroke(dp(strokeDp), Color.parseColor(border))
         }
     }
 
-    private fun roundedCardWithBorder(): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(Color.parseColor(CARD))
-            setStroke(dp(1), Color.parseColor(BORDER))
-            cornerRadius = dp(16).toFloat()
-        }
-    }
+    private fun Int.toHex(): String = String.format("#%06X", 0xFFFFFF and this)
 
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
-    }
-
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
