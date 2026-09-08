@@ -23,7 +23,6 @@
 .support-reply-compose { background:#fff; }
 .support-ticket-actions { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
 @media (max-width:720px) {
-  body { padding-bottom:calc(220px + env(safe-area-inset-bottom)); }
   .support-ticket-controls { grid-template-columns:1fr; }
   .support-toolbar { align-items:stretch; flex-direction:column; }
   .support-filter { max-width:none; }

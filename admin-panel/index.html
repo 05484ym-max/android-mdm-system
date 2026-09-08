@@ -24,14 +24,50 @@
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
-    padding: 20px 20px 100px; direction: rtl;
+    padding: 20px 20px 32px; direction: rtl;
   }
   header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
+  .header-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
   h1 { font-size: 1.4rem; color: var(--text); margin: 0; font-weight: 800; }
   .refresh-btn {
     background: var(--card-bg); border: 1px solid var(--card-border); color: var(--accent);
     border-radius: 50%; width: 40px; height: 40px; font-size: 1.1rem; cursor: pointer;
+    flex-shrink: 0;
   }
+  .menu-toggle-btn {
+    background: var(--card-bg); border: 1px solid var(--card-border); color: var(--text);
+    border-radius: 14px; width: 44px; height: 44px; font-size: 1.25rem; cursor: pointer;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  }
+  .menu-toggle-btn:active { background: var(--accent-tint); }
+
+  /* Side drawer navigation - opens right-to-left (anchored to the right
+     edge, since the whole panel is RTL) with a soft overlay behind it.
+     Reuses the existing .nav-btn buttons unchanged (same class/data-tab),
+     just laid out as a vertical list instead of the old bottom bar. */
+  .drawer-overlay {
+    position: fixed; inset: 0; background: rgba(28,28,28,0.4); z-index: 49;
+    opacity: 0; visibility: hidden; transition: opacity 0.22s ease;
+  }
+  .drawer-overlay.open { opacity: 1; visibility: visible; }
+  .side-drawer {
+    position: fixed; top: 0; bottom: 0; right: 0; z-index: 50;
+    width: 82%; max-width: 300px; background: var(--card-bg);
+    box-shadow: -8px 0 28px rgba(0,0,0,0.12);
+    transform: translateX(100%); transition: transform 0.24s ease;
+    display: flex; flex-direction: column; overflow-y: auto;
+  }
+  .side-drawer.open { transform: translateX(0); }
+  .side-drawer-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 18px 14px; border-bottom: 1px solid var(--card-border);
+  }
+  .side-drawer-title { font-size: 1.05rem; font-weight: 800; color: var(--text); }
+  .drawer-close-btn {
+    background: var(--bg); border: 1px solid var(--card-border); color: var(--text-dim);
+    border-radius: 10px; width: 36px; height: 36px; font-size: 1rem; cursor: pointer;
+  }
+  .side-drawer-nav { display: flex; flex-direction: column; gap: 4px; padding: 10px; }
   .login-screen {
     position: fixed; inset: 0; background: var(--bg); z-index: 20;
     display: none; align-items: center; justify-content: center;
@@ -299,21 +335,53 @@
   .tab-content { display: none; max-width: 720px; margin: 0 auto; }
   .tab-content.active { display: block; }
 
-  .bottom-nav {
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 15;
-    background: var(--card-bg); border-top: 1px solid var(--card-border);
-    display: flex; justify-content: space-around; align-items: center;
-    padding: 10px 8px calc(10px + env(safe-area-inset-bottom));
-    box-shadow: 0 -2px 12px rgba(0,0,0,0.04);
+  /* Device row: one clear primary action + a "more" menu for the rest,
+     instead of 2-3 buttons of equal visual weight side by side. */
+  .row-more-wrap { position: relative; }
+  .row-more-btn {
+    background: var(--card-bg); border: 1px solid var(--card-border); color: var(--text-dim);
+    border-radius: 10px; width: 40px; height: 40px; font-size: 1.1rem; cursor: pointer;
+    line-height: 1;
   }
+  .row-more-menu {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 16;
+    min-width: 200px; background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); overflow: hidden;
+    padding: 6px;
+  }
+  .row-more-menu.open { display: block; }
+  .row-more-menu button {
+    display: block; width: 100%; text-align: right; background: none; border: none;
+    padding: 11px 12px; border-radius: 9px; font-family: inherit; font-size: 0.85rem;
+    font-weight: 600; color: var(--text); cursor: pointer;
+  }
+  .row-more-menu button:active { background: var(--bg); }
+  .row-more-menu button.danger-item { color: var(--danger); }
+
+  /* Danger-zone grouping: dangerous actions get their own visually distinct
+     block instead of sitting flush against normal buttons. Reuses the
+     existing --danger token only - no new colors. */
+  .danger-zone-block {
+    margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(179,67,44,0.3);
+  }
+  .danger-zone-label {
+    font-size: 0.72rem; font-weight: 700; color: var(--danger); margin-bottom: 8px;
+    text-transform: uppercase; letter-spacing: 0.02em;
+  }
+  .detail-section-danger { border-color: rgba(179,67,44,0.3); }
+  .detail-section-danger h3 { color: var(--danger); }
+
   .nav-btn {
     background: none; border: none; cursor: pointer; font-family: inherit;
-    display: flex; flex-direction: column; align-items: center; gap: 4px;
-    padding: 8px 18px; border-radius: 16px; color: var(--text-dim);
+    display: flex; flex-direction: row; align-items: center; gap: 14px;
+    width: 100%; padding: 13px 14px; border-radius: 14px; color: var(--text);
+    text-align: right; font-size: 0.95rem; font-weight: 600;
   }
-  .nav-btn .nav-icon { font-size: 1.3rem; line-height: 1; }
-  .nav-btn .nav-label { font-size: 0.72rem; font-weight: 600; }
+  .nav-btn .nav-icon { font-size: 1.25rem; line-height: 1; width: 1.4em; text-align: center; flex-shrink: 0; }
+  .nav-btn .nav-label { font-size: 0.92rem; font-weight: 600; }
   .nav-btn.active { background: var(--accent-tint); color: var(--accent); }
+  .nav-btn:active { background: var(--bg); }
+  .nav-btn.active:active { background: var(--accent-tint); }
 </style>
 <link rel="stylesheet" href="health.css">
 <link rel="stylesheet" href="diagnostics.css">
@@ -334,9 +402,50 @@
 </div>
 
 <header>
-  <h1>יהודי כשר — לוח בקרה</h1>
+  <div class="header-right">
+    <button id="menuToggleBtn" class="menu-toggle-btn" aria-label="פתח תפריט" aria-expanded="false" aria-controls="sideDrawer">☰</button>
+    <h1>יהודי כשר — לוח בקרה</h1>
+  </div>
   <button class="refresh-btn" onclick="loadDevices()">⟳</button>
 </header>
+
+<div id="drawerOverlay" class="drawer-overlay"></div>
+<aside id="sideDrawer" class="side-drawer" aria-hidden="true">
+  <div class="side-drawer-head">
+    <span class="side-drawer-title">תפריט</span>
+    <button id="drawerCloseBtn" class="drawer-close-btn" aria-label="סגור תפריט">✕</button>
+  </div>
+  <nav class="side-drawer-nav" id="sideDrawerNav">
+    <button class="nav-btn" data-tab="enroll">
+      <span class="nav-icon">✚</span>
+      <span class="nav-label">רישום מכשיר</span>
+    </button>
+    <button class="nav-btn" data-tab="catalog">
+      <span class="nav-icon">▦</span>
+      <span class="nav-label">חנות אפליקציות</span>
+    </button>
+    <button class="nav-btn active" data-tab="customers">
+      <span class="nav-icon">👤</span>
+      <span class="nav-label">לקוחות</span>
+    </button>
+    <button class="nav-btn" data-tab="health">
+      <span class="nav-icon">🩺</span>
+      <span class="nav-label">בריאות מכשירים</span>
+    </button>
+    <button class="nav-btn" data-tab="alerts">
+      <span class="nav-icon">🔔</span>
+      <span class="nav-label">התראות</span>
+    </button>
+    <button class="nav-btn" data-tab="support">
+      <span class="nav-icon">💬</span>
+      <span class="nav-label">תמיכה</span>
+    </button>
+    <button class="nav-btn" data-tab="news">
+      <span class="nav-icon">📰</span>
+      <span class="nav-label">חדשות ועדכונים</span>
+    </button>
+  </nav>
+</aside>
 
 <div class="quick-search-card">
   <input class="search-input" id="quickCustomerSearch"
@@ -477,37 +586,6 @@
   </div>
 </div>
 
-<nav class="bottom-nav">
-  <button class="nav-btn" data-tab="enroll">
-    <span class="nav-icon">✚</span>
-    <span class="nav-label">רישום מכשיר</span>
-  </button>
-  <button class="nav-btn" data-tab="catalog">
-    <span class="nav-icon">▦</span>
-    <span class="nav-label">חנות אפליקציות</span>
-  </button>
-  <button class="nav-btn active" data-tab="customers">
-    <span class="nav-icon">👤</span>
-    <span class="nav-label">לקוחות</span>
-  </button>
-  <button class="nav-btn" data-tab="health">
-    <span class="nav-icon">🩺</span>
-    <span class="nav-label">בריאות מכשירים</span>
-  </button>
-  <button class="nav-btn" data-tab="alerts">
-    <span class="nav-icon">🔔</span>
-    <span class="nav-label">התראות</span>
-  </button>
-  <button class="nav-btn" data-tab="support">
-    <span class="nav-icon">💬</span>
-    <span class="nav-label">תמיכה</span>
-  </button>
-  <button class="nav-btn" data-tab="news">
-    <span class="nav-icon">📰</span>
-    <span class="nav-label">חדשות ועדכונים</span>
-  </button>
-</nav>
-
 <div id="deviceDetailView" class="detail-view">
   <div class="detail-header">
     <button class="back-btn" id="detailBackBtn">→ חזרה לרשימה</button>
@@ -577,6 +655,42 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     window.scrollTo(0, 0);
   });
 });
+
+/* Hamburger side-drawer: purely a presentation layer on top of the
+ * existing .nav-btn buttons above - it doesn't touch tab-switching logic
+ * (or the per-tab load listeners other scripts attach to the same
+ * buttons), it just opens/closes the panel they now live in. */
+(function () {
+  const toggleBtn = document.getElementById('menuToggleBtn');
+  const drawer = document.getElementById('sideDrawer');
+  const overlay = document.getElementById('drawerOverlay');
+  const closeBtn = document.getElementById('drawerCloseBtn');
+  if (!toggleBtn || !drawer || !overlay || !closeBtn) return;
+
+  function openDrawer() {
+    drawer.classList.add('open');
+    overlay.classList.add('open');
+    toggleBtn.setAttribute('aria-expanded', 'true');
+    drawer.setAttribute('aria-hidden', 'false');
+  }
+  function closeDrawer() {
+    drawer.classList.remove('open');
+    overlay.classList.remove('open');
+    toggleBtn.setAttribute('aria-expanded', 'false');
+    drawer.setAttribute('aria-hidden', 'true');
+  }
+  toggleBtn.addEventListener('click', () => {
+    if (drawer.classList.contains('open')) closeDrawer(); else openDrawer();
+  });
+  closeBtn.addEventListener('click', closeDrawer);
+  overlay.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeDrawer();
+  });
+  document.querySelectorAll('#sideDrawerNav .nav-btn').forEach(btn => {
+    btn.addEventListener('click', closeDrawer);
+  });
+})();
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({
@@ -812,8 +926,13 @@ function renderDeviceList(devices) {
         </div>
         <div class="device-actions">
           <button class="open-detail-btn" data-open-detail="${id}">פרטי לקוח</button>
-          <button class="open-detail-btn" data-delete-device="${id}">הסר מהפאנל</button>
-          <button class="open-detail-btn" data-release-device="${id}">שחרור מכשיר לצמיתות</button>
+          <div class="row-more-wrap">
+            <button type="button" class="row-more-btn" data-row-more-toggle aria-label="פעולות נוספות" aria-haspopup="true" aria-expanded="false">⋮</button>
+            <div class="row-more-menu">
+              <button type="button" data-delete-device="${id}">הסר מהפאנל</button>
+              <button type="button" class="danger-item" data-release-device="${id}">שחרור מכשיר לצמיתות</button>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -900,6 +1019,34 @@ function renderDeviceList(devices) {
     });
   });
 
+
+/* "More" menu per device row - pure presentation, delegated so it survives
+ * every re-render of #devicesList. The delete/release buttons inside it
+ * keep their original data-attributes, so the existing (and the
+ * permanent-release.js capture-phase override for release) handlers keep
+ * working exactly as before; this only opens/closes the little dropdown. */
+document.getElementById('devicesList').addEventListener('click', e => {
+  const toggle = e.target.closest('[data-row-more-toggle]');
+  if (toggle) {
+    const menu = toggle.closest('.row-more-wrap').querySelector('.row-more-menu');
+    const wasOpen = menu.classList.contains('open');
+    document.querySelectorAll('.row-more-menu.open').forEach(m => m.classList.remove('open'));
+    document.querySelectorAll('[data-row-more-toggle][aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+    if (!wasOpen) {
+      menu.classList.add('open');
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+    return;
+  }
+  if (e.target.closest('.row-more-menu')) {
+    e.target.closest('.row-more-menu').classList.remove('open');
+  }
+});
+document.addEventListener('click', e => {
+  if (e.target.closest('.row-more-wrap')) return;
+  document.querySelectorAll('.row-more-menu.open').forEach(m => m.classList.remove('open'));
+  document.querySelectorAll('[data-row-more-toggle][aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+});
 
 function openDeviceDetail(deviceId) {
   currentDetailDeviceId = deviceId;
@@ -1005,7 +1152,6 @@ function renderDeviceDetail(deviceId) {
         <button class="cmd-btn" data-cmd="REBOOT">הפעלה מחדש</button>
         <button class="cmd-btn" data-cmd="OPEN_DEBUGGING_TEMP">פתח ניפוי באגים זמנית</button>
         <button class="cmd-btn" id="detailRecoveryCode">קוד שחזור</button>
-        <button class="cmd-btn cmd-danger" data-cmd="WIPE">מחיקת מכשיר</button>
       </div>
       <div class="add-app-row">
         <input class="package-input" id="detailApkUrl" placeholder="https://example.com/app.apk" />
@@ -1016,6 +1162,12 @@ function renderDeviceDetail(deviceId) {
         <button class="add-app-btn" id="detailUninstall">הסר</button>
       </div>
       <div class="cmd-log">${cmdLog}</div>
+      <div class="danger-zone-block">
+        <div class="danger-zone-label">פעולה בלתי הפיכה</div>
+        <div class="cmd-actions">
+          <button class="cmd-btn cmd-danger" data-cmd="WIPE">מחיקת מכשיר</button>
+        </div>
+      </div>
     </div>
   `;
 
