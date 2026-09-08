@@ -1,0 +1,21 @@
+{
+  "name": "יהודי כשר — פאנל ניהול",
+  "short_name": "יהודי כשר ניהול",
+  "description": "פאנל הניהול של מערכת יהודי כשר",
+  "lang": "he",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#173D20",
+  "theme_color": "#173D20",
+  "icons": [
+    {
+      "src": "/admin-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
