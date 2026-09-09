@@ -23,11 +23,20 @@ object PolicySync {
 
         val deviceId = Config.deviceId(context)
         val enforcer = PolicyEnforcer(context)
+        val api = ApiClient(serverUrl, deviceToken)
 
-        val result = ApiClient(serverUrl, deviceToken).sync(
+        val result = api.sync(
             deviceId,
             DeviceHealth.collect(context, enforcer.isDeviceOwner()),
         )
+
+        // Universal target lookup is additive and guidance-only. A temporary
+        // failure here must never break the established Device Owner sync path.
+        runCatching {
+            api.fetchProtectionTarget(deviceId)
+        }.onSuccess { target ->
+            RequestedProtectionStore.save(context, target)
+        }
 
         Config.setAllowedApps(context, result.policy.allowedApps)
         Config.setAppCatalog(context, result.catalog)

@@ -233,6 +233,26 @@ class ApiClient(
         )
     }
 
+    /** Fetches the server-owned Universal protection target using the same
+     * authenticated transport path as every other DPC API call. */
+    fun fetchProtectionTarget(deviceId: String): RequestedProtectionTarget {
+        val body = request("GET", "/api/devices/${segment(deviceId)}/protection-target", null)
+        val json = JSONObject(body)
+        return RequestedProtectionTarget(
+            requestedProfile = json.optString("requestedProfile", "HARDENED_ADMIN"),
+            achievedProfile = json.optString("achievedProfile", "BASIC"),
+            protectionSatisfied = json.optBoolean("protectionSatisfied", false),
+            missingCapabilities = json.optJSONArray("missingCapabilities")?.let { array ->
+                (0 until array.length()).mapNotNull { index -> array.optString(index, null) }
+            } ?: emptyList(),
+            nextActions = json.optJSONArray("nextActions")?.let { array ->
+                (0 until array.length()).mapNotNull { index -> array.optString(index, null) }
+            } ?: emptyList(),
+            requiresReprovisioning = json.optBoolean("requiresReprovisioning", false),
+            requiresSystemIntegration = json.optBoolean("requiresSystemIntegration", false),
+        )
+    }
+
     /** "חדשות ועדכונים" - a dedicated, lightweight GET, deliberately not
      * folded into sync()'s payload (see backend/index.js's comment on the
      * device-facing /updates route). Already published-only, pinned-first,

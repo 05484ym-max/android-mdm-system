@@ -7,6 +7,7 @@ const protectionSync = require('./protectionSync');
 const protectionPersistence = require('./protectionPersistence');
 const { installProtectionRuntimeBridge } = require('./protectionRuntimeBridge');
 const { installProtectionAdminRoutes } = require('./protectionAdminRoutes');
+const { installProtectionDeviceRoutes } = require('./protectionDeviceRoutes');
 const { captureExpressApp } = require('./expressAppCapture');
 
 installProtectionRuntimeBridge(db, protectionSync, protectionPersistence);
@@ -16,3 +17,4 @@ installProtectionRuntimeBridge(db, protectionSync, protectionPersistence);
 // full rewrite of the large legacy entry file.
 const app = captureExpressApp(() => require('./index'));
 installProtectionAdminRoutes(app, { db, protectionPersistence });
+installProtectionDeviceRoutes(app, { db, protectionPersistence });
