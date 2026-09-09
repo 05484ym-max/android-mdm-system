@@ -62,7 +62,7 @@ class NonDoSetupPlannerTest {
             ),
             plan.steps,
         )
-        assertEquals("HARDENED_ADMIN", plan.achieved.profile.name)
+        assertEquals("HARDENED_ADMIN", plan.achieved.achievedProfile)
     }
 
     @Test
@@ -74,7 +74,7 @@ class NonDoSetupPlannerTest {
 
         assertTrue(plan.alreadyDeviceOwner)
         assertEquals(listOf(NonDoSetupStep.VERIFY_PROTECTION), plan.steps)
-        assertEquals("DEVICE_OWNER", plan.achieved.profile.name)
+        assertEquals("DEVICE_OWNER", plan.achieved.achievedProfile)
     }
 
     @Test
