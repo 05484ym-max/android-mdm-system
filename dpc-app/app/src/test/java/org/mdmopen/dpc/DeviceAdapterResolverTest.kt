@@ -34,6 +34,20 @@ class DeviceAdapterResolverTest {
     }
 
     @Test
+    fun `resolves Qin 3 Ultra before generic fallback`() {
+        val selection = DeviceAdapterResolver.resolve(profile("qin_3_ultra"))
+        assertEquals("qin.3ultra", selection.adapterId)
+        assertEquals(99, selection.confidence)
+    }
+
+    @Test
+    fun `unknown Qin variant gets Qin generic adapter`() {
+        val selection = DeviceAdapterResolver.resolve(profile("qin_generic"))
+        assertEquals("qin.generic", selection.adapterId)
+        assertEquals(80, selection.confidence)
+    }
+
+    @Test
     fun `unknown OEM falls back to generic AOSP`() {
         val selection = DeviceAdapterResolver.resolve(profile("unknown_skin"))
         assertEquals("aosp.generic", selection.adapterId)
