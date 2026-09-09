@@ -8,10 +8,12 @@ on:
       - 'backend/protectionState.js'
       - 'backend/deviceProtectionRecord.js'
       - 'backend/protectionPersistence.js'
+      - 'backend/protectionSync.js'
       - 'backend/test-device-capabilities.js'
       - 'backend/test-protection-state.js'
       - 'backend/test-device-protection-record.js'
       - 'backend/test-protection-persistence-integration.js'
+      - 'backend/test-protection-sync.js'
       - 'backend/db.js'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/CapabilitySnapshotStore.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceAdapter.kt'
@@ -48,6 +50,9 @@ jobs:
       - name: Run device protection persistence mapping tests
         working-directory: backend
         run: node test-device-protection-record.js
+      - name: Run sync protection service tests
+        working-directory: backend
+        run: node test-protection-sync.js
 
   protection-persistence-integration:
     name: Protection persistence (real PostgreSQL)
