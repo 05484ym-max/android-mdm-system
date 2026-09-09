@@ -26,7 +26,7 @@ data class NonDoSetupPlan(
 object NonDoSetupPlanner {
     fun build(profile: DeviceProfile, adapterId: String): NonDoSetupPlan {
         val capabilities = profile.capabilities
-        val achieved = ProtectionAssessment.from(capabilities)
+        val achieved = ProtectionAssessmentResolver.from(capabilities)
 
         if (DeviceCapability.DEVICE_OWNER in capabilities) {
             return NonDoSetupPlan(
