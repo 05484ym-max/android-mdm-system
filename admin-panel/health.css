@@ -79,6 +79,23 @@
 .protection-chip.muted { color:var(--text-dim); font-weight:600; }
 .protection-empty { margin-top:4px; font-size:0.78rem; color:var(--text-dim); }
 
+.protection-requirements {
+  margin-top:12px; padding:10px; border-radius:10px;
+  background:#FBEEDD; border:1px solid rgba(165,102,29,0.25);
+}
+.protection-requirements.protection-requirements-ok {
+  background:rgba(36,112,74,0.06); border-color:rgba(36,112,74,0.2);
+  color:var(--ok); font-size:0.75rem; font-weight:700;
+}
+.protection-requirements-title { font-size:0.76rem; font-weight:800; color:#8A571B; }
+.protection-missing-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+.protection-missing-chip {
+  display:inline-flex; border-radius:999px; padding:4px 9px;
+  background:var(--card-bg); border:1px solid rgba(165,102,29,0.28);
+  color:#8A571B; font-size:0.7rem; font-weight:700;
+}
+.protection-requirements-note { margin-top:8px; color:var(--text-dim); font-size:0.7rem; line-height:1.45; }
+
 .protection-request-control {
   display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap;
   margin-top:12px; padding-top:10px; border-top:1px solid var(--card-border);
