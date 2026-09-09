@@ -6,8 +6,10 @@ on:
     paths:
       - 'backend/deviceHealth.js'
       - 'backend/protectionState.js'
+      - 'backend/deviceProtectionRecord.js'
       - 'backend/test-device-capabilities.js'
       - 'backend/test-protection-state.js'
+      - 'backend/test-device-protection-record.js'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/CapabilitySnapshotStore.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceAdapter.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceCapability.kt'
@@ -40,6 +42,9 @@ jobs:
       - name: Run requested-vs-achieved protection tests
         working-directory: backend
         run: node test-protection-state.js
+      - name: Run device protection persistence mapping tests
+        working-directory: backend
+        run: node test-device-protection-record.js
 
   android-unit-tests:
     name: Android adapter/setup unit tests
