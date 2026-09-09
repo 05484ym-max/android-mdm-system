@@ -1,0 +1,59 @@
+name: Universal Adapter Tests
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'backend/deviceHealth.js'
+      - 'backend/protectionState.js'
+      - 'backend/test-device-capabilities.js'
+      - 'backend/test-protection-state.js'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/CapabilitySnapshotStore.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceAdapter.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceCapability.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceHealth.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupPlan.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupIntents.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupCoordinator.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/OemSetupNavigator.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/PrivilegeProvider.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/ProtectionAssessment.kt'
+      - 'dpc-app/app/src/test/java/org/mdmopen/dpc/**'
+      - '.github/workflows/universal-adapter-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-pure-tests:
+    name: Backend capability/protection tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run capability payload validation
+        working-directory: backend
+        run: node test-device-capabilities.js
+      - name: Run requested-vs-achieved protection tests
+        working-directory: backend
+        run: node test-protection-state.js
+
+  android-unit-tests:
+    name: Android adapter/setup unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run DPC unit tests
+        working-directory: dpc-app
+        run: ./gradlew testDebugUnitTest --stacktrace
