@@ -19,7 +19,7 @@ object TargetedNonDoSetupPlanner {
         val capabilities = profile.capabilities
         val achieved = ProtectionAssessmentResolver.from(capabilities)
         val owner = DeviceCapability.DEVICE_OWNER in capabilities
-        val privileged = DeviceCapability.PRIV_APP in capabilities
+        val systemEnforcement = DeviceCapability.SYSTEM_ENFORCEMENT in capabilities
 
         if (requested == "SYSTEM_LEVEL") {
             return TargetedNonDoSetupPlan(
@@ -27,7 +27,7 @@ object TargetedNonDoSetupPlanner {
                 adapterId = adapterId,
                 steps = listOf(NonDoSetupStep.VERIFY_PROTECTION),
                 requiresReprovisioning = false,
-                requiresSystemIntegration = !privileged,
+                requiresSystemIntegration = !systemEnforcement,
                 achieved = achieved,
             )
         }
