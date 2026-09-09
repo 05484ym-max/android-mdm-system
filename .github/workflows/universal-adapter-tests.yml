@@ -9,11 +9,15 @@ on:
       - 'backend/deviceProtectionRecord.js'
       - 'backend/protectionPersistence.js'
       - 'backend/protectionSync.js'
+      - 'backend/protectionRuntimeBridge.js'
+      - 'backend/universalEntry.js'
+      - 'backend/package.json'
       - 'backend/test-device-capabilities.js'
       - 'backend/test-protection-state.js'
       - 'backend/test-device-protection-record.js'
       - 'backend/test-protection-persistence-integration.js'
       - 'backend/test-protection-sync.js'
+      - 'backend/test-protection-runtime-bridge.js'
       - 'backend/db.js'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/CapabilitySnapshotStore.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceAdapter.kt'
@@ -58,6 +62,9 @@ jobs:
       - name: Run sync protection service tests
         working-directory: backend
         run: node test-protection-sync.js
+      - name: Run runtime bridge tests
+        working-directory: backend
+        run: node test-protection-runtime-bridge.js
 
   protection-persistence-integration:
     name: Protection persistence (real PostgreSQL)
