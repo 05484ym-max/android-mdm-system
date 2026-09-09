@@ -8,6 +8,8 @@ const UPDATE_STATUSES = ['SUCCESS', 'FAILED', 'SKIPPED'];
 const MAX_NO_LAUNCHER_CANDIDATES = 200;
 const MAX_DETECTED_CAPABILITIES = 32;
 const CAPABILITY_TOKEN = /^[A-Z][A-Z0-9_]{0,63}$/;
+const ACHIEVED_PROTECTION_PROFILES = ['BASIC', 'HARDENED', 'HARDENED_ADMIN', 'DEVICE_OWNER', 'SYSTEM_LEVEL'];
+const UNINSTALL_PROTECTION = ['NONE', 'BEST_EFFORT', 'ADMIN_GATED', 'DEVICE_OWNER_ENFORCED', 'SYSTEM_LEVEL'];
 const DNS_MODES = ['OFF', 'OPPORTUNISTIC', 'PROVIDER_HOSTNAME', 'UNKNOWN', 'ERROR'];
 const DNS_FAIL_SAFE_STATES = ['NORMAL', 'DEGRADED', 'ROLLED_BACK', 'RECOVERING'];
 const DNS_NETWORK_TYPES = ['WIFI', 'CELLULAR', 'OTHER', 'NONE'];
@@ -143,6 +145,20 @@ function validateHealthPayload(body) {
       if (!sanitized.includes(item)) sanitized.push(item);
     }
     value.detectedCapabilities = sanitized;
+  }
+
+  if (body.achievedProtectionProfile !== undefined) {
+    if (!ACHIEVED_PROTECTION_PROFILES.includes(body.achievedProtectionProfile)) {
+      return { error: 'achievedProtectionProfile is invalid' };
+    }
+    value.achievedProtectionProfile = body.achievedProtectionProfile;
+  }
+
+  if (body.uninstallProtection !== undefined) {
+    if (!UNINSTALL_PROTECTION.includes(body.uninstallProtection)) {
+      return { error: 'uninstallProtection is invalid' };
+    }
+    value.uninstallProtection = body.uninstallProtection;
   }
 
   // DNS filtering status (see AdBlockDns.kt). dnsFilteringRequested is
