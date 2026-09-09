@@ -60,6 +60,7 @@ object DeviceHealth {
             ?: runCatching { CapabilitySnapshotStore.refresh(context) }.getOrNull()
         capabilitySnapshot?.let { snapshot ->
             val profile = snapshot.profile
+            val assessment = ProtectionAssessmentResolver.from(profile)
             json.put("capabilityDetectedAt", snapshot.detectedAt)
             json.put("adapterId", snapshot.adapterId)
             json.put("adapterConfidence", snapshot.adapterConfidence)
@@ -67,6 +68,8 @@ object DeviceHealth {
             profile.oemSkinVersion?.let { json.put("oemSkinVersion", it) }
             json.put("deviceCodename", profile.device)
             json.put("buildDisplay", profile.buildDisplay)
+            json.put("achievedProtectionProfile", assessment.achievedProfile)
+            json.put("uninstallProtection", assessment.uninstallProtection.name)
             json.put(
                 "detectedCapabilities",
                 JSONArray(profile.capabilities.map { it.name }.sorted())
