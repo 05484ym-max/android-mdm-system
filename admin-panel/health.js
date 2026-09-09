@@ -28,6 +28,16 @@
     SYSTEM_LEVEL: 'הגנת הסרה ברמת מערכת',
   };
 
+  const CAPABILITY_LABEL = {
+    LAUNCHER: 'Launcher',
+    DEFAULT_HOME: 'הגדרה כיישום הבית',
+    ACCESSIBILITY: 'שירות נגישות',
+    DEVICE_ADMIN: 'מנהל מכשיר',
+    DEVICE_OWNER: 'Device Owner',
+    ROOT: 'Root זוהה',
+    PRIV_APP: 'אפליקציית מערכת מורשית',
+  };
+
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, c => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -89,6 +99,38 @@
       </div>`;
   }
 
+  function protectionRequirementsBlock(p) {
+    const requirements = p && p.requirements;
+    if (!requirements) return '';
+    if (requirements.satisfied) {
+      return '<div class="protection-requirements protection-requirements-ok">לא חסרה יכולת להגנה שנבחרה.</div>';
+    }
+
+    const missing = Array.isArray(requirements.missingCapabilities)
+      ? requirements.missingCapabilities
+      : [];
+    const chips = missing.length
+      ? missing.map(capability => {
+          const label = CAPABILITY_LABEL[capability] || capability;
+          return `<span class="protection-missing-chip">${escapeHtml(label)}</span>`;
+        }).join('')
+      : '<span class="protection-missing-chip">נדרש שדרוג רמת ההגנה</span>';
+
+    let note = '';
+    if (requirements.requiresReprovisioning) {
+      note = 'Device Owner דורש מסלול provisioning מתאים; לא מבוצע איפוס או provisioning אוטומטי מהפאנל.';
+    } else if (requirements.requiresSystemIntegration) {
+      note = 'רמת מערכת דורשת התקנת מערכת/priv-app תואמת; לא מתבצעת צריבה אוטומטית.';
+    }
+
+    return `
+      <div class="protection-requirements">
+        <div class="protection-requirements-title">מה חסר כדי להגיע לרמה שנבחרה</div>
+        <div class="protection-missing-list">${chips}</div>
+        ${note ? `<div class="protection-requirements-note">${escapeHtml(note)}</div>` : ''}
+      </div>`;
+  }
+
   function protectionBlock(d) {
     const p = d.protection;
     if (!p) {
@@ -106,7 +148,7 @@
     const statusClass = p.protectionSatisfied ? 'protection-ok' : 'protection-gap';
     const statusText = p.protectionSatisfied ? 'עומד בדרישת ההגנה' : `חסרות ${p.protectionGap || 0} רמות הגנה`;
     const capabilities = Array.isArray(p.detectedCapabilities) && p.detectedCapabilities.length
-      ? p.detectedCapabilities.map(c => `<span class="protection-chip">${escapeHtml(c)}</span>`).join('')
+      ? p.detectedCapabilities.map(c => `<span class="protection-chip">${escapeHtml(CAPABILITY_LABEL[c] || c)}</span>`).join('')
       : '<span class="protection-chip muted">אין יכולות מדווחות</span>';
 
     const adapter = p.adapterId || '—';
@@ -131,6 +173,7 @@
           <div><span class="k">מערכת OEM</span><span class="v">${escapeHtml(platform)}</span></div>
         </div>
         <div class="protection-capabilities">${capabilities}</div>
+        ${protectionRequirementsBlock(p)}
         ${requestedProfileControl(d.deviceId, p.requestedProfile)}
       </div>`;
   }

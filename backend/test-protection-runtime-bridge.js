@@ -25,10 +25,20 @@ async function main() {
   };
   const protectionPersistence = {
     async listDeviceProtection() {
-      return [{ deviceId: 'd1', achievedProfile: 'HARDENED_ADMIN' }];
+      return [{
+        deviceId: 'd1',
+        requestedProfile: 'DEVICE_OWNER',
+        achievedProfile: 'HARDENED_ADMIN',
+        detectedCapabilities: ['DEVICE_ADMIN'],
+      }];
     },
     async getDeviceProtection(deviceId) {
-      return { deviceId, achievedProfile: 'HARDENED' };
+      return {
+        deviceId,
+        requestedProfile: 'HARDENED_ADMIN',
+        achievedProfile: 'HARDENED',
+        detectedCapabilities: ['DEFAULT_HOME', 'ACCESSIBILITY'],
+      };
     },
   };
   const warnings = [];
@@ -51,10 +61,13 @@ async function main() {
 
   const fleet = await db.listDeviceHealth();
   assert.strictEqual(fleet[0].protection.achievedProfile, 'HARDENED_ADMIN');
+  assert.deepStrictEqual(fleet[0].protection.requirements.missingCapabilities, ['DEVICE_OWNER']);
+  assert.strictEqual(fleet[0].protection.requirements.requiresReprovisioning, true);
   assert.strictEqual(fleet[1].protection, null);
 
   const one = await db.getDeviceHealth('d2');
   assert.strictEqual(one.protection.achievedProfile, 'HARDENED');
+  assert.deepStrictEqual(one.protection.requirements.missingCapabilities, ['DEVICE_ADMIN']);
   assert.strictEqual(await db.getDeviceHealth('missing'), null);
 
   assert.deepStrictEqual(warnings, []);

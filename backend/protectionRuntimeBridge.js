@@ -1,6 +1,16 @@
 'use strict';
 
+const { describeProtectionRequirements } = require('./protectionRequirements');
+
 const BRIDGE_INSTALLED = Symbol.for('mdm.universalProtectionBridgeInstalled');
+
+function enrichProtection(protection) {
+  if (!protection) return null;
+  return {
+    ...protection,
+    requirements: describeProtectionRequirements(protection),
+  };
+}
 
 /**
  * Installs a narrow compatibility bridge around the existing DB methods so the
@@ -36,7 +46,7 @@ function installProtectionRuntimeBridge(db, protectionSync, protectionPersistenc
     const devices = await originalListDeviceHealth(...args);
     try {
       const rows = await protectionPersistence.listDeviceProtection();
-      const byId = new Map(rows.map(row => [row.deviceId, row]));
+      const byId = new Map(rows.map(row => [row.deviceId, enrichProtection(row)]));
       return devices.map(device => ({
         ...device,
         protection: byId.get(device.deviceId) || null,
@@ -53,7 +63,7 @@ function installProtectionRuntimeBridge(db, protectionSync, protectionPersistenc
       if (!device) return null;
       try {
         const protection = await protectionPersistence.getDeviceProtection(deviceId);
-        return { ...device, protection };
+        return { ...device, protection: enrichProtection(protection) };
       } catch (error) {
         logger.warn?.(`[universal-protection] health lookup enrichment failed for device ${deviceId}:`, error.message);
         return { ...device, protection: null };
@@ -70,4 +80,4 @@ function installProtectionRuntimeBridge(db, protectionSync, protectionPersistenc
   return true;
 }
 
-module.exports = { installProtectionRuntimeBridge, BRIDGE_INSTALLED };
+module.exports = { installProtectionRuntimeBridge, BRIDGE_INSTALLED, enrichProtection };
