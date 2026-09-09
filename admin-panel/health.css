@@ -79,6 +79,25 @@
 .protection-chip.muted { color:var(--text-dim); font-weight:600; }
 .protection-empty { margin-top:4px; font-size:0.78rem; color:var(--text-dim); }
 
+.protection-request-control {
+  display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap;
+  margin-top:12px; padding-top:10px; border-top:1px solid var(--card-border);
+}
+.protection-request-control label { display:flex; flex-direction:column; gap:4px; min-width:190px; flex:1; }
+.protection-request-control label > span { font-size:0.72rem; color:var(--text-dim); font-weight:600; }
+.protection-request-control select {
+  width:100%; min-height:36px; border:1px solid var(--card-border); border-radius:9px;
+  background:var(--card-bg); color:var(--text); padding:6px 9px; font-family:inherit; font-size:0.78rem;
+}
+.protection-save-btn {
+  min-height:36px; border:1px solid var(--accent); border-radius:9px; padding:6px 12px;
+  background:var(--accent); color:white; font-family:inherit; font-size:0.76rem; font-weight:700; cursor:pointer;
+}
+.protection-save-btn:disabled, .protection-request-control select:disabled { opacity:0.6; cursor:not-allowed; }
+.protection-save-status { min-width:52px; font-size:0.72rem; color:var(--text-dim); }
+.protection-save-status.ok { color:var(--ok); font-weight:700; }
+.protection-save-status.error { color:var(--danger); font-weight:700; }
+
 .health-details { margin-top: 10px; }
 .health-details summary { cursor: pointer; color: var(--accent); font-size: 0.82rem; font-weight: 600; }
 
