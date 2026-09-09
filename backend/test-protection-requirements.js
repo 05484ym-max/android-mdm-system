@@ -29,11 +29,25 @@ assert.strictEqual(
 );
 assert.deepStrictEqual(
   req('SYSTEM_LEVEL', 'DEVICE_OWNER', ['DEVICE_OWNER']).missingCapabilities,
-  ['PRIV_APP'],
+  ['SYSTEM_ENFORCEMENT'],
 );
 assert.strictEqual(
   req('SYSTEM_LEVEL', 'DEVICE_OWNER', ['DEVICE_OWNER']).requiresSystemIntegration,
   true,
+);
+
+// PRIV_APP is an observed installation fact, not proof of system-level enforcement.
+assert.deepStrictEqual(
+  req('SYSTEM_LEVEL', 'DEVICE_OWNER', ['DEVICE_OWNER', 'PRIV_APP']).missingCapabilities,
+  ['SYSTEM_ENFORCEMENT'],
+);
+assert.strictEqual(
+  req('SYSTEM_LEVEL', 'DEVICE_OWNER', ['DEVICE_OWNER', 'PRIV_APP']).satisfied,
+  false,
+);
+assert.deepStrictEqual(
+  req('SYSTEM_LEVEL', 'DEVICE_OWNER', ['DEVICE_OWNER', 'SYSTEM_ENFORCEMENT']).missingCapabilities,
+  [],
 );
 
 // A stronger achieved state satisfies the request even if the direct target
