@@ -129,43 +129,27 @@ object DeviceCapabilityDetector {
      * OEM hint. A missing/blocked property must never break enrollment.
      */
     private fun detectSkin(): Pair<String, String?> {
-        val manufacturer = Build.MANUFACTURER.orEmpty().lowercase()
-        val brand = Build.BRAND.orEmpty().lowercase()
+        val identity = OemIdentityClassifier.Identity(
+            manufacturer = Build.MANUFACTURER.orEmpty(),
+            brand = Build.BRAND.orEmpty(),
+            model = Build.MODEL.orEmpty(),
+            device = Build.DEVICE.orEmpty(),
+            product = Build.PRODUCT.orEmpty(),
+            buildDisplay = Build.DISPLAY.orEmpty(),
+            androidRelease = Build.VERSION.RELEASE.orEmpty(),
+        )
 
-        if (manufacturer == "samsung" || brand == "samsung") {
-            val oneUi = getProp("ro.build.version.oneui")
-                ?: getProp("ro.build.version.sem")
-            return "samsung_oneui" to oneUi
-        }
+        val oneUi = getProp("ro.build.version.oneui")
+            ?: getProp("ro.build.version.sem")
+        val hyper = getProp("ro.mi.os.version.name")
+        val miui = getProp("ro.miui.ui.version.name")
 
-        if (manufacturer == "xiaomi" || brand in setOf("xiaomi", "redmi", "poco")) {
-            val hyper = getProp("ro.mi.os.version.name")
-            if (!hyper.isNullOrBlank()) return "xiaomi_hyperos" to hyper
-            val miui = getProp("ro.miui.ui.version.name")
-            return "xiaomi_miui" to miui
-        }
-
-        val model = Build.MODEL.orEmpty().lowercase()
-        val device = Build.DEVICE.orEmpty().lowercase()
-        val product = Build.PRODUCT.orEmpty().lowercase()
-        val buildDisplay = Build.DISPLAY.orEmpty().lowercase()
-        val qinIdentity = listOf(manufacturer, brand, model, device, product, buildDisplay).joinToString(" ")
-        val qinLike = manufacturer.contains("qin") || brand.contains("qin") ||
-            qinIdentity.contains("duoqin") || qinIdentity.contains("f21") ||
-            qinIdentity.contains("f22") || qinIdentity.contains("qin3") ||
-            qinIdentity.contains("q3u")
-        if (qinLike) {
-            val family = when {
-                qinIdentity.contains("qin3 ultra") || qinIdentity.contains("qin3ultra") ||
-                    qinIdentity.contains("q3u") -> "qin_3_ultra"
-                qinIdentity.contains("f22") -> "qin_f22pro"
-                qinIdentity.contains("f21") -> "qin_f21pro"
-                else -> "qin_generic"
-            }
-            return family to Build.VERSION.RELEASE.orEmpty()
-        }
-
-        return "aosp_generic" to null
+        return OemIdentityClassifier.classify(
+            identity = identity,
+            oneUiVersion = oneUi,
+            hyperOsVersion = hyper,
+            miuiVersion = miui,
+        )
     }
 
     private fun getProp(name: String): String? = try {
