@@ -41,11 +41,26 @@ CREATE INDEX IF NOT EXISTS device_protection_state_adapter_idx
   ON device_protection_state (adapter_id);
 `;
 
+let schemaInitPromise = null;
+
+async function ensureInitialized() {
+  if (!schemaInitPromise) {
+    schemaInitPromise = pool.query(SCHEMA).catch(error => {
+      // A startup race (for example the parent devices table still being
+      // created by db.init) must be retryable on the next call.
+      schemaInitPromise = null;
+      throw error;
+    });
+  }
+  await schemaInitPromise;
+}
+
 async function init() {
-  await pool.query(SCHEMA);
+  await ensureInitialized();
 }
 
 async function ensureDeviceRow(deviceId) {
+  await ensureInitialized();
   await pool.query(
     `INSERT INTO device_protection_state (device_id)
      VALUES ($1)
@@ -139,6 +154,7 @@ async function recordDeviceProtection(deviceId, report) {
 }
 
 async function getDeviceProtection(deviceId) {
+  await ensureInitialized();
   const { rows } = await pool.query(
     `SELECT * FROM device_protection_state WHERE device_id = $1`,
     [deviceId],
@@ -147,6 +163,7 @@ async function getDeviceProtection(deviceId) {
 }
 
 async function listDeviceProtection() {
+  await ensureInitialized();
   const { rows } = await pool.query(
     `SELECT p.*, d.customer_name, d.customer_number, d.status
        FROM device_protection_state p
@@ -188,6 +205,7 @@ async function close() {
 
 module.exports = {
   init,
+  ensureInitialized,
   ensureDeviceRow,
   setRequestedProfile,
   recordDeviceProtection,
