@@ -54,6 +54,28 @@ object DeviceHealth {
             .put("whatsappGuardRequested", guard.enabled)
             .put("whatsappGuardAccessibilityEnabled", WhatsAppGuardProtection.accessibilityEnabled(context))
 
+        // Capability reporting is observational only. It must never block the
+        // existing Device Owner sync path if an OEM probe fails unexpectedly.
+        val capabilitySnapshot = CapabilitySnapshotStore.read(context)
+            ?: runCatching { CapabilitySnapshotStore.refresh(context) }.getOrNull()
+        capabilitySnapshot?.let { snapshot ->
+            val profile = snapshot.profile
+            val assessment = ProtectionAssessmentResolver.from(profile)
+            json.put("capabilityDetectedAt", snapshot.detectedAt)
+            json.put("adapterId", snapshot.adapterId)
+            json.put("adapterConfidence", snapshot.adapterConfidence)
+            json.put("oemSkin", profile.oemSkin)
+            profile.oemSkinVersion?.let { json.put("oemSkinVersion", it) }
+            json.put("deviceCodename", profile.device)
+            json.put("buildDisplay", profile.buildDisplay)
+            json.put("achievedProtectionProfile", assessment.achievedProfile)
+            json.put("uninstallProtection", assessment.uninstallProtection.name)
+            json.put(
+                "detectedCapabilities",
+                JSONArray(profile.capabilities.map { it.name }.sorted())
+            )
+        }
+
         appVersion(context)?.let { (code, name) ->
             json.put("currentVersionCode", code)
             name?.let { json.put("currentVersionName", it) }

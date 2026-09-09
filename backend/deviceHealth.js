@@ -6,6 +6,10 @@ const MAX_TEXT_LENGTH = 200;
 const MAX_ERROR_LENGTH = 500;
 const UPDATE_STATUSES = ['SUCCESS', 'FAILED', 'SKIPPED'];
 const MAX_NO_LAUNCHER_CANDIDATES = 200;
+const MAX_DETECTED_CAPABILITIES = 32;
+const CAPABILITY_TOKEN = /^[A-Z][A-Z0-9_]{0,63}$/;
+const ACHIEVED_PROTECTION_PROFILES = ['BASIC', 'HARDENED', 'HARDENED_ADMIN', 'DEVICE_OWNER', 'SYSTEM_LEVEL'];
+const UNINSTALL_PROTECTION = ['NONE', 'BEST_EFFORT', 'ADMIN_GATED', 'DEVICE_OWNER_ENFORCED', 'SYSTEM_LEVEL'];
 const DNS_MODES = ['OFF', 'OPPORTUNISTIC', 'PROVIDER_HOSTNAME', 'UNKNOWN', 'ERROR'];
 const DNS_FAIL_SAFE_STATES = ['NORMAL', 'DEGRADED', 'ROLLED_BACK', 'RECOVERING'];
 const DNS_NETWORK_TYPES = ['WIFI', 'CELLULAR', 'OTHER', 'NONE'];
@@ -97,6 +101,64 @@ function validateHealthPayload(body) {
       return { error: 'manufacturer must be a string' };
     }
     value.manufacturer = str(body.manufacturer, MAX_TEXT_LENGTH);
+  }
+
+  // Non-Device-Owner capability report. These are observations from the
+  // device, never trusted as authorization for privileged server actions.
+  if (body.adapterId !== undefined) {
+    if (typeof body.adapterId !== 'string' || body.adapterId.trim().length === 0) {
+      return { error: 'adapterId must be a non-empty string' };
+    }
+    value.adapterId = str(body.adapterId.trim(), 120);
+  }
+
+  if (body.adapterConfidence !== undefined) {
+    if (!Number.isInteger(body.adapterConfidence) || body.adapterConfidence < 0 || body.adapterConfidence > 100) {
+      return { error: 'adapterConfidence must be an integer between 0 and 100' };
+    }
+    value.adapterConfidence = body.adapterConfidence;
+  }
+
+  for (const field of ['oemSkin', 'oemSkinVersion', 'deviceCodename', 'buildDisplay']) {
+    if (body[field] !== undefined && body[field] !== null) {
+      if (typeof body[field] !== 'string') return { error: field + ' must be a string' };
+      value[field] = str(body[field], MAX_TEXT_LENGTH);
+    }
+  }
+
+  if (body.capabilityDetectedAt !== undefined) {
+    if (!Number.isInteger(body.capabilityDetectedAt) || body.capabilityDetectedAt <= 0) {
+      return { error: 'capabilityDetectedAt must be a positive integer' };
+    }
+    value.capabilityDetectedAt = body.capabilityDetectedAt;
+  }
+
+  if (body.detectedCapabilities !== undefined) {
+    if (!Array.isArray(body.detectedCapabilities)) {
+      return { error: 'detectedCapabilities must be an array' };
+    }
+    const sanitized = [];
+    for (const item of body.detectedCapabilities.slice(0, MAX_DETECTED_CAPABILITIES)) {
+      if (typeof item !== 'string' || !CAPABILITY_TOKEN.test(item)) {
+        return { error: 'detectedCapabilities contains an invalid capability token' };
+      }
+      if (!sanitized.includes(item)) sanitized.push(item);
+    }
+    value.detectedCapabilities = sanitized;
+  }
+
+  if (body.achievedProtectionProfile !== undefined) {
+    if (!ACHIEVED_PROTECTION_PROFILES.includes(body.achievedProtectionProfile)) {
+      return { error: 'achievedProtectionProfile is invalid' };
+    }
+    value.achievedProtectionProfile = body.achievedProtectionProfile;
+  }
+
+  if (body.uninstallProtection !== undefined) {
+    if (!UNINSTALL_PROTECTION.includes(body.uninstallProtection)) {
+      return { error: 'uninstallProtection is invalid' };
+    }
+    value.uninstallProtection = body.uninstallProtection;
   }
 
   // DNS filtering status (see AdBlockDns.kt). dnsFilteringRequested is

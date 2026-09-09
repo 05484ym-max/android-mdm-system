@@ -1,0 +1,113 @@
+name: Universal Adapter Tests
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'backend/deviceHealth.js'
+      - 'backend/protectionState.js'
+      - 'backend/deviceProtectionRecord.js'
+      - 'backend/protectionPersistence.js'
+      - 'backend/protectionSync.js'
+      - 'backend/test-device-capabilities.js'
+      - 'backend/test-protection-state.js'
+      - 'backend/test-device-protection-record.js'
+      - 'backend/test-protection-persistence-integration.js'
+      - 'backend/test-protection-sync.js'
+      - 'backend/db.js'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/CapabilitySnapshotStore.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceAdapter.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceCapability.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceHealth.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupPlan.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupIntents.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupCoordinator.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/OemSetupNavigator.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/PrivilegeProvider.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/ProtectionAssessment.kt'
+      - 'dpc-app/app/src/test/java/org/mdmopen/dpc/**'
+      - '.github/workflows/universal-adapter-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-pure-tests:
+    name: Backend capability/protection tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Run capability payload validation
+        working-directory: backend
+        run: node test-device-capabilities.js
+      - name: Run requested-vs-achieved protection tests
+        working-directory: backend
+        run: node test-protection-state.js
+      - name: Run device protection persistence mapping tests
+        working-directory: backend
+        run: node test-device-protection-record.js
+      - name: Run sync protection service tests
+        working-directory: backend
+        run: node test-protection-sync.js
+
+  protection-persistence-integration:
+    name: Protection persistence (real PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: protection_test_user
+          POSTGRES_PASSWORD: protection_test_pw
+          POSTGRES_DB: protection_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U protection_test_user -d protection_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Run persistence integration test
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://protection_test_user:protection_test_pw@127.0.0.1:5432/protection_test
+          DATABASE_SSL: disable
+        run: node test-protection-persistence-integration.js
+
+  android-unit-tests:
+    name: Android adapter/setup unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Run DPC unit tests
+        working-directory: dpc-app
+        run: gradle testDebugUnitTest --stacktrace
