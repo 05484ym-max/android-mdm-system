@@ -10,6 +10,7 @@ on:
       - 'backend/protectionPersistence.js'
       - 'backend/protectionSync.js'
       - 'backend/protectionRuntimeBridge.js'
+      - 'backend/protectionAdminRoutes.js'
       - 'backend/universalEntry.js'
       - 'backend/package.json'
       - 'backend/test-device-capabilities.js'
@@ -18,7 +19,10 @@ on:
       - 'backend/test-protection-persistence-integration.js'
       - 'backend/test-protection-sync.js'
       - 'backend/test-protection-runtime-bridge.js'
+      - 'backend/test-protection-admin-routes.js'
       - 'backend/db.js'
+      - 'admin-panel/health.js'
+      - 'admin-panel/health.css'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/CapabilitySnapshotStore.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceAdapter.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/DeviceCapability.kt'
@@ -65,6 +69,9 @@ jobs:
       - name: Run runtime bridge tests
         working-directory: backend
         run: node test-protection-runtime-bridge.js
+      - name: Run requested protection admin route tests
+        working-directory: backend
+        run: node test-protection-admin-routes.js
 
   protection-persistence-integration:
     name: Protection persistence (real PostgreSQL)
