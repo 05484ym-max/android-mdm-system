@@ -6,6 +6,7 @@ on:
     paths:
       - 'backend/deviceHealth.js'
       - 'backend/protectionState.js'
+      - 'backend/protectionRequirements.js'
       - 'backend/deviceProtectionRecord.js'
       - 'backend/protectionPersistence.js'
       - 'backend/protectionSync.js'
@@ -16,6 +17,7 @@ on:
       - 'backend/package.json'
       - 'backend/test-device-capabilities.js'
       - 'backend/test-protection-state.js'
+      - 'backend/test-protection-requirements.js'
       - 'backend/test-device-protection-record.js'
       - 'backend/test-protection-persistence-integration.js'
       - 'backend/test-protection-sync.js'
@@ -62,6 +64,9 @@ jobs:
       - name: Run requested-vs-achieved protection tests
         working-directory: backend
         run: node test-protection-state.js
+      - name: Run exact protection requirement tests
+        working-directory: backend
+        run: node test-protection-requirements.js
       - name: Run device protection persistence mapping tests
         working-directory: backend
         run: node test-device-protection-record.js
