@@ -12,6 +12,22 @@
     unknown: 'ממתין לנתונים',
   };
 
+  const PROTECTION_PROFILE_LABEL = {
+    BASIC: 'בסיסית',
+    HARDENED: 'מחוזקת',
+    HARDENED_ADMIN: 'מחוזקת + מנהל מכשיר',
+    DEVICE_OWNER: 'Device Owner',
+    SYSTEM_LEVEL: 'רמת מערכת',
+  };
+
+  const UNINSTALL_PROTECTION_LABEL = {
+    NONE: 'ללא הגנת הסרה',
+    BEST_EFFORT: 'הגנת הסרה חלקית',
+    ADMIN_GATED: 'דורש ביטול הרשאת מנהל לפני הסרה',
+    DEVICE_OWNER_ENFORCED: 'חסימת הסרה באמצעות Device Owner',
+    SYSTEM_LEVEL: 'הגנת הסרה ברמת מערכת',
+  };
+
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, c => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -57,6 +73,50 @@
     ].join('');
   }
 
+  function protectionBlock(d) {
+    const p = d.protection;
+    if (!p) {
+      return `
+        <div class="protection-card protection-unknown">
+          <div class="protection-card-title">מצב הגנה</div>
+          <div class="protection-empty">המכשיר עדיין לא דיווח נתוני Universal Adapter</div>
+        </div>`;
+    }
+
+    const requested = PROTECTION_PROFILE_LABEL[p.requestedProfile] || p.requestedProfile || '—';
+    const achieved = PROTECTION_PROFILE_LABEL[p.achievedProfile] || p.achievedProfile || '—';
+    const uninstall = UNINSTALL_PROTECTION_LABEL[p.uninstallProtection] || p.uninstallProtection || '—';
+    const statusClass = p.protectionSatisfied ? 'protection-ok' : 'protection-gap';
+    const statusText = p.protectionSatisfied ? 'עומד בדרישת ההגנה' : `חסרות ${p.protectionGap || 0} רמות הגנה`;
+    const capabilities = Array.isArray(p.detectedCapabilities) && p.detectedCapabilities.length
+      ? p.detectedCapabilities.map(c => `<span class="protection-chip">${escapeHtml(c)}</span>`).join('')
+      : '<span class="protection-chip muted">אין יכולות מדווחות</span>';
+
+    const adapter = p.adapterId || '—';
+    const confidence = p.adapterConfidence == null ? '—' : `${p.adapterConfidence}%`;
+    const platform = [p.oemSkin, p.oemSkinVersion].filter(Boolean).join(' ') || '—';
+
+    return `
+      <div class="protection-card ${statusClass}">
+        <div class="protection-card-head">
+          <div>
+            <div class="protection-card-title">מצב הגנה Universal</div>
+            <div class="protection-status-text">${escapeHtml(statusText)}</div>
+          </div>
+          <span class="protection-status-badge">${p.protectionSatisfied ? 'תקין' : 'פער הגנה'}</span>
+        </div>
+        <div class="protection-grid">
+          <div><span class="k">נדרש</span><span class="v">${escapeHtml(requested)}</span></div>
+          <div><span class="k">הושג בפועל</span><span class="v">${escapeHtml(achieved)}</span></div>
+          <div><span class="k">הגנת הסרה</span><span class="v">${escapeHtml(uninstall)}</span></div>
+          <div><span class="k">Adapter</span><span class="v">${escapeHtml(adapter)}</span></div>
+          <div><span class="k">דיוק זיהוי</span><span class="v">${escapeHtml(confidence)}</span></div>
+          <div><span class="k">מערכת OEM</span><span class="v">${escapeHtml(platform)}</span></div>
+        </div>
+        <div class="protection-capabilities">${capabilities}</div>
+      </div>`;
+  }
+
   function deviceCard(d) {
     const name = d.customerName ? escapeHtml(d.customerName) : 'ללא שם';
     const number = d.customerNumber ? ' · #' + escapeHtml(d.customerNumber) : '';
@@ -91,6 +151,9 @@
           <div class="health-field"><span class="k">שגיאת עדכון אחרונה: </span><span class="v">${escapeHtml(d.lastUpdateError || '—')}</span></div>
           <div class="health-field"><span class="k">נראה לאחרונה (מדויק): </span><span class="v">${fmtAbsolute(d.lastSeenAt)}</span></div>
           <div class="health-field"><span class="k">סנכרון אחרון (מדויק): </span><span class="v">${fmtAbsolute(d.lastSyncAt)}</span></div>
+          <div class="health-field"><span class="k">Codename: </span><span class="v">${escapeHtml(d.protection?.deviceCodename || '—')}</span></div>
+          <div class="health-field"><span class="k">Build: </span><span class="v">${escapeHtml(d.protection?.buildDisplay || '—')}</span></div>
+          <div class="health-field"><span class="k">זיהוי capabilities: </span><span class="v">${fmtAbsolute(d.protection?.capabilityDetectedAt ? new Date(d.protection.capabilityDetectedAt).toISOString() : null)}</span></div>
         </div>
       </details>`;
 
@@ -105,6 +168,7 @@
         </div>
         ${reasonsHtml}
         <div class="health-grid">${fieldsHtml}</div>
+        ${protectionBlock(d)}
         ${detailsHtml}
         <button class="health-diagnose-btn" data-diagnose="${escapeHtml(d.deviceId)}">אבחון ותיקון</button>
       </div>`;
