@@ -23,11 +23,29 @@ class TargetedNonDoSetupPlannerTest {
     }
 
     @Test
-    fun `hardened admin adds device admin`() {
-        val caps = setOf(DeviceCapability.LAUNCHER, DeviceCapability.DEFAULT_HOME, DeviceCapability.ACCESSIBILITY)
-        val plan = TargetedNonDoSetupPlanner.build(profile(caps), "qin.f21pro", "HARDENED_ADMIN")
+    fun `hardened admin requires device admin only`() {
+        val plan = TargetedNonDoSetupPlanner.build(
+            profile(setOf(DeviceCapability.LAUNCHER)),
+            "qin.f21pro",
+            "HARDENED_ADMIN",
+        )
         assertTrue(NonDoSetupStep.ACTIVATE_DEVICE_ADMIN in plan.steps)
+        assertFalse(NonDoSetupStep.SET_DEFAULT_HOME in plan.steps)
+        assertFalse(NonDoSetupStep.ENABLE_ACCESSIBILITY in plan.steps)
         assertTrue(NonDoSetupStep.OEM_BACKGROUND_SETUP in plan.steps)
+    }
+
+    @Test
+    fun `device admin satisfies hardened admin without home or accessibility`() {
+        val plan = TargetedNonDoSetupPlanner.build(
+            profile(setOf(DeviceCapability.LAUNCHER, DeviceCapability.DEVICE_ADMIN)),
+            "qin.f21pro",
+            "HARDENED_ADMIN",
+        )
+        assertFalse(NonDoSetupStep.ACTIVATE_DEVICE_ADMIN in plan.steps)
+        assertFalse(NonDoSetupStep.SET_DEFAULT_HOME in plan.steps)
+        assertFalse(NonDoSetupStep.ENABLE_ACCESSIBILITY in plan.steps)
+        assertEquals("HARDENED_ADMIN", plan.achieved.achievedProfile)
     }
 
     @Test
