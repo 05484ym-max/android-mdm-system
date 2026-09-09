@@ -47,12 +47,24 @@ class ProtectionAssessmentTest {
     }
 
     @Test
-    fun `privileged app is the strongest observed uninstall protection`() {
+    fun `privileged app alone does not overclaim system enforcement`() {
         val result = ProtectionAssessmentResolver.from(
             setOf(DeviceCapability.DEVICE_OWNER, DeviceCapability.PRIV_APP)
         )
+        assertEquals(UninstallProtection.DEVICE_OWNER_ENFORCED, result.uninstallProtection)
+        assertEquals("DEVICE_OWNER", result.achievedProfile)
+        assertTrue(result.privilegedAppVerified)
+        assertFalse(result.systemEnforcementVerified)
+    }
+
+    @Test
+    fun `verified system enforcement is the strongest observed uninstall protection`() {
+        val result = ProtectionAssessmentResolver.from(
+            setOf(DeviceCapability.PRIV_APP, DeviceCapability.SYSTEM_ENFORCEMENT)
+        )
         assertEquals(UninstallProtection.SYSTEM_LEVEL, result.uninstallProtection)
         assertEquals("SYSTEM_LEVEL", result.achievedProfile)
+        assertTrue(result.systemEnforcementVerified)
     }
 
     @Test
@@ -63,5 +75,6 @@ class ProtectionAssessmentTest {
         assertEquals(UninstallProtection.NONE, result.uninstallProtection)
         assertTrue(result.rootObserved)
         assertFalse(result.privilegedAppVerified)
+        assertFalse(result.systemEnforcementVerified)
     }
 }
