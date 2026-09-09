@@ -22,6 +22,13 @@ enum class DeviceCapability {
     DEVICE_OWNER,
     ROOT,
     PRIV_APP,
+    /**
+     * Stronger than merely being installed under /system/priv-app. This token
+     * must only be emitted by a dedicated runtime verifier that has proven the
+     * system-level enforcement we rely on. The generic detector deliberately
+     * does not infer it from ROOT or PRIV_APP.
+     */
+    SYSTEM_ENFORCEMENT,
 }
 
 data class DeviceProfile(
@@ -61,6 +68,10 @@ object DeviceCapabilityDetector {
         if (dpm?.isDeviceOwnerApp(appContext.packageName) == true) capabilities += DeviceCapability.DEVICE_OWNER
         if (hasSuBinary()) capabilities += DeviceCapability.ROOT
         if (isPrivilegedSystemApp(appContext)) capabilities += DeviceCapability.PRIV_APP
+        // SYSTEM_ENFORCEMENT is intentionally not inferred here. A privileged
+        // install path or a su binary does not prove uninstall/enforcement
+        // semantics. A future dedicated verifier may add it only after a
+        // positive runtime proof.
 
         val skin = detectSkin()
 
