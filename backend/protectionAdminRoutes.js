@@ -71,7 +71,10 @@ function installProtectionAdminRoutes(app, { db, protectionPersistence, logger =
     throw new Error('protection admin routes require protectionPersistence.setRequestedProfile');
   }
 
-  app.put('/api/health/devices/:deviceId/protection/requested', requireAdmin, async (req, res, next) => {
+  // This route is installed after index.js's legacy error middleware, so it
+  // terminates its own errors with the same non-sensitive JSON shape rather
+  // than forwarding an exception to Express's default HTML error handler.
+  app.put('/api/health/devices/:deviceId/protection/requested', requireAdmin, async (req, res) => {
     try {
       const requestedProfile = validateRequestedProfile(req.body && req.body.requestedProfile);
       if (!requestedProfile) {
@@ -92,7 +95,11 @@ function installProtectionAdminRoutes(app, { db, protectionPersistence, logger =
       );
       return res.json({ status: 'ok', protection: state });
     } catch (error) {
-      return next(error);
+      logger.error?.(
+        `[universal-protection] requested profile update failed for device ${req.params.deviceId}:`,
+        error.message,
+      );
+      return res.status(500).json({ error: 'internal error' });
     }
   });
 }
