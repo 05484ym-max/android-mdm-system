@@ -56,7 +56,9 @@ function installProtectionDeviceRoutes(app, { db, protectionPersistence, logger 
         requiresSystemIntegration: requirements.requiresSystemIntegration,
       });
     } catch (error) {
-      logger.warn?.(`[universal-protection] device target lookup failed for ${req.params.deviceId}:`, error.message);
+      // Keep log text constant: route params are attacker-controlled and must
+      // never become a log format string or a log-injection surface.
+      logger.warn?.('[universal-protection] device target lookup failed');
       if (!res.headersSent) return res.status(503).json({ error: 'protection target temporarily unavailable' });
     }
   });
