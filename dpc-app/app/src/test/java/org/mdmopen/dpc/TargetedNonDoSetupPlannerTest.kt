@@ -42,6 +42,32 @@ class TargetedNonDoSetupPlannerTest {
         val plan = TargetedNonDoSetupPlanner.build(profile(setOf(DeviceCapability.LAUNCHER, DeviceCapability.ROOT)), "qin.f22pro", "SYSTEM_LEVEL")
         assertEquals(listOf(NonDoSetupStep.VERIFY_PROTECTION), plan.steps)
         assertTrue(plan.requiresSystemIntegration)
+        assertEquals("BASIC", plan.achieved.achievedProfile)
+    }
+
+    @Test
+    fun `priv app alone does not satisfy system target`() {
+        val plan = TargetedNonDoSetupPlanner.build(
+            profile(setOf(DeviceCapability.LAUNCHER, DeviceCapability.PRIV_APP)),
+            "qin.f22pro",
+            "SYSTEM_LEVEL",
+        )
+        assertTrue(plan.requiresSystemIntegration)
+        assertTrue(plan.achieved.privilegedAppVerified)
+        assertFalse(plan.achieved.systemEnforcementVerified)
+        assertEquals("BASIC", plan.achieved.achievedProfile)
+    }
+
+    @Test
+    fun `verified system enforcement satisfies system target`() {
+        val plan = TargetedNonDoSetupPlanner.build(
+            profile(setOf(DeviceCapability.LAUNCHER, DeviceCapability.PRIV_APP, DeviceCapability.SYSTEM_ENFORCEMENT)),
+            "qin.f22pro",
+            "SYSTEM_LEVEL",
+        )
+        assertFalse(plan.requiresSystemIntegration)
+        assertTrue(plan.achieved.systemEnforcementVerified)
+        assertEquals("SYSTEM_LEVEL", plan.achieved.achievedProfile)
     }
 
     @Test
