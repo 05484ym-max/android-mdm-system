@@ -11,6 +11,7 @@ on:
       - 'backend/protectionSync.js'
       - 'backend/protectionRuntimeBridge.js'
       - 'backend/protectionAdminRoutes.js'
+      - 'backend/expressAppCapture.js'
       - 'backend/universalEntry.js'
       - 'backend/package.json'
       - 'backend/test-device-capabilities.js'
@@ -20,6 +21,7 @@ on:
       - 'backend/test-protection-sync.js'
       - 'backend/test-protection-runtime-bridge.js'
       - 'backend/test-protection-admin-routes.js'
+      - 'backend/test-express-app-capture.js'
       - 'backend/db.js'
       - 'admin-panel/health.js'
       - 'admin-panel/health.css'
@@ -72,6 +74,9 @@ jobs:
       - name: Run requested protection admin route tests
         working-directory: backend
         run: node test-protection-admin-routes.js
+      - name: Run Express app capture tests
+        working-directory: backend
+        run: node test-express-app-capture.js
 
   protection-persistence-integration:
     name: Protection persistence (real PostgreSQL)
