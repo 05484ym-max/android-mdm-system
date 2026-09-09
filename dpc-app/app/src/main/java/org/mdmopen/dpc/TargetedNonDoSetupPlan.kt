@@ -43,7 +43,7 @@ object TargetedNonDoSetupPlanner {
             )
         }
 
-        val needsHardened = requested == "HARDENED" || requested == "HARDENED_ADMIN"
+        val needsHardened = requested == "HARDENED"
         val needsAdmin = requested == "HARDENED_ADMIN"
         val steps = buildList {
             if (needsHardened && DeviceCapability.DEFAULT_HOME !in capabilities) add(NonDoSetupStep.SET_DEFAULT_HOME)
