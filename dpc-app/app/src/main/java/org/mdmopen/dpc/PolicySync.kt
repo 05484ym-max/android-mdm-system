@@ -29,6 +29,14 @@ object PolicySync {
             DeviceHealth.collect(context, enforcer.isDeviceOwner()),
         )
 
+        // Universal target lookup is additive and guidance-only. A temporary
+        // failure here must never break the established Device Owner sync path.
+        runCatching {
+            ProtectionTargetClient.fetch(serverUrl, deviceId, deviceToken)
+        }.onSuccess { target ->
+            RequestedProtectionStore.save(context, target)
+        }
+
         Config.setAllowedApps(context, result.policy.allowedApps)
         Config.setAppCatalog(context, result.catalog)
         Config.setKioskEnabled(context, result.policy.kioskEnabled)
