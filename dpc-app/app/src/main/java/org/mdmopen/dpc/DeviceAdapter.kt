@@ -27,8 +27,10 @@ interface DeviceAdapter {
 
 object DeviceAdapterResolver {
     private val adapters: List<DeviceAdapter> = listOf(
+        Qin3UltraAdapter,
         QinF22ProAdapter,
         QinF21ProAdapter,
+        QinGenericAdapter,
         SamsungOneUiAdapter,
         XiaomiHyperOsAdapter,
         XiaomiMiuiAdapter,
@@ -108,6 +110,30 @@ object QinF22ProAdapter : DeviceAdapter {
         "Record exact build fingerprint/firmware variant before enabling stronger modes",
         "Verify Google services/FCM availability",
         "Never assume root or unlocked bootloader solely from model name",
+    )
+}
+
+object Qin3UltraAdapter : DeviceAdapter {
+    override val id = "qin.3ultra"
+    override fun matches(profile: DeviceProfile) = profile.oemSkin == "qin_3_ultra"
+    override fun confidence(profile: DeviceProfile) = if (matches(profile)) 99 else 0
+
+    override fun setupHints(context: Context, profile: DeviceProfile) = listOf(
+        "Record exact stock/custom firmware build before any stronger provisioning",
+        "Verify Google services/FCM availability on this firmware variant",
+        "Treat bootloader/root/GSI capability as runtime facts, never model defaults",
+        "Qin 3 Ultra uses dynamic partitions on known builds; never perform blind partition operations",
+    )
+}
+
+object QinGenericAdapter : DeviceAdapter {
+    override val id = "qin.generic"
+    override fun matches(profile: DeviceProfile) = profile.oemSkin == "qin_generic"
+    override fun confidence(profile: DeviceProfile) = if (matches(profile)) 80 else 0
+
+    override fun setupHints(context: Context, profile: DeviceProfile) = listOf(
+        "Unknown Qin variant: collect build/model/device/product before model-specific provisioning",
+        "Use only verified Launcher/Accessibility/Device Admin capabilities until identified",
     )
 }
 
