@@ -21,6 +21,7 @@ data class ProtectionAssessment(
     val deviceOwnerVerified: Boolean,
     val privilegedAppVerified: Boolean,
     val rootObserved: Boolean,
+    val systemEnforcementVerified: Boolean,
 ) {
     /** Stable machine-readable summary for backend/panel display. */
     val achievedProfile: String
@@ -43,12 +44,13 @@ object ProtectionAssessmentResolver {
         val owner = DeviceCapability.DEVICE_OWNER in capabilities
         val privileged = DeviceCapability.PRIV_APP in capabilities
         val root = DeviceCapability.ROOT in capabilities
+        val systemEnforcement = DeviceCapability.SYSTEM_ENFORCEMENT in capabilities
 
-        // PRIV_APP means the package is actually observed under a privileged
-        // system-app location. Root alone is deliberately NOT treated as
-        // system-level enforcement; a su binary is only a capability hint.
+        // PRIV_APP only proves privileged installation presence. ROOT only proves
+        // a root signal was observed. Neither one proves uninstall/system
+        // enforcement. SYSTEM_LEVEL requires the stronger runtime-verified token.
         val uninstall = when {
-            privileged -> UninstallProtection.SYSTEM_LEVEL
+            systemEnforcement -> UninstallProtection.SYSTEM_LEVEL
             owner -> UninstallProtection.DEVICE_OWNER_ENFORCED
             admin -> UninstallProtection.ADMIN_GATED
             defaultHome && accessibility -> UninstallProtection.BEST_EFFORT
@@ -63,6 +65,7 @@ object ProtectionAssessmentResolver {
             deviceOwnerVerified = owner,
             privilegedAppVerified = privileged,
             rootObserved = root,
+            systemEnforcementVerified = systemEnforcement,
         )
     }
 }
