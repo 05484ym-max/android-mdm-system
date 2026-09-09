@@ -1,6 +1,6 @@
 // "בריאות מכשירים" tab - entirely separate from the main inline script in
-// index.html. Fetches the two read-only health endpoints and renders them;
-// it never touches allDevices or any other state the main script owns.
+// index.html. Fetches health endpoints and renders them without touching the
+// main device-management state.
 (function () {
   const HOUR_MS = 60 * 60 * 1000;
   const DAY_MS = 24 * HOUR_MS;
@@ -73,6 +73,22 @@
     ].join('');
   }
 
+  function requestedProfileControl(deviceId, currentProfile) {
+    const selected = currentProfile || 'HARDENED_ADMIN';
+    const options = Object.entries(PROTECTION_PROFILE_LABEL).map(([value, label]) =>
+      `<option value="${value}"${value === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
+    ).join('');
+    return `
+      <div class="protection-request-control">
+        <label>
+          <span>רמת הגנה נדרשת</span>
+          <select data-protection-profile>${options}</select>
+        </label>
+        <button type="button" class="protection-save-btn" data-save-protection="${escapeHtml(deviceId)}">שמור דרישה</button>
+        <span class="protection-save-status" aria-live="polite"></span>
+      </div>`;
+  }
+
   function protectionBlock(d) {
     const p = d.protection;
     if (!p) {
@@ -80,6 +96,7 @@
         <div class="protection-card protection-unknown">
           <div class="protection-card-title">מצב הגנה</div>
           <div class="protection-empty">המכשיר עדיין לא דיווח נתוני Universal Adapter</div>
+          ${requestedProfileControl(d.deviceId, null)}
         </div>`;
     }
 
@@ -114,6 +131,7 @@
           <div><span class="k">מערכת OEM</span><span class="v">${escapeHtml(platform)}</span></div>
         </div>
         <div class="protection-capabilities">${capabilities}</div>
+        ${requestedProfileControl(d.deviceId, p.requestedProfile)}
       </div>`;
   }
 
@@ -178,6 +196,47 @@
     if (window.openDeviceDiagnostics) window.openDeviceDiagnostics(deviceId);
   }
 
+  async function saveRequestedProtection(button) {
+    const deviceId = button.getAttribute('data-save-protection');
+    const card = button.closest('.protection-card');
+    const select = card && card.querySelector('[data-protection-profile]');
+    const status = card && card.querySelector('.protection-save-status');
+    if (!deviceId || !select || !status) return;
+
+    button.disabled = true;
+    select.disabled = true;
+    status.textContent = 'שומר...';
+    status.className = 'protection-save-status';
+    try {
+      const response = await fetch(`/api/health/devices/${encodeURIComponent(deviceId)}/protection/requested`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestedProfile: select.value }),
+      });
+      if (response.status === 401) {
+        document.getElementById('loginScreen').style.display = 'flex';
+        status.textContent = 'נדרשת התחברות';
+        status.classList.add('error');
+        return;
+      }
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        status.textContent = body.error || 'השמירה נכשלה';
+        status.classList.add('error');
+        return;
+      }
+      status.textContent = 'נשמר';
+      status.classList.add('ok');
+      await loadHealthPanel();
+    } catch (e) {
+      status.textContent = 'שגיאת תקשורת';
+      status.classList.add('error');
+    } finally {
+      button.disabled = false;
+      select.disabled = false;
+    }
+  }
+
   function renderDevices(devices) {
     const root = document.getElementById('healthDevices');
     if (!devices.length) {
@@ -187,6 +246,9 @@
     root.innerHTML = devices.map(deviceCard).join('');
     root.querySelectorAll('[data-diagnose]').forEach(btn => {
       btn.addEventListener('click', () => openDiagnostics(btn.getAttribute('data-diagnose')));
+    });
+    root.querySelectorAll('[data-save-protection]').forEach(btn => {
+      btn.addEventListener('click', () => saveRequestedProtection(btn));
     });
   }
 
