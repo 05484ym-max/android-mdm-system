@@ -147,13 +147,20 @@ object DeviceCapabilityDetector {
 
         val model = Build.MODEL.orEmpty().lowercase()
         val device = Build.DEVICE.orEmpty().lowercase()
+        val product = Build.PRODUCT.orEmpty().lowercase()
+        val buildDisplay = Build.DISPLAY.orEmpty().lowercase()
+        val qinIdentity = listOf(manufacturer, brand, model, device, product, buildDisplay).joinToString(" ")
         val qinLike = manufacturer.contains("qin") || brand.contains("qin") ||
-            model.contains("f21") || model.contains("f22") ||
-            device.contains("f21") || device.contains("f22")
+            qinIdentity.contains("duoqin") || qinIdentity.contains("f21") ||
+            qinIdentity.contains("f22") || qinIdentity.contains("qin3") ||
+            qinIdentity.contains("q3u")
         if (qinLike) {
             val family = when {
-                model.contains("f22") || device.contains("f22") -> "qin_f22pro"
-                else -> "qin_f21pro"
+                qinIdentity.contains("qin3 ultra") || qinIdentity.contains("qin3ultra") ||
+                    qinIdentity.contains("q3u") -> "qin_3_ultra"
+                qinIdentity.contains("f22") -> "qin_f22pro"
+                qinIdentity.contains("f21") -> "qin_f21pro"
+                else -> "qin_generic"
             }
             return family to Build.VERSION.RELEASE.orEmpty()
         }
