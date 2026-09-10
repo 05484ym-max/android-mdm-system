@@ -63,6 +63,22 @@ object PolicySync {
         )
         WhatsAppGuardWatchdogScheduler.reconcileSchedule(context)
         DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
+
+        // FRP is a separate, admin-controlled switch. Failure to fetch the FRP
+        // target never clears an existing device policy and never breaks normal
+        // MDM sync. Only a successfully authenticated server response is applied.
+        val frpResult = runCatching {
+            val frpApi = FrpApiClient(serverUrl, deviceToken)
+            val remote = frpApi.fetchPolicy(deviceId)
+            val desired = FrpProtectionManager.DesiredPolicy(
+                enabled = remote.enabled,
+                accountIds = remote.accountIds,
+            )
+            val status = FrpProtectionManager.reconcile(context, desired)
+            runCatching { frpApi.reportStatus(deviceId, status) }
+            status
+        }.getOrNull()
+
         SyncScheduler.schedule(context)
         UpdateCheckScheduler.scheduleIfNeeded(context)
         DnsFailSafeScheduler.scheduleIfNeeded(context)
@@ -93,6 +109,17 @@ object PolicySync {
             append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
             append("סנכרון כל ${result.policy.syncIntervalMinutes} דק'")
             append("\n• WhatsApp Guard: $whatsappGuardResult")
+            frpResult?.let { status ->
+                val frpText = when {
+                    !status.apiSupported -> "לא נתמך במכשיר"
+                    !status.deviceOwner -> "המכשיר אינו Device Owner"
+                    status.error != null -> "דורש בדיקה"
+                    status.enabled == true && status.matchesDesired == true -> "פעיל ומאומת"
+                    status.enabled == false && status.matchesDesired == true -> "כבוי"
+                    else -> "ממתין לאימות"
+                }
+                append("\n• הגנת FRP: $frpText")
+            }
             dnsReconcileResult?.let { append("\n• DNS: $it") }
             dnsFailSafeResult?.let { append("\n• $it") }
             outcomes.forEach { append("\n• $it") }
