@@ -14,6 +14,7 @@ on:
       - 'backend/protectionAdminRoutes.js'
       - 'backend/protectionDeviceRoutes.js'
       - 'backend/expressAppCapture.js'
+      - 'backend/fleetCatalogBridge.js'
       - 'backend/universalEntry.js'
       - 'backend/package.json'
       - 'backend/test-device-capabilities.js'
@@ -26,6 +27,7 @@ on:
       - 'backend/test-protection-admin-routes.js'
       - 'backend/test-protection-device-routes.js'
       - 'backend/test-express-app-capture.js'
+      - 'backend/test-fleet-catalog-bridge.js'
       - 'backend/db.js'
       - 'admin-panel/health.js'
       - 'admin-panel/health.css'
@@ -93,6 +95,9 @@ jobs:
       - name: Run Express app capture tests
         working-directory: backend
         run: node test-express-app-capture.js
+      - name: Run fleet catalog policy tests
+        working-directory: backend
+        run: node test-fleet-catalog-bridge.js
 
   protection-persistence-integration:
     name: Protection persistence (real PostgreSQL)
