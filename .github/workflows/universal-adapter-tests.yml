@@ -13,6 +13,8 @@ on:
       - 'backend/protectionRuntimeBridge.js'
       - 'backend/protectionAdminRoutes.js'
       - 'backend/protectionDeviceRoutes.js'
+      - 'backend/frpPersistence.js'
+      - 'backend/frpRoutes.js'
       - 'backend/expressAppCapture.js'
       - 'backend/universalEntry.js'
       - 'backend/package.json'
@@ -25,6 +27,7 @@ on:
       - 'backend/test-protection-runtime-bridge.js'
       - 'backend/test-protection-admin-routes.js'
       - 'backend/test-protection-device-routes.js'
+      - 'backend/test-frp-routes.js'
       - 'backend/test-express-app-capture.js'
       - 'backend/db.js'
       - 'admin-panel/health.js'
@@ -40,6 +43,9 @@ on:
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/UniversalSetupActivity.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/RequestedProtectionStore.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/FrpProtectionManager.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/FrpPolicyRules.kt'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/FrpApiClient.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupIntents.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/NonDoSetupCoordinator.kt'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/OemSetupNavigator.kt'
@@ -90,9 +96,14 @@ jobs:
       - name: Run device protection target route tests
         working-directory: backend
         run: node test-protection-device-routes.js
+      - name: Run FRP route tests
+        working-directory: backend
+        run: node test-frp-routes.js
       - name: Run Express app capture tests
         working-directory: backend
         run: node test-express-app-capture.js
+      - name: Check health panel JavaScript syntax
+        run: node --check admin-panel/health.js
 
   protection-persistence-integration:
     name: Protection persistence (real PostgreSQL)
