@@ -283,6 +283,12 @@ class CustomerActivity : Activity() {
             setTextColor(Color.parseColor(MUTED))
             gravity = Gravity.CENTER
             setLineSpacing(0f, 0.92f)
+            // Every label reserves the same 2-line height whether its own text
+            // wraps or not, so every container is the same total height and
+            // every icon above it lands at the same y - otherwise a one-line
+            // label (e.g. "תמיכה") makes its whole column shorter than a
+            // two-line one, and centering the row shifts that icon down.
+            minLines = 2
         }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
