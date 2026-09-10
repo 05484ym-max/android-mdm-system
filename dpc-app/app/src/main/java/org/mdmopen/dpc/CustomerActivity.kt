@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.PorterDuff
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -43,7 +44,8 @@ class CustomerActivity : Activity() {
 
     private data class NavItem(
         val container: LinearLayout,
-        val icon: TextView,
+        val iconFrame: FrameLayout,
+        val icon: ImageView,
         val label: TextView,
         val badge: View,
     )
@@ -206,48 +208,53 @@ class CustomerActivity : Activity() {
         return badge
     }
 
-    private fun buildBottomBar(): LinearLayout {
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor(CARD))
-            addView(View(this@CustomerActivity).apply {
-                setBackgroundColor(Color.parseColor(BORDER))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+    /** A floating pill dock, inset from the screen edges and elevated over the
+     * page background, rather than a full-width bar flush with the bottom. */
+    private fun buildBottomBar(): FrameLayout {
+        val wrapper = FrameLayout(this).apply {
+            setPadding(dp(14), dp(8), dp(14), dp(14))
         }
 
-        val row = LinearLayout(this).apply {
+        val pill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(10))
+            background = rounded(CARD, 28)
+            elevation = dp(8).toFloat()
+            setPadding(dp(6), dp(8), dp(6), dp(8))
         }
 
-        personalNavItem = navButton("●", "אזור אישי") { showPersonalArea() }
-        storeNavItem = navButton("▦", "חנות\nאפליקציות") { showAppStore() }
-        newsNavItem = navButton("▤", "חדשות\nועדכונים") { showNews() }
-        supportNavItem = navButton("♧", "תמיכה") { showSupport() }
-        adminNavItem = navButton("▱", "כניסת\nמנהל") { showAdminLogin() }
+        personalNavItem = navButton(R.drawable.ic_nav_person, "אזור אישי") { showPersonalArea() }
+        storeNavItem = navButton(R.drawable.ic_nav_store, "חנות\nאפליקציות") { showAppStore() }
+        newsNavItem = navButton(R.drawable.ic_nav_news, "חדשות\nועדכונים") { showNews() }
+        supportNavItem = navButton(R.drawable.ic_nav_support, "תמיכה") { showSupport() }
+        adminNavItem = navButton(R.drawable.ic_nav_lock, "כניסת\nמנהל") { showAdminLogin() }
 
         listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem).forEach {
-            row.addView(it.container, LinearLayout.LayoutParams(0, dp(66), 1f))
+            pill.addView(it.container, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
-        bar.addView(row)
-        return bar
+
+        wrapper.addView(
+            pill,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        return wrapper
     }
 
-    private fun navButton(icon: String, label: String, action: () -> Unit): NavItem {
-        val iconView = TextView(this).apply {
-            text = icon
-            textSize = 20f
-            gravity = Gravity.CENTER
-            typeface = heavyFont
-            setTextColor(Color.parseColor(MUTED))
+    /** Every nav icon renders at the same fixed size from its own vector
+     * drawable (never a text glyph, whose apparent size varies wildly by
+     * character), inside a fixed-size frame so the active-state chip below
+     * doesn't shift the icon's position when it appears. */
+    private fun navButton(iconRes: Int, label: String, action: () -> Unit): NavItem {
+        val iconView = ImageView(this).apply {
+            setImageResource(iconRes)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
         }
         val badgeDot = View(this).apply {
             background = circle("#B52F24")
             visibility = View.GONE
         }
         val iconFrame = FrameLayout(this).apply {
-            addView(iconView, FrameLayout.LayoutParams(dp(28), dp(26)).apply { gravity = Gravity.CENTER })
+            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })
             addView(badgeDot, FrameLayout.LayoutParams(dp(8), dp(8)).apply {
                 gravity = Gravity.TOP or Gravity.END
                 marginEnd = dp(1)
@@ -264,24 +271,26 @@ class CustomerActivity : Activity() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(3), dp(6), dp(3), dp(5))
+            setPadding(dp(3), dp(4), dp(3), dp(4))
             isClickable = true
             isFocusable = true
-            addView(iconFrame)
+            addView(iconFrame, LinearLayout.LayoutParams(dp(34), dp(34)))
             addView(labelView)
             setOnClickListener { action() }
         }
-        return NavItem(container, iconView, labelView, badgeDot)
+        return NavItem(container, iconFrame, iconView, labelView, badgeDot)
     }
 
     private fun setActiveNav(active: NavItem) {
         listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem).forEach { item ->
             val selected = item === active
-            item.icon.setTextColor(Color.parseColor(if (selected) ACCENT_DARK else MUTED))
-            item.icon.alpha = if (selected) 1f else 0.82f
+            item.icon.setColorFilter(
+                Color.parseColor(if (selected) BG else MUTED),
+                PorterDuff.Mode.SRC_IN
+            )
+            item.iconFrame.background = if (selected) circle(ACCENT_DARK) else null
             item.label.typeface = if (selected) heavyFont else mediumFont
             item.label.setTextColor(Color.parseColor(if (selected) ACCENT_DARK else MUTED))
-            item.container.background = if (selected) rounded(ACCENT_TINT, 13) else null
         }
     }
 
