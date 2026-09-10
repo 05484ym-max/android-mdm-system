@@ -15,6 +15,10 @@ object PolicySync {
      * syncs cannot apply policy/config changes concurrently.
      */
     fun run(context: Context): String = synchronized(syncLock) {
+        // Reset protection is a local Device Owner invariant. Reassert it before
+        // any network dependency so a server outage cannot delay anti-reset state.
+        ResetProtection.enforce(context)
+
         val serverUrl = Config.serverUrl(context)
         require(serverUrl.isNotEmpty()) { "לא הוגדרה כתובת שרת" }
 
