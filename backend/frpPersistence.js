@@ -41,22 +41,54 @@ async function ensureInitialized() {
   await schemaInitPromise;
 }
 
-async function ensureDeviceRow(deviceId) {
-  await ensureInitialized();
-  await pool.query(
-    `INSERT INTO device_frp_state (device_id) VALUES ($1)
-     ON CONFLICT (device_id) DO NOTHING`,
-    [deviceId],
-  );
-}
-
 function normalizeAccountIds(values) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.map(v => String(v).trim()).filter(Boolean))].slice(0, 20);
 }
 
+/**
+ * Account identifiers stay outside source control. Configure them on the
+ * server as a comma-separated FRP_RECOVERY_ACCOUNTS value. Android delegates
+ * interpretation of these strings to the device's FRP management agent.
+ */
+function configuredDefaultAccounts() {
+  const raw = process.env.FRP_RECOVERY_ACCOUNTS || '';
+  return normalizeAccountIds(raw.split(','));
+}
+
+async function ensureDeviceRow(deviceId) {
+  await ensureInitialized();
+  const defaults = configuredDefaultAccounts();
+  await pool.query(
+    `INSERT INTO device_frp_state (device_id, account_ids)
+     VALUES ($1, $2::jsonb)
+     ON CONFLICT (device_id) DO UPDATE SET
+       account_ids = CASE
+         WHEN jsonb_array_length(device_frp_state.account_ids) = 0
+              AND jsonb_array_length(EXCLUDED.account_ids) > 0
+         THEN EXCLUDED.account_ids
+         ELSE device_frp_state.account_ids
+       END`,
+    [deviceId, JSON.stringify(defaults)],
+  );
+}
+
 async function setRequestedEnabled(deviceId, enabled) {
   await ensureDeviceRow(deviceId);
+
+  if (enabled === true) {
+    const { rows: accountRows } = await pool.query(
+      `SELECT jsonb_array_length(account_ids) AS account_count
+         FROM device_frp_state WHERE device_id = $1`,
+      [deviceId],
+    );
+    if (Number(accountRows[0]?.account_count || 0) < 1) {
+      const error = new Error('FRP_RECOVERY_ACCOUNT_REQUIRED');
+      error.code = 'FRP_RECOVERY_ACCOUNT_REQUIRED';
+      throw error;
+    }
+  }
+
   const { rows } = await pool.query(
     `UPDATE device_frp_state
         SET enabled_requested = $2,
@@ -114,7 +146,7 @@ async function recordDeviceStatus(deviceId, status) {
 }
 
 async function getDeviceState(deviceId, includeAccounts = false) {
-  await ensureInitialized();
+  await ensureDeviceRow(deviceId);
   const { rows } = await pool.query('SELECT * FROM device_frp_state WHERE device_id = $1', [deviceId]);
   return rows[0] ? mapRow(rows[0], includeAccounts) : null;
 }
@@ -160,6 +192,7 @@ module.exports = {
   ensureInitialized,
   ensureDeviceRow,
   normalizeAccountIds,
+  configuredDefaultAccounts,
   setRequestedEnabled,
   setAccounts,
   recordDeviceStatus,
