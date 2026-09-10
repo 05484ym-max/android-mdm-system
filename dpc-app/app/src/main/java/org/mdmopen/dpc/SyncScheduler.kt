@@ -20,6 +20,7 @@ object SyncScheduler {
     private const val UNIQUE_PUSH_WORK = "policy-sync-push"
     private const val UNIQUE_RETRY_UPDATE_WORK = "policy-sync-retry-update"
     private const val UNIQUE_PUSH_TOKEN_WORK = "push-token-registration"
+    private const val UNIQUE_ACCESSIBILITY_SETTINGS_LAUNCH_WORK = "accessibility-settings-launch"
     private const val UNIQUE_ACCESSIBILITY_RELOCK_WORK = "accessibility-policy-relock"
     private const val MIN_INTERVAL_MINUTES = 15L
 
@@ -74,21 +75,33 @@ object SyncScheduler {
     }
 
     /**
-     * Independent failsafe for Samsung accessibility setup. This intentionally
-     * has no network constraint: its only job is to restore the local Device
-     * Owner accessibility allowlist even if the Activity/process dies.
+     * Independent Samsung accessibility setup helpers. There is deliberately no
+     * network constraint on either request: first, a short delayed retry opens
+     * Accessibility Settings after lock-task policy has had time to settle;
+     * second, the existing five-minute failsafe restores the local Device Owner
+     * accessibility allowlist even if the Activity/process dies.
      */
     fun enqueueAccessibilityRelock(context: Context) {
         val appContext = context.applicationContext
-        val request = OneTimeWorkRequestBuilder<AccessibilityRelockWorker>()
+        val manager = WorkManager.getInstance(appContext)
+
+        val launchRetry = OneTimeWorkRequestBuilder<AccessibilitySettingsLaunchWorker>()
+            .setInitialDelay(800, TimeUnit.MILLISECONDS)
+            .build()
+        manager.enqueueUniqueWork(
+            UNIQUE_ACCESSIBILITY_SETTINGS_LAUNCH_WORK,
+            ExistingWorkPolicy.REPLACE,
+            launchRetry,
+        )
+
+        val relock = OneTimeWorkRequestBuilder<AccessibilityRelockWorker>()
             .setInitialDelay(5, TimeUnit.MINUTES)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
             .build()
-
-        WorkManager.getInstance(appContext).enqueueUniqueWork(
+        manager.enqueueUniqueWork(
             UNIQUE_ACCESSIBILITY_RELOCK_WORK,
             ExistingWorkPolicy.REPLACE,
-            request,
+            relock,
         )
     }
 
