@@ -50,25 +50,22 @@ object FrpProtectionManager {
         // Observe only; do not accidentally clear or replace an existing policy.
         if (desired == null) return inspect(context)
 
-        val normalizedAccounts = desired.accountIds
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-
-        if (desired.enabled && normalizedAccounts.isEmpty()) {
+        val validation = FrpPolicyRules.validate(desired.enabled, desired.accountIds)
+        if (!validation.valid) {
             return inspect(context).copy(
                 matchesDesired = false,
-                error = "ENABLED_WITHOUT_ACCOUNTS_REJECTED",
+                error = validation.error,
             )
         }
 
+        val normalizedDesired = desired.copy(accountIds = validation.accountIds)
         return try {
             val policy = FactoryResetProtectionPolicy.Builder()
-                .setFactoryResetProtectionEnabled(desired.enabled)
-                .setFactoryResetProtectionAccounts(normalizedAccounts)
+                .setFactoryResetProtectionEnabled(normalizedDesired.enabled)
+                .setFactoryResetProtectionAccounts(normalizedDesired.accountIds)
                 .build()
             dpm.setFactoryResetProtectionPolicy(admin, policy)
-            inspect(context, desired.copy(accountIds = normalizedAccounts))
+            inspect(context, normalizedDesired)
         } catch (e: UnsupportedOperationException) {
             Status(true, true, false, null, null, false, "FRP_NOT_SUPPORTED_BY_DEVICE")
         } catch (e: SecurityException) {
@@ -96,10 +93,13 @@ object FrpProtectionManager {
                 Status(true, true, true, false, 0, desired?.let { !it.enabled }, null)
             } else {
                 val enabled = policy.isFactoryResetProtectionEnabled
-                val accounts = policy.factoryResetProtectionAccounts.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                val accounts = policy.factoryResetProtectionAccounts
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
                 val matches = desired?.let {
-                    val wanted = it.accountIds.map(String::trim).filter(String::isNotEmpty).distinct().sorted()
-                    enabled == it.enabled && accounts.sorted() == wanted
+                    val wanted = FrpPolicyRules.validate(it.enabled, it.accountIds)
+                    wanted.valid && enabled == it.enabled && accounts.sorted() == wanted.accountIds.sorted()
                 }
                 Status(true, true, true, enabled, accounts.size, matches, null)
             }
