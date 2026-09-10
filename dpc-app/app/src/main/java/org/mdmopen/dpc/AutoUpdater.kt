@@ -21,6 +21,7 @@ object AutoUpdater {
 
     private const val TAG = "MdmAutoUpdater"
     private val running = AtomicBoolean(false)
+    private val SHA256_REGEX = Regex("^[0-9a-fA-F]{64}$")
 
     fun check(context: Context) {
         Thread {
@@ -58,6 +59,10 @@ object AutoUpdater {
 
         val metadata = JSONObject(downloadText(metadataUrl))
         val remoteVersion = metadata.getLong("versionCode")
+        val expectedSha256 = metadata.optString("sha256").trim().lowercase()
+        if (!SHA256_REGEX.matches(expectedSha256)) {
+            error("Update metadata is missing a valid SHA-256 digest")
+        }
 
         val currentVersion =
             context.packageManager
@@ -74,6 +79,9 @@ object AutoUpdater {
                 "apkUrl",
                 "$baseUrl/downloads/mdm.apk"
             )
+        if (URL(apkUrl).protocol.lowercase() != "https") {
+            error("Update APK URL must use HTTPS")
+        }
 
         Log.i(TAG, "New version: $remoteVersion")
 
@@ -81,14 +89,14 @@ object AutoUpdater {
 
         try {
             downloadFile(apkUrl, apk)
+            verifyFileSha256(apk, expectedSha256)
             verifyApk(context, apk, remoteVersion)
             installUpdate(context, apk, remoteVersion)
         } catch (e: Exception) {
-            // The actual install outcome (once committed) is reported
-            // asynchronously by UpdateInstallReceiver instead - this only
-            // covers a failure before that point (download/verification).
             DeviceHealth.recordUpdateResult(context, "FAILED", remoteVersion, e.message)
             throw e
+        } finally {
+            if (apk.exists()) apk.delete()
         }
     }
 
@@ -132,6 +140,23 @@ object AutoUpdater {
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun verifyFileSha256(file: File, expectedSha256: String) {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (count > 0) digest.update(buffer, 0, count)
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        if (!actual.equals(expectedSha256, ignoreCase = true)) {
+            error("Downloaded APK SHA-256 mismatch")
+        }
+        Log.i(TAG, "APK SHA-256 verified")
     }
 
     private fun verifyApk(
@@ -209,8 +234,6 @@ object AutoUpdater {
                 }
             }
 
-        // Must be lifted before createSession() - DISALLOW_INSTALL_APPS blocks
-        // session creation itself, not just the final commit.
         temporarilyAllowInstall(context)
 
         var sessionId = -1
