@@ -144,7 +144,7 @@ class CustomerActivity : Activity() {
             addView(ImageView(this@CustomerActivity).apply {
                 setImageResource(R.mipmap.ic_launcher)
                 scaleType = ImageView.ScaleType.CENTER_CROP
-            }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(10) })
+            }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(10) })
 
             addView(LinearLayout(this@CustomerActivity).apply {
                 orientation = LinearLayout.VERTICAL
