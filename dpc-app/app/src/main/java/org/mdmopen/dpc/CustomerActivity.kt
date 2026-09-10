@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.PorterDuff
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -43,7 +44,8 @@ class CustomerActivity : Activity() {
 
     private data class NavItem(
         val container: LinearLayout,
-        val icon: TextView,
+        val iconFrame: FrameLayout,
+        val icon: ImageView,
         val label: TextView,
         val badge: View,
     )
@@ -137,20 +139,36 @@ class CustomerActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(18), dp(14), dp(18), dp(12))
 
-            // RTL add-order: logo is on the right, then title, then sync button on the left.
+            // RTL add-order: logo emblem is on the right, then the title stack, then
+            // the sync pill on the left.
             addView(ImageView(this@CustomerActivity).apply {
                 setImageResource(R.mipmap.ic_launcher)
                 scaleType = ImageView.ScaleType.CENTER_CROP
             }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(10) })
 
-            headerLabelView = TextView(this@CustomerActivity).apply {
-                textSize = 20f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(ACCENT_DARK))
-                gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
-                maxLines = 1
-            }
-            addView(headerLabelView, LinearLayout.LayoutParams(0, dp(48), 1f))
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(TextView(this@CustomerActivity).apply {
+                    text = "יהודי כשר"
+                    textSize = 17f
+                    typeface = heavyFont
+                    setTextColor(Color.parseColor(TEXT))
+                    gravity = Gravity.RIGHT
+                })
+
+                headerLabelView = TextView(this@CustomerActivity).apply {
+                    textSize = 13f
+                    typeface = heavyFont
+                    setTextColor(Color.parseColor(GOLD))
+                    gravity = Gravity.RIGHT
+                    maxLines = 1
+                    setPadding(0, dp(2), 0, 0)
+                }
+                addView(headerLabelView)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
             addView(headerSyncBadge())
         }
     }
@@ -206,48 +224,53 @@ class CustomerActivity : Activity() {
         return badge
     }
 
-    private fun buildBottomBar(): LinearLayout {
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor(CARD))
-            addView(View(this@CustomerActivity).apply {
-                setBackgroundColor(Color.parseColor(BORDER))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+    /** A floating pill dock, inset from the screen edges and elevated over the
+     * page background, rather than a full-width bar flush with the bottom. */
+    private fun buildBottomBar(): FrameLayout {
+        val wrapper = FrameLayout(this).apply {
+            setPadding(dp(14), dp(8), dp(14), dp(14))
         }
 
-        val row = LinearLayout(this).apply {
+        val pill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(10))
+            background = rounded(CARD, 28)
+            elevation = dp(8).toFloat()
+            setPadding(dp(6), dp(8), dp(6), dp(8))
         }
 
-        personalNavItem = navButton("●", "אזור אישי") { showPersonalArea() }
-        storeNavItem = navButton("▦", "חנות\nאפליקציות") { showAppStore() }
-        newsNavItem = navButton("▤", "חדשות\nועדכונים") { showNews() }
-        supportNavItem = navButton("♧", "תמיכה") { showSupport() }
-        adminNavItem = navButton("▱", "כניסת\nמנהל") { showAdminLogin() }
+        personalNavItem = navButton(R.drawable.ic_nav_person, "אזור אישי") { showPersonalArea() }
+        storeNavItem = navButton(R.drawable.ic_nav_store, "חנות\nאפליקציות") { showAppStore() }
+        newsNavItem = navButton(R.drawable.ic_nav_news, "חדשות\nועדכונים") { showNews() }
+        supportNavItem = navButton(R.drawable.ic_nav_support, "תמיכה") { showSupport() }
+        adminNavItem = navButton(R.drawable.ic_nav_lock, "כניסת\nמנהל") { showAdminLogin() }
 
         listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem).forEach {
-            row.addView(it.container, LinearLayout.LayoutParams(0, dp(66), 1f))
+            pill.addView(it.container, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
-        bar.addView(row)
-        return bar
+
+        wrapper.addView(
+            pill,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        return wrapper
     }
 
-    private fun navButton(icon: String, label: String, action: () -> Unit): NavItem {
-        val iconView = TextView(this).apply {
-            text = icon
-            textSize = 20f
-            gravity = Gravity.CENTER
-            typeface = heavyFont
-            setTextColor(Color.parseColor(MUTED))
+    /** Every nav icon renders at the same fixed size from its own vector
+     * drawable (never a text glyph, whose apparent size varies wildly by
+     * character), inside a fixed-size frame so the active-state chip below
+     * doesn't shift the icon's position when it appears. */
+    private fun navButton(iconRes: Int, label: String, action: () -> Unit): NavItem {
+        val iconView = ImageView(this).apply {
+            setImageResource(iconRes)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
         }
         val badgeDot = View(this).apply {
             background = circle("#B52F24")
             visibility = View.GONE
         }
         val iconFrame = FrameLayout(this).apply {
-            addView(iconView, FrameLayout.LayoutParams(dp(28), dp(26)).apply { gravity = Gravity.CENTER })
+            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })
             addView(badgeDot, FrameLayout.LayoutParams(dp(8), dp(8)).apply {
                 gravity = Gravity.TOP or Gravity.END
                 marginEnd = dp(1)
@@ -264,24 +287,26 @@ class CustomerActivity : Activity() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(3), dp(6), dp(3), dp(5))
+            setPadding(dp(3), dp(4), dp(3), dp(4))
             isClickable = true
             isFocusable = true
-            addView(iconFrame)
+            addView(iconFrame, LinearLayout.LayoutParams(dp(34), dp(34)))
             addView(labelView)
             setOnClickListener { action() }
         }
-        return NavItem(container, iconView, labelView, badgeDot)
+        return NavItem(container, iconFrame, iconView, labelView, badgeDot)
     }
 
     private fun setActiveNav(active: NavItem) {
         listOf(personalNavItem, storeNavItem, newsNavItem, supportNavItem, adminNavItem).forEach { item ->
             val selected = item === active
-            item.icon.setTextColor(Color.parseColor(if (selected) ACCENT_DARK else MUTED))
-            item.icon.alpha = if (selected) 1f else 0.82f
+            item.icon.setColorFilter(
+                Color.parseColor(if (selected) BG else MUTED),
+                PorterDuff.Mode.SRC_IN
+            )
+            item.iconFrame.background = if (selected) circle(ACCENT_DARK) else null
             item.label.typeface = if (selected) heavyFont else mediumFont
             item.label.setTextColor(Color.parseColor(if (selected) ACCENT_DARK else MUTED))
-            item.container.background = if (selected) rounded(ACCENT_TINT, 13) else null
         }
     }
 
@@ -298,15 +323,16 @@ class CustomerActivity : Activity() {
 
         contentArea.addView(personalWelcomeCard())
 
-        val rows = mutableListOf<Triple<String, String, String>>()
-        rows += Triple("✓", "מצב מנוי", if (Config.storeAccessAllowed(this)) "פעיל" else "פג תוקף")
+        // "מצב מנוי" moved into the status pill on the welcome card above, so it
+        // is not repeated as a row here. A "תאריך הצטרפות" (join date) row isn't
+        // included either - no such field exists on the device record.
+        val rows = mutableListOf<Triple<Int, String, String>>()
         Config.subscriptionExpiryDate(this)?.takeIf { it.isNotBlank() }?.let {
-            rows += Triple("▣", "תוקף מנוי", compactSubscriptionDate(it))
+            rows += Triple(R.drawable.ic_row_calendar, "תוקף מנוי", compactSubscriptionDate(it))
         }
-        rows += Triple("▯", "מזהה מכשיר", Config.deviceId(this))
-        rows += Triple("◷", "עדכון אחרון", lastSyncLabelCompact())
+        rows += Triple(R.drawable.ic_row_device, "מזהה מכשיר", Config.deviceId(this))
+        rows += Triple(R.drawable.ic_row_clock, "עדכון אחרון", lastSyncLabelCompact())
 
-        contentArea.addView(sectionCardTitle("פרטי המנוי שלי"))
         contentArea.addView(personalDetailsCard(rows))
 
         val guardPolicy = WhatsAppGuardConfig.load(this)
@@ -323,11 +349,12 @@ class CustomerActivity : Activity() {
         contentArea.addView(dnsToggleCard())
         val dnsStatus = AdBlockDns.currentStatus(this)
         contentArea.addView(personalDetailsCard(listOf(
-            Triple("◈", "מצב הסינון", dnsModeLabel(dnsStatus.dnsMode))
+            Triple(R.drawable.ic_row_shield, "מצב הסינון", dnsModeLabel(dnsStatus.dnsMode))
         )))
     }
 
     private fun personalWelcomeCard(): LinearLayout {
+        val active = Config.storeAccessAllowed(this)
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -341,94 +368,111 @@ class CustomerActivity : Activity() {
                 bottomMargin = dp(14)
             }
 
-            addView(TextView(this@CustomerActivity).apply {
-                text = "●"
-                textSize = 20f
-                typeface = heavyFont
+            addView(LinearLayout(this@CustomerActivity).apply {
+                orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setTextColor(Color.parseColor("#64745D"))
-                background = circle(ACCENT_TINT_STRONG)
-            }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(12) })
+
+                addView(ImageView(this@CustomerActivity).apply {
+                    setImageResource(R.drawable.ic_nav_person)
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    setColorFilter(Color.parseColor(ACCENT_DARK), PorterDuff.Mode.SRC_IN)
+                    background = circle(ACCENT_TINT_STRONG)
+                    val pad = dp(13)
+                    setPadding(pad, pad, pad, pad)
+                }, LinearLayout.LayoutParams(dp(52), dp(52)))
+
+                addView(statusPill(active), LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) })
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(14) })
 
             addView(LinearLayout(this@CustomerActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.RIGHT
                 addView(TextView(this@CustomerActivity).apply {
-                    text = "יהודי כשר"
+                    text = "ברוך הבא!"
                     textSize = 17f
                     typeface = heavyFont
                     setTextColor(Color.parseColor(TEXT))
                     gravity = Gravity.RIGHT
                 })
                 addView(TextView(this@CustomerActivity).apply {
-                    text = "האזור האישי שלך"
+                    text = "כאן ניתן לנהל את ההגדרות והמנויים שלך"
                     textSize = 12.5f
                     typeface = mediumFont
                     setTextColor(Color.parseColor(MUTED))
                     gravity = Gravity.RIGHT
-                    setPadding(0, dp(2), 0, 0)
+                    setPadding(0, dp(3), 0, 0)
                 })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
     }
 
-    private fun sectionCardTitle(title: String): TextView {
-        return TextView(this).apply {
-            text = title
-            textSize = 16f
-            typeface = heavyFont
-            setTextColor(Color.parseColor(TEXT))
-            gravity = Gravity.RIGHT
-            setPadding(dp(4), 0, dp(4), dp(9))
+    /** Small "active"/"expired" status badge, reusing only colors already in
+     * the app's palette (OK / the existing badge red / ACCENT_TINT). */
+    private fun statusPill(active: Boolean): LinearLayout {
+        val tint = if (active) OK else "#B52F24"
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(ACCENT_TINT, 20)
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            addView(View(this@CustomerActivity).apply {
+                background = circle(tint)
+            }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(5) })
+            addView(TextView(this@CustomerActivity).apply {
+                text = if (active) "פעיל" else "פג תוקף"
+                textSize = 11.5f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(tint))
+            })
         }
     }
 
-    private fun personalDetailsCard(rows: List<Triple<String, String, String>>): LinearLayout {
+    /** Each row reads, right to left: a plain (uncircled) icon, its label,
+     * then the value pinned to the far left edge of the card. */
+    private fun personalDetailsCard(rows: List<Triple<Int, String, String>>): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBackground()
-            setPadding(dp(12), dp(5), dp(12), dp(5))
-            rows.forEachIndexed { index, (icon, label, value) ->
+            setPadding(dp(14), dp(4), dp(14), dp(4))
+            rows.forEachIndexed { index, (iconRes, label, value) ->
                 addView(LinearLayout(this@CustomerActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(4), dp(9), dp(4), dp(9))
+                    setPadding(dp(2), dp(12), dp(2), dp(12))
+
+                    addView(ImageView(this@CustomerActivity).apply {
+                        setImageResource(iconRes)
+                        scaleType = ImageView.ScaleType.CENTER_INSIDE
+                        setColorFilter(Color.parseColor(MUTED), PorterDuff.Mode.SRC_IN)
+                    }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(8) })
 
                     addView(TextView(this@CustomerActivity).apply {
-                        text = icon
-                        textSize = 14f
-                        typeface = heavyFont
-                        setTextColor(Color.parseColor(ACCENT_DARK))
-                        gravity = Gravity.CENTER
-                        background = circle(ACCENT_TINT)
-                    }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(11) })
-
-                    addView(LinearLayout(this@CustomerActivity).apply {
-                        orientation = LinearLayout.VERTICAL
+                        text = label
+                        textSize = 12.5f
+                        typeface = mediumFont
+                        setTextColor(Color.parseColor(MUTED))
                         gravity = Gravity.RIGHT
-                        addView(TextView(this@CustomerActivity).apply {
-                            text = label
-                            textSize = 11.5f
-                            typeface = mediumFont
-                            setTextColor(Color.parseColor(MUTED))
-                            gravity = Gravity.RIGHT
-                        })
-                        addView(TextView(this@CustomerActivity).apply {
-                            text = value
-                            textSize = 15f
-                            typeface = heavyFont
-                            setTextColor(Color.parseColor(TEXT))
-                            gravity = Gravity.RIGHT
-                            maxLines = 2
-                        })
+                    })
+
+                    addView(TextView(this@CustomerActivity).apply {
+                        text = value
+                        textSize = 15f
+                        typeface = heavyFont
+                        setTextColor(Color.parseColor(TEXT))
+                        gravity = Gravity.LEFT
+                        maxLines = 2
                     }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 })
                 if (index < rows.lastIndex) {
                     addView(View(this@CustomerActivity).apply {
                         setBackgroundColor(Color.parseColor(BORDER))
-                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                        marginStart = dp(49)
-                    })
+                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
                 }
             }
         }
@@ -445,13 +489,13 @@ class CustomerActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
 
-                addView(TextView(this@CustomerActivity).apply {
-                    text = if (enabled) "✓" else "◈"
-                    textSize = 25f
-                    typeface = heavyFont
-                    setTextColor(Color.WHITE)
-                    gravity = Gravity.CENTER
+                addView(ImageView(this@CustomerActivity).apply {
+                    setImageResource(R.drawable.ic_row_chat)
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
                     background = circle(if (enabled) OK else ACCENT_DARK)
+                    val pad = dp(15)
+                    setPadding(pad, pad, pad, pad)
                 }, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(13) })
 
                 addView(LinearLayout(this@CustomerActivity).apply {
@@ -482,12 +526,17 @@ class CustomerActivity : Activity() {
 
             if (!enabled) {
                 addView(Button(this@CustomerActivity).apply {
-                    text = "◉   הפעל הגנת WhatsApp"
+                    text = "הפעל הגנת WhatsApp"
                     textSize = 15f
                     isAllCaps = false
                     typeface = heavyFont
                     setTextColor(Color.WHITE)
                     background = rounded(ACCENT, 14)
+                    val icon = getDrawable(R.drawable.ic_row_shield)?.mutate()?.apply {
+                        setTint(Color.WHITE)
+                    }
+                    setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null)
+                    compoundDrawablePadding = dp(8)
                     setOnClickListener { openWhatsAppAccessibilitySettings() }
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
                     topMargin = dp(14)
@@ -1157,6 +1206,11 @@ class CustomerActivity : Activity() {
             addView(LinearLayout(this@CustomerActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                addView(ImageView(this@CustomerActivity).apply {
+                    setImageResource(R.drawable.ic_row_shield)
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    setColorFilter(Color.parseColor(ACCENT_DARK), PorterDuff.Mode.SRC_IN)
+                }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(10) })
                 addView(TextView(this@CustomerActivity).apply {
                     text = if (providerFilters) "חסימת אתרים ופרסומות" else "DNS מאובטח"
                     textSize = 14.5f
