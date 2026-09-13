@@ -82,20 +82,30 @@ jobs:
           fi
 
           CHECKSUM=$(python3 -c "import base64,sys; print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1])).decode().rstrip('='))" "$CERT_HEX")
+          APK_SHA256=$(sha256sum "$APK" | awk '{print $1}')
+          if ! printf '%s' "$APK_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::Could not compute APK SHA-256"
+            exit 1
+          fi
           echo "Certificate SHA-256 : $CERT_HEX"
           echo "SIGNATURE_CHECKSUM  : $CHECKSUM"
+          echo "APK SHA-256         : $APK_SHA256"
 
           mkdir -p admin-panel/downloads
           cp "$APK" admin-panel/downloads/mdm.apk
 
-          python3 - "${{ github.run_number }}" <<'PYVER'
+          python3 - "${{ github.run_number }}" "$APK_SHA256" <<'PYVER'
           import json, sys
 
           version_code = int(sys.argv[1])
+          apk_sha256 = sys.argv[2].strip().lower()
+          if len(apk_sha256) != 64 or any(c not in '0123456789abcdef' for c in apk_sha256):
+              raise SystemExit('invalid APK sha256')
 
           data = {
               "versionCode": version_code,
-              "apkUrl": "https://android-mdm-system.onrender.com/downloads/mdm.apk"
+              "apkUrl": "https://android-mdm-system.onrender.com/downloads/mdm.apk",
+              "sha256": apk_sha256,
           }
 
           with open("admin-panel/downloads/version.json", "w") as f:
