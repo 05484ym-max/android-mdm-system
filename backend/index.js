@@ -2023,6 +2023,8 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   const fullOpen = req.device.fullOpenMode === true;
   const policy = normalizePolicy(req.device.policy);
   policy.fullOpen = fullOpen;
+  policy.customerName = req.device.customerName || null;
+  policy.customerNumber = req.device.customerNumber || null;
   const allowed = new Set(policy.allowedApps);
 
   // Opportunistic only and globally throttled. Device sync never waits for

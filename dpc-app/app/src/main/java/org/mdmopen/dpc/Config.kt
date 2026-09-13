@@ -52,6 +52,8 @@ object Config {
     private const val KEY_SUBSCRIPTION_EXPIRY_DATE = "subscription_expiry_date"
     private const val KEY_POLICY_HIDDEN_APPS = "policy_hidden_apps"
     private const val KEY_ACCESSIBILITY_SETUP_ACTIVE = "accessibility_setup_window_active"
+    private const val KEY_CUSTOMER_NAME = "customer_name"
+    private const val KEY_CUSTOMER_NUMBER = "customer_number"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -273,6 +275,20 @@ object Config {
 
     fun setPushToken(context: Context, token: String) {
         prefs(context).edit().putString(KEY_PUSH_TOKEN, token).apply()
+    }
+
+    fun customerName(context: Context): String? =
+        prefs(context).getString(KEY_CUSTOMER_NAME, null)
+
+    fun setCustomerName(context: Context, name: String?) {
+        prefs(context).edit().putString(KEY_CUSTOMER_NAME, name).apply()
+    }
+
+    fun customerNumber(context: Context): String? =
+        prefs(context).getString(KEY_CUSTOMER_NUMBER, null)
+
+    fun setCustomerNumber(context: Context, number: String?) {
+        prefs(context).edit().putString(KEY_CUSTOMER_NUMBER, number).apply()
     }
 
     /** Epoch millis of the last successful sync, for the "last updated" label. */
