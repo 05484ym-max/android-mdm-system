@@ -333,6 +333,9 @@ class CustomerActivity : Activity() {
         // is not repeated as a row here. A "תאריך הצטרפות" (join date) row isn't
         // included either - no such field exists on the device record.
         val rows = mutableListOf<Triple<Int, String, String>>()
+        Config.customerNumber(this)?.takeIf { it.isNotBlank() }?.let {
+            rows += Triple(R.drawable.ic_row_phone, "טלפון", it)
+        }
         Config.subscriptionExpiryDate(this)?.takeIf { it.isNotBlank() }?.let {
             rows += Triple(R.drawable.ic_row_calendar, "תוקף מנוי", compactSubscriptionDate(it))
         }
@@ -400,7 +403,10 @@ class CustomerActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.RIGHT
                 addView(TextView(this@CustomerActivity).apply {
-                    text = "ברוך הבא!"
+                    text = Config.customerName(this@CustomerActivity)
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { "ברוך הבא, $it!" }
+                        ?: "ברוך הבא!"
                     textSize = 17f
                     typeface = heavyFont
                     setTextColor(Color.parseColor(TEXT))

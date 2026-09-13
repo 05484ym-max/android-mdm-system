@@ -15,6 +15,8 @@ data class Policy(
     val syncIntervalMinutes: Int,
     val fullOpen: Boolean = false,
     val whatsappGuard: WhatsAppGuardPolicy = WhatsAppGuardPolicy(),
+    val customerName: String? = null,
+    val customerNumber: String? = null,
 )
 
 /** Server-authoritative DNS policy - see Config.setDnsPolicy(). desiredProviderHost
@@ -151,6 +153,8 @@ class ApiClient(
                 blockChannels = whatsappGuardJson?.optBoolean("blockChannels", false) ?: false,
                 hideProfilePhotos = whatsappGuardJson?.optBoolean("hideProfilePhotos", false) ?: false,
             ),
+            customerName = if (policyJson.isNull("customerName")) null else policyJson.optString("customerName", null),
+            customerNumber = if (policyJson.isNull("customerNumber")) null else policyJson.optString("customerNumber", null),
         )
 
         val queued = json.optJSONArray("commands") ?: JSONArray()

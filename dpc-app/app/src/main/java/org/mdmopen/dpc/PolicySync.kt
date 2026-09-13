@@ -42,6 +42,8 @@ object PolicySync {
         Config.setAppCatalog(context, result.catalog)
         Config.setKioskEnabled(context, result.policy.kioskEnabled)
         Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)
+        Config.setCustomerName(context, result.policy.customerName)
+        Config.setCustomerNumber(context, result.policy.customerNumber)
         WhatsAppGuardConfig.save(context, result.policy.whatsappGuard)
         Config.setDnsPolicy(
             context,
