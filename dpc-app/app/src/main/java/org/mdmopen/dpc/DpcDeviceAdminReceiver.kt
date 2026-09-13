@@ -11,6 +11,8 @@ class DpcDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
+        runCatching { ResetProtection.enforce(context) }
+            .onFailure { Log.w(TAG, "Reset protection check after admin enable failed", it) }
         Log.d(TAG, "Device admin enabled")
     }
 
@@ -20,22 +22,26 @@ class DpcDeviceAdminReceiver : DeviceAdminReceiver() {
     }
 
     /**
-     * Fires once provisioning succeeds. Stores whatever the QR carried so the
-     * compliance screen can enrol without the installer typing anything.
+     * Fires once provisioning succeeds. Anti-reset state is asserted immediately,
+     * even when no optional QR extras were supplied, then enrollment extras are
+     * stored when present.
      */
     override fun onProfileProvisioningComplete(context: Context, intent: Intent) {
         super.onProfileProvisioningComplete(context, intent)
 
+        runCatching { ResetProtection.enforce(context) }
+            .onFailure { Log.w(TAG, "Reset protection after provisioning failed", it) }
+
         val extras = intent.getParcelableExtra<PersistableBundle>(
             DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE
-        ) ?: return
+        )
 
-        extras.getString("serverUrl")?.takeIf { it.isNotBlank() }
+        extras?.getString("serverUrl")?.takeIf { it.isNotBlank() }
             ?.let { Config.setServerUrl(context, it) }
-        extras.getString("enrollmentToken")?.takeIf { it.isNotBlank() }
+        extras?.getString("enrollmentToken")?.takeIf { it.isNotBlank() }
             ?.let { Config.setPendingEnrollmentToken(context, it) }
 
-        Log.i(TAG, "Provisioning extras stored")
+        Log.i(TAG, "Provisioning complete; reset protection asserted")
     }
 
     private companion object {
