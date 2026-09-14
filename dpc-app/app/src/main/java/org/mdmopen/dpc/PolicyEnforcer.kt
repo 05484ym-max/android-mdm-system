@@ -60,6 +60,10 @@ class PolicyEnforcer(private val context: Context) {
         // directly (bypassing in-app PIN checks entirely), and Safe Mode
         // disables every non-system app - including this one - taking the
         // whole kiosk/allowlist enforcement down with it.
+        // A normal policy apply intentionally closes an admin-opened debugging
+        // maintenance window. Accessibility setup itself is not a normal apply,
+        // so it may preserve that window long enough to collect a Samsung crash log.
+        DebugMaintenanceState.setActive(context, false)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
 
@@ -237,7 +241,14 @@ class PolicyEnforcer(private val context: Context) {
         // kiosk is temporarily released.
         try { dpm.setUninstallBlocked(admin, context.packageName, true) } catch (_: Exception) {}
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET) } catch (_: Exception) {}
-        try { dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES) } catch (_: Exception) {}
+        // OPEN_DEBUGGING_TEMP is an explicit admin-only diagnostic mode. Do not
+        // tear adb down when Accessibility setup begins; otherwise the Settings
+        // crash we are trying to capture disconnects logcat before it is useful.
+        if (!DebugMaintenanceState.isActive(context)) {
+            try { dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES) } catch (_: Exception) {}
+        } else {
+            try { dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES) } catch (_: Exception) {}
+        }
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT) } catch (_: Exception) {}
 
         // Release kiosk at the policy layer before launching Samsung Settings.
@@ -294,6 +305,7 @@ class PolicyEnforcer(private val context: Context) {
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
+        DebugMaintenanceState.setActive(context, false)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
         try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
@@ -477,6 +489,9 @@ class PolicyEnforcer(private val context: Context) {
      */
     fun openDebuggingUntilNextSync() {
         check(isDeviceOwner()) { "Not device owner" }
+        // Persist before clearing the restriction so an Accessibility setup
+        // transition cannot immediately tear adb down again.
+        DebugMaintenanceState.setActive(context, true)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
     }
 
