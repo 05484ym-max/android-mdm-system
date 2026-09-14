@@ -39,17 +39,22 @@ jobs:
 
           base = Path('dpc-app/app/src/main/java/org/mdmopen/dpc')
           engine = (base / 'WhatsAppGuardEngine.kt').read_text()
+          blocked = (base / 'WhatsAppBlockedActivity.kt').read_text()
           service = (base / 'WhatsAppGuardService.kt').read_text()
           policy = (base / 'WhatsAppGuardPolicy.kt').read_text()
           matcher = (base / 'WhatsAppGuardTerms.kt').read_text()
           enforcer = (base / 'PolicyEnforcer.kt').read_text()
+          manifest = Path('dpc-app/app/src/main/AndroidManifest.xml').read_text()
           xml = Path('dpc-app/app/src/main/res/xml/whatsapp_guard_accessibility.xml').read_text()
 
           checks = {
               'service scoped to WhatsApp package': 'android:packageNames="com.whatsapp"' in xml,
               'window topology events observed': 'typeWindowsChanged' in xml,
-              'status click eject exists': 'val statusTarget = policy.blockStatuses && signals.any' in engine and 'if (statusTarget) return ejectBack()' in engine,
-              'channel click eject exists': 'val channelTarget = policy.blockChannels && signals.any' in engine and 'if (channelTarget) return ejectBack()' in engine,
+              'status click eject exists': 'val statusTarget = policy.blockStatuses && signals.any' in engine and 'ejectBack(WhatsAppBlockedActivity.KIND_STATUS)' in engine,
+              'channel click eject exists': 'val channelTarget = policy.blockChannels && signals.any' in engine and 'ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)' in engine,
+              'blocked activity registered private': 'android:name=".WhatsAppBlockedActivity"' in manifest and 'android:exported="false"' in manifest,
+              'blocked screen returns to WhatsApp': 'getLaunchIntentForPackage(WHATSAPP_PACKAGE)' in blocked and 'חזרה ל-WhatsApp' in blocked,
+              'blocked screen is informational fail-open': 'catch (_: Exception)' in engine and 'service.startActivity(intent)' in engine,
               'click matching stays local': 'private fun clickSignals(event: AccessibilityEvent)' in engine and 'addDescendants(source, 2)' in engine,
               'updates navigation is exempt per signal': '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus' in engine and '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isChannel' in engine,
               'no whole-updates screen eject': 'screen == WhatsAppScreen.UPDATES) {' not in engine,
