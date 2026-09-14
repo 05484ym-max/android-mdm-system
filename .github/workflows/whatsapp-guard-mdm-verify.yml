@@ -42,6 +42,7 @@ jobs:
           service = (base / 'WhatsAppGuardService.kt').read_text()
           policy = (base / 'WhatsAppGuardPolicy.kt').read_text()
           matcher = (base / 'WhatsAppGuardTerms.kt').read_text()
+          enforcer = (base / 'PolicyEnforcer.kt').read_text()
           xml = Path('dpc-app/app/src/main/res/xml/whatsapp_guard_accessibility.xml').read_text()
 
           checks = {
@@ -59,6 +60,9 @@ jobs:
               'render root verified as WhatsApp': 'root?.packageName?.toString() != WHATSAPP_PACKAGE' in service,
               'service re-locks managed accessibility': 'allowManagedAccessibilityService()' in service,
               'device owner required by guard protection': 'isDeviceOwnerApp' in policy,
+              'first setup keeps Samsung accessibility visible': 'FIRST_SETUP_PENDING' in policy and 'setSamsungAccessibilitySettingsVisible(context, dpm, admin, true)' in policy,
+              'protected state hides Samsung accessibility settings': 'PROTECTED' in policy and 'setSamsungAccessibilitySettingsVisible(context, dpm, admin, false)' in policy,
+              'Samsung accessibility remains essential during setup': 'com.samsung.accessibility' in enforcer and 'essential += samsungAccessibilityPackage' in enforcer,
               'post-setup accessibility loss fails closed': 'ACCESSIBILITY_LOST_BLOCK' in policy and 'setGuardSuspended(context, dpm, admin, true)' in policy,
               'first setup remains separately modeled': 'FIRST_SETUP_PENDING' in policy,
           }
