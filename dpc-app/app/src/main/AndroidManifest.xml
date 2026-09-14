@@ -31,6 +31,22 @@
         </activity>
 
         <activity
+            android:name=".WhatsAppMaskCalibrationLauncherActivity"
+            android:exported="true"
+            android:label="כיול WhatsApp">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".WhatsAppMaskCalibrationActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar.Translucent" />
+
+        <activity
             android:name=".KioskLauncherActivity"
             android:exported="true"
             android:launchMode="singleTask"
