@@ -54,7 +54,7 @@ jobs:
               'updates navigation is exempt per signal': '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus' in engine and '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isChannel' in engine,
               'no whole-updates screen eject': 'screen == WhatsAppScreen.UPDATES) {' not in engine,
               'no updates click eject': 'policy.blockStatuses && policy.blockChannels && WhatsAppGuardTerms.isUpdates' not in engine,
-              'picker avatar rail tightened': 'val width = dp(if (picker) 58 else 72)' in engine and 'dp(if (picker) 96 else 68)' in engine,
+              'avatar mask is narrow cut rail': 'private fun maskAvatarCutRail' in engine and 'val width = dp(if (picker) 20 else 22)' in engine,
               'global back ejection used': 'performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)' in engine,
               'no status/channel overlay fallback': 'Status/Channels intentionally have no overlay fallback' in engine,
               'eject debounce exists': 'EJECT_DEBOUNCE_MS' in engine,
