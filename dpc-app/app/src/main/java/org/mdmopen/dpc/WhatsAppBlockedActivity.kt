@@ -15,11 +15,10 @@ class WhatsAppBlockedActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         val kind = intent.getStringExtra(EXTRA_KIND)
-        val title = if (kind == KIND_CHANNEL) "הערוץ חסום" else "הסטטוס חסום"
-        val message = if (kind == KIND_CHANNEL) {
-            "הגישה לערוצים חסומה במכשיר זה."
-        } else {
-            "הגישה לסטטוסים חסומה במכשיר זה."
+        val (title, message) = when (kind) {
+            KIND_CHANNEL -> "הערוץ חסום" to "הגישה לערוצים חסומה במכשיר זה."
+            KIND_UPDATES -> "העדכונים חסומים" to "הגישה לעדכונים, סטטוסים וערוצים חסומה במכשיר זה."
+            else -> "הסטטוס חסום" to "הגישה לסטטוסים חסומה במכשיר זה."
         }
 
         val density = resources.displayMetrics.density
@@ -81,6 +80,7 @@ class WhatsAppBlockedActivity : Activity() {
         const val EXTRA_KIND = "blocked_kind"
         const val KIND_STATUS = "status"
         const val KIND_CHANNEL = "channel"
+        const val KIND_UPDATES = "updates"
         private const val WHATSAPP_PACKAGE = "com.whatsapp"
     }
 }
