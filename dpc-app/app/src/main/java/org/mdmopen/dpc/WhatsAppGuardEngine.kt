@@ -49,10 +49,10 @@ class WhatsAppGuardEngine(
 
         if (policy.hideProfilePhotos) {
             when (screen) {
-                WhatsAppScreen.CHAT_LIST -> maskAvatarCuts(nodes, root)
+                WhatsAppScreen.CHAT_LIST -> maskAvatarAreasPerChatRow(nodes, root)
                 WhatsAppScreen.CHAT -> maskChatHeader(nodes, root)
                 WhatsAppScreen.CONTACT_INFO -> maskContactInfo(nodes, root)
-                WhatsAppScreen.CONTACT_PICKER -> maskAvatarCuts(nodes, root, picker = true)
+                WhatsAppScreen.CONTACT_PICKER -> maskAvatarAreasPerChatRow(nodes, root, picker = true)
                 WhatsAppScreen.UPDATES,
                 WhatsAppScreen.UNKNOWN -> Unit
             }
@@ -98,59 +98,167 @@ class WhatsAppGuardEngine(
     }
 
     /**
-     * Draw only narrow cuts inside avatar rectangles that WhatsApp itself exposes.
-     * There is no continuous rail and no screen-edge guess, so text, whitespace and
-     * unrelated controls remain untouched on different screen sizes. If we cannot
-     * identify at least two aligned avatar candidates with confidence, draw nothing.
+     * Hides the full avatar slot from the geometry of each verified chat/contact row.
+     * The avatar image itself is never required as a signal, so a late-loaded image
+     * cannot briefly defeat placement. All geometry is derived from the row bounds;
+     * there are no fixed screen-edge coordinates or device-specific dimensions.
+     *
+     * Detection is intentionally conservative. A node must look like a repeated,
+     * full-width row with textual descendants and must agree with the dominant row
+     * height on the current screen. If confidence is insufficient we draw nothing
+     * rather than cover unrelated WhatsApp controls.
      */
-    private fun maskAvatarCuts(
+    private fun maskAvatarAreasPerChatRow(
         nodes: List<AccessibilityNodeInfo>,
         root: AccessibilityNodeInfo,
         picker: Boolean = false,
     ) {
         val screen = rootBounds(root)
-        val listTop = screen.top + dp(if (picker) 72 else 54)
-        val listBottom = screen.bottom - dp(if (picker) 56 else 48)
-        if (listBottom <= listTop) return
+        if (screen.width() <= 0 || screen.height() <= 0) return
 
-        val candidates = imageCandidates(nodes, 30, if (picker) 92 else 84)
-            .filter { it.centerY() in listTop..listBottom }
-            .filter { it.left >= screen.left && it.right <= screen.right }
-        if (candidates.size < 2) return
-
-        val rtl = service.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
-        val outerHalf = candidates.filter {
-            if (rtl) it.centerX() >= screen.centerX() else it.centerX() <= screen.centerX()
+        val raw = nodes.mapNotNull { node ->
+            val bounds = nodeBounds(node)
+            if (!looksLikeChatRow(node, bounds, screen, picker)) return@mapNotNull null
+            RowCandidate(node, bounds, rowConfidence(node, bounds, screen))
         }
-        if (outerHalf.size < 2) return
+        if (raw.size < 2) return
 
-        val anchor = if (rtl) outerHalf.maxByOrNull { it.centerX() } else outerHalf.minByOrNull { it.centerX() }
-            ?: return
-        val tolerance = maxOf(dp(14), anchor.width() / 3)
-        val column = outerHalf
-            .filter { abs(it.centerX() - anchor.centerX()) <= tolerance }
-            .sortedBy { it.top }
-        if (column.size < 2) return
+        // Prefer the smallest qualifying container at a given vertical position so a
+        // parent list/container is not mistaken for an individual row.
+        val deNested = raw.filter { candidate ->
+            raw.none { other ->
+                other !== candidate &&
+                    other.bounds.top >= candidate.bounds.top &&
+                    other.bounds.bottom <= candidate.bounds.bottom &&
+                    other.bounds.height() < candidate.bounds.height() &&
+                    verticalOverlapRatio(candidate.bounds, other.bounds) > 0.70f
+            }
+        }
+        if (deNested.size < 2) return
 
-        val medianWidth = column.map { it.width() }.sorted().let { it[it.size / 2] }
-        val sizeTolerance = maxOf(dp(8), medianWidth / 4)
-        val verified = column.filter { abs(it.width() - medianWidth) <= sizeTolerance }
+        val heights = deNested.map { it.bounds.height() }.sorted()
+        val medianHeight = heights[heights.size / 2]
+        if (medianHeight <= 0) return
+        val heightTolerance = (medianHeight * 0.24f).toInt().coerceAtLeast(1)
+
+        val verified = deNested
+            .filter { abs(it.bounds.height() - medianHeight) <= heightTolerance }
+            .filter { it.confidence >= 0.72f }
+            .sortedBy { it.bounds.top }
         if (verified.size < 2) return
 
-        verified.forEach { avatar ->
-            val cutWidth = (avatar.width() * 0.34f).toInt().coerceIn(dp(10), dp(26))
-            val verticalInset = (avatar.height() * 0.08f).toInt().coerceAtLeast(1)
-            val top = (avatar.top + verticalInset).coerceAtLeast(listTop)
-            val bottom = (avatar.bottom - verticalInset).coerceAtMost(listBottom)
-            if (bottom <= top) return@forEach
-
-            val cut = if (rtl) {
-                Rect((avatar.right - cutWidth).coerceAtLeast(avatar.left), top, avatar.right, bottom)
-            } else {
-                Rect(avatar.left, top, (avatar.left + cutWidth).coerceAtMost(avatar.right), bottom)
-            }
-            overlays.addMask(clamp(cut, screen))
+        val rtl = service.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
+        verified.forEach { row ->
+            avatarRectForRow(row.bounds, screen, rtl)?.let(overlays::addMask)
         }
+    }
+
+    private data class RowCandidate(
+        val node: AccessibilityNodeInfo,
+        val bounds: Rect,
+        val confidence: Float,
+    )
+
+    private fun looksLikeChatRow(
+        node: AccessibilityNodeInfo,
+        bounds: Rect,
+        screen: Rect,
+        picker: Boolean,
+    ): Boolean {
+        if (bounds.width() <= 0 || bounds.height() <= 0) return false
+
+        val widthRatio = bounds.width().toFloat() / screen.width().toFloat()
+        val heightRatio = bounds.height().toFloat() / screen.height().toFloat()
+        val minHeightRatio = if (picker) 0.045f else 0.050f
+        val maxHeightRatio = if (picker) 0.145f else 0.155f
+        if (widthRatio < 0.70f || heightRatio !in minHeightRatio..maxHeightRatio) return false
+
+        // Header and bottom navigation areas are not list rows. These are relative
+        // fractions of the active WhatsApp window, not device-specific pixel values.
+        val centerRatio = (bounds.centerY() - screen.top).toFloat() / screen.height().toFloat()
+        if (centerRatio < 0.10f || centerRatio > 0.93f) return false
+
+        val textCount = descendantTextCount(node, depth = 3)
+        if (textCount < 1) return false
+
+        val cls = node.className?.toString().orEmpty()
+        val id = node.viewIdResourceName.orEmpty()
+        val containerSignal =
+            node.childCount >= 2 ||
+                cls.contains("Layout", ignoreCase = true) ||
+                cls.contains("ViewGroup", ignoreCase = true) ||
+                id.contains("row", ignoreCase = true) ||
+                id.contains("cell", ignoreCase = true)
+        return containerSignal
+    }
+
+    private fun rowConfidence(node: AccessibilityNodeInfo, bounds: Rect, screen: Rect): Float {
+        var score = 0f
+        val widthRatio = bounds.width().toFloat() / screen.width().toFloat()
+        val textCount = descendantTextCount(node, depth = 3)
+        val childCount = node.childCount
+        val cls = node.className?.toString().orEmpty()
+        val id = node.viewIdResourceName.orEmpty()
+
+        if (widthRatio >= 0.85f) score += 0.30f else if (widthRatio >= 0.75f) score += 0.20f
+        if (textCount >= 2) score += 0.30f else if (textCount == 1) score += 0.15f
+        if (childCount >= 2) score += 0.15f
+        if (cls.contains("Layout", true) || cls.contains("ViewGroup", true)) score += 0.10f
+        if (id.contains("row", true) || id.contains("cell", true) || id.contains("item", true)) score += 0.10f
+
+        val edgeSlack = screen.width() * 0.08f
+        if (bounds.left <= screen.left + edgeSlack && bounds.right >= screen.right - edgeSlack) score += 0.10f
+        return score.coerceAtMost(1f)
+    }
+
+    private fun descendantTextCount(node: AccessibilityNodeInfo, depth: Int): Int {
+        if (depth < 0) return 0
+        var count = 0
+        val ownText = node.text?.toString().orEmpty()
+        val ownDescription = node.contentDescription?.toString().orEmpty()
+        if (ownText.isNotBlank() || ownDescription.isNotBlank()) count++
+        if (depth == 0) return count
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            count += descendantTextCount(child, depth - 1)
+            if (count >= 3) return count
+        }
+        return count
+    }
+
+    private fun avatarRectForRow(row: Rect, screen: Rect, rtl: Boolean): Rect? {
+        val rowHeight = row.height()
+        if (rowHeight <= 0) return null
+
+        // Use only row-relative proportions. This scales with WhatsApp density/font
+        // changes and with different physical screen sizes without a device table.
+        val avatarSize = (rowHeight * 0.72f).toInt().coerceAtLeast(1)
+        val horizontalInset = (rowHeight * 0.10f).toInt().coerceAtLeast(1)
+        val top = row.centerY() - avatarSize / 2
+        val bottom = top + avatarSize
+
+        val rect = if (rtl) {
+            val right = row.right - horizontalInset
+            Rect(right - avatarSize, top, right, bottom)
+        } else {
+            val left = row.left + horizontalInset
+            Rect(left, top, left + avatarSize, bottom)
+        }
+
+        val clippedToRow = Rect(
+            rect.left.coerceAtLeast(row.left),
+            rect.top.coerceAtLeast(row.top),
+            rect.right.coerceAtMost(row.right),
+            rect.bottom.coerceAtMost(row.bottom),
+        )
+        val clipped = clamp(clippedToRow, screen)
+        return clipped.takeIf { it.width() > 1 && it.height() > 1 }
+    }
+
+    private fun verticalOverlapRatio(a: Rect, b: Rect): Float {
+        val overlap = (minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)).coerceAtLeast(0)
+        val smaller = minOf(a.height(), b.height()).coerceAtLeast(1)
+        return overlap.toFloat() / smaller.toFloat()
     }
 
     private fun maskChatHeader(nodes: List<AccessibilityNodeInfo>, root: AccessibilityNodeInfo) {
