@@ -58,7 +58,7 @@
       ? { text: 'ההגנה כבויה', cls: 'wa-runtime-off' }
       : waAccessibility
         ? { text: '✓ פעיל ומוגן', cls: 'wa-runtime-ok' }
-        : { text: '⚠ נדרשת הפעלה חד־פעמית של שירות הנגישות — WhatsApp יישאר נעול עד אז', cls: 'wa-runtime-warn' };
+        : { text: '⚠ שירות הנגישות אינו פעיל — WhatsApp נשאר זמין, אך הסינון אינו נאכף כרגע', cls: 'wa-runtime-warn' };
     const lastCommands = history.slice(-5).reverse();
 
     panel.innerHTML = `
@@ -230,7 +230,7 @@
         ? { text: 'ההגנה כבויה', cls: 'wa-runtime-off' }
         : accessibility
           ? { text: '✓ פעיל ומוגן', cls: 'wa-runtime-ok' }
-          : { text: '⚠ נדרשת הפעלה חד־פעמית של שירות הנגישות — WhatsApp יישאר נעול עד אז', cls: 'wa-runtime-warn' },
+          : { text: '⚠ שירות הנגישות אינו פעיל — WhatsApp נשאר זמין, אך הסינון אינו נאכף כרגע', cls: 'wa-runtime-warn' },
     };
   }
 
