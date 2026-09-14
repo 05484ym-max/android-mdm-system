@@ -3,17 +3,26 @@ package org.mdmopen.dpc
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 
-enum class WhatsAppScreen { CHAT_LIST, CHAT, UPDATES, CONTACT_INFO, UNKNOWN }
+enum class WhatsAppScreen { CHAT_LIST, CHAT, UPDATES, CONTACT_INFO, CONTACT_PICKER, UNKNOWN }
 
 object WhatsAppScreenClassifier {
     private val chatsWords = setOf("צ'אטים", "שיחות", "chats")
     private val infoWords = setOf("פרטי איש קשר", "contact info", "פרטי קבוצה", "group info")
+    private val contactPickerWords = setOf(
+        "בחירת איש קשר",
+        "select contact",
+        "איש קשר אחד",
+        "1 contact",
+        "אנשי קשר ב-whatsapp",
+        "contacts on whatsapp",
+    )
 
     fun classify(root: AccessibilityNodeInfo?): WhatsAppScreen {
         if (root == null) return WhatsAppScreen.UNKNOWN
         val nodes = flatten(root)
         val texts = nodes.mapNotNull(::nodeText).map(String::lowercase)
         if (texts.any { text -> infoWords.any(text::contains) }) return WhatsAppScreen.CONTACT_INFO
+        if (texts.any { text -> contactPickerWords.any(text::contains) }) return WhatsAppScreen.CONTACT_PICKER
         if (nodes.any(::isComposer)) return WhatsAppScreen.CHAT
         if (nodes.any { node -> WhatsAppGuardTerms.isUpdates(nodeText(node), node.viewIdResourceName) } ||
             nodes.any { node -> WhatsAppGuardTerms.isStatus(nodeText(node), node.viewIdResourceName) } ||
