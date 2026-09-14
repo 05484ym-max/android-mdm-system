@@ -3,6 +3,8 @@ package org.mdmopen.dpc
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Rect
+import kotlin.math.max
+import kotlin.math.min
 
 enum class WhatsAppMaskTarget(val storageKey: String) {
     CHAT_LIST("chat_list"),
@@ -18,13 +20,11 @@ data class NormalizedMaskRect(
     val bottom: Float,
 ) {
     fun normalized(): NormalizedMaskRect {
-        var l = left.coerceIn(0f, 1f)
-        var t = top.coerceIn(0f, 1f)
-        var r = right.coerceIn(0f, 1f)
-        var b = bottom.coerceIn(0f, 1f)
-        if (l > r) l = r.also { r = l }
-        if (t > b) t = b.also { b = t }
-        return NormalizedMaskRect(l, t, r, b)
+        val cl = left.coerceIn(0f, 1f)
+        val ct = top.coerceIn(0f, 1f)
+        val cr = right.coerceIn(0f, 1f)
+        val cb = bottom.coerceIn(0f, 1f)
+        return NormalizedMaskRect(min(cl, cr), min(ct, cb), max(cl, cr), max(ct, cb))
     }
 
     fun isUsable(): Boolean = right - left >= 0.02f && bottom - top >= 0.02f
