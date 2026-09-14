@@ -1,7 +1,10 @@
 package org.mdmopen.dpc
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
@@ -13,6 +16,7 @@ class WhatsAppGuardEngine(
     private val overlays: WhatsAppOverlayController,
 ) {
     private var lastEjectAt = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun handleEvent(event: AccessibilityEvent?, policy: WhatsAppGuardPolicy): Boolean {
         if (event == null || !policy.enabled) return false
@@ -27,12 +31,12 @@ class WhatsAppGuardEngine(
             val statusTarget = policy.blockStatuses && signals.any { (text, id) ->
                 !WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus(text, id)
             }
-            if (statusTarget) return ejectBack()
+            if (statusTarget) return ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
 
             val channelTarget = policy.blockChannels && signals.any { (text, id) ->
                 !WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isChannel(text, id)
             }
-            if (channelTarget) return ejectBack()
+            if (channelTarget) return ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
         }
         return false
     }
@@ -123,8 +127,6 @@ class WhatsAppGuardEngine(
         }
         if (raw.size < 2) return
 
-        // Prefer the smallest qualifying container at a given vertical position so a
-        // parent list/container is not mistaken for an individual row.
         val deNested = raw.filter { candidate ->
             raw.none { other ->
                 other !== candidate &&
@@ -173,8 +175,6 @@ class WhatsAppGuardEngine(
         val maxHeightRatio = if (picker) 0.145f else 0.155f
         if (widthRatio < 0.70f || heightRatio !in minHeightRatio..maxHeightRatio) return false
 
-        // Header and bottom navigation areas are not list rows. These are relative
-        // fractions of the active WhatsApp window, not device-specific pixel values.
         val centerRatio = (bounds.centerY() - screen.top).toFloat() / screen.height().toFloat()
         if (centerRatio < 0.10f || centerRatio > 0.93f) return false
 
@@ -230,8 +230,6 @@ class WhatsAppGuardEngine(
         val rowHeight = row.height()
         if (rowHeight <= 0) return null
 
-        // Use only row-relative proportions. This scales with WhatsApp density/font
-        // changes and with different physical screen sizes without a device table.
         val avatarSize = (rowHeight * 0.72f).toInt().coerceAtLeast(1)
         val horizontalInset = (rowHeight * 0.10f).toInt().coerceAtLeast(1)
         val top = row.centerY() - avatarSize / 2
@@ -293,12 +291,29 @@ class WhatsAppGuardEngine(
         overlays.addMask(clamp(Rect(cx - size / 2, top, cx + size / 2, top + size), screen))
     }
 
-    private fun ejectBack(): Boolean {
+    private fun ejectBack(kind: String): Boolean {
         val now = SystemClock.uptimeMillis()
         if (now - lastEjectAt < EJECT_DEBOUNCE_MS) return true
         lastEjectAt = now
         overlays.clear()
-        return service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+        val backedOut = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+        if (backedOut) {
+            mainHandler.postDelayed({ showBlockedScreen(kind) }, BLOCKED_SCREEN_DELAY_MS)
+        }
+        return backedOut
+    }
+
+    private fun showBlockedScreen(kind: String) {
+        val intent = Intent(service, WhatsAppBlockedActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra(WhatsAppBlockedActivity.EXTRA_KIND, kind)
+        }
+        try {
+            service.startActivity(intent)
+        } catch (_: Exception) {
+            // Blocking already succeeded through GLOBAL_ACTION_BACK. If Android refuses
+            // the informational activity, never trap or suspend WhatsApp as a fallback.
+        }
     }
 
     private fun imageCandidates(nodes: List<AccessibilityNodeInfo>, minDp: Int, maxDp: Int): List<Rect> {
@@ -331,5 +346,6 @@ class WhatsAppGuardEngine(
 
     companion object {
         private const val EJECT_DEBOUNCE_MS = 650L
+        private const val BLOCKED_SCREEN_DELAY_MS = 90L
     }
 }
