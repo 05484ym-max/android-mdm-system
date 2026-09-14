@@ -89,6 +89,11 @@
 
         <activity android:name=".AppStoreActivity" android:exported="false" />
         <activity android:name=".CustomerActivity" android:exported="false" />
+        <activity
+            android:name=".WhatsAppBlockedActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop" />
 
         <activity
             android:name=".ProvisioningActivity"
