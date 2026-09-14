@@ -39,7 +39,7 @@ object UnifiedBlockedScreenStyle {
         val density = context.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt().coerceAtLeast(1)
 
-        val background = GradientDrawable(
+        val pageBackground = GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             intArrayOf(BG, Color.parseColor("#ECEBDD"), BG_SOFT),
         )
@@ -48,7 +48,7 @@ object UnifiedBlockedScreenStyle {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(24), dp(32), dp(24), dp(32))
-            this.background = background
+            background = pageBackground
             layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
 
