@@ -63,7 +63,8 @@ jobs:
               'first setup keeps Samsung accessibility visible': 'FIRST_SETUP_PENDING' in policy and 'setSamsungAccessibilitySettingsVisible(context, dpm, admin, true)' in policy,
               'protected state hides Samsung accessibility settings': 'PROTECTED' in policy and 'setSamsungAccessibilitySettingsVisible(context, dpm, admin, false)' in policy,
               'Samsung accessibility remains essential during setup': 'com.samsung.accessibility' in enforcer and 'essential += samsungAccessibilityPackage' in enforcer,
-              'post-setup accessibility loss fails closed': 'ACCESSIBILITY_LOST_BLOCK' in policy and 'setGuardSuspended(context, dpm, admin, true)' in policy,
+              'post-setup accessibility loss fails open': 'ACCESSIBILITY_LOST_OPEN' in policy and 'setGuardSuspended(context, dpm, admin, false)' in policy,
+              'legacy fail-closed accessibility state removed': 'ACCESSIBILITY_LOST_BLOCK' not in policy and 'ACCESSIBILITY_LOST_BLOCKED' not in policy,
               'first setup remains separately modeled': 'FIRST_SETUP_PENDING' in policy,
           }
           failed = [name for name, ok in checks.items() if not ok]
