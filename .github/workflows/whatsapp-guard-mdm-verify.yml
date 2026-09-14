@@ -44,6 +44,9 @@ jobs:
           policy = (base / 'WhatsAppGuardPolicy.kt').read_text()
           matcher = (base / 'WhatsAppGuardTerms.kt').read_text()
           enforcer = (base / 'PolicyEnforcer.kt').read_text()
+          calibration = (base / 'WhatsAppMaskCalibration.kt').read_text()
+          calibration_ui = (base / 'WhatsAppMaskCalibrationActivity.kt').read_text()
+          calibration_launcher = (base / 'WhatsAppMaskCalibrationLauncherActivity.kt').read_text()
           manifest = Path('dpc-app/app/src/main/AndroidManifest.xml').read_text()
           xml = Path('dpc-app/app/src/main/res/xml/whatsapp_guard_accessibility.xml').read_text()
 
@@ -61,10 +64,15 @@ jobs:
               'click matching stays local': 'private fun clickSignals(event: AccessibilityEvent)' in engine and 'addDescendants(source, 2)' in engine,
               'internal status/channel matcher does not confuse Updates': '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus' in engine and '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isChannel' in engine,
               'no whole-updates screen classifier eject': 'screen == WhatsAppScreen.UPDATES) {' not in engine,
-              'avatar masking uses row geometry': 'private fun maskAvatarAreasPerChatRow' in engine and 'avatarRectForRow(row.bounds, screen, rtl)' in engine,
-              'avatar list masking does not require image candidates': 'WhatsAppScreen.CHAT_LIST -> maskAvatarAreasPerChatRow(nodes, root)' in engine and 'WhatsAppScreen.CONTACT_PICKER -> maskAvatarAreasPerChatRow(nodes, root, picker = true)' in engine,
-              'avatar geometry is row-relative': 'val avatarSize = (rowHeight * 0.72f)' in engine and 'val horizontalInset = (rowHeight * 0.10f)' in engine,
-              'row masking is confidence gated': 'it.confidence >= 0.72f' in engine and 'if (verified.size < 2) return' in engine,
+              'avatar masking uses saved calibration': 'WhatsAppMaskCalibrationStore.targetFor(screen)' in engine and 'WhatsAppMaskCalibrationStore.get(service, target)' in engine,
+              'no automatic row/image fallback': 'maskAvatarAreasPerChatRow' not in engine and 'imageCandidates' not in engine,
+              'calibration stored as normalized ratios': 'NormalizedMaskRect' in calibration and 'screen.width() * n.left' in calibration and 'screen.height() * n.top' in calibration,
+              'calibration is orientation-specific': 'ORIENTATION_LANDSCAPE' in calibration and 'portrait' in calibration,
+              'all WhatsApp mask targets exist': all(x in calibration for x in ['CHAT_LIST', 'CONTACT_PICKER', 'CHAT_HEADER', 'CONTACT_INFO']),
+              'calibration overlay is draggable and resizable': 'MaskEditorView' in calibration_ui and 'DragMode.MOVE' in calibration_ui and 'DragMode.LEFT' in calibration_ui and 'DragMode.RIGHT' in calibration_ui,
+              'calibration save reset cancel controls exist': all(x in calibration_ui for x in ['שמור', 'איפוס', 'ביטול']),
+              'calibration launcher requires admin pin': 'Config.checkAdminPin' in calibration_launcher and 'Config.hasAdminPin' in calibration_launcher,
+              'calibration overlay registered private': 'android:name=".WhatsAppMaskCalibrationActivity"' in manifest and 'android:exported="false"' in manifest,
               'global back ejection used for status/channel': 'performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)' in engine,
               'no status/channel overlay fallback': 'Status/Channels intentionally have no overlay fallback' in engine,
               'eject debounce exists': 'EJECT_DEBOUNCE_MS' in engine and 'UPDATES_EJECT_DEBOUNCE_MS' in service,
