@@ -49,10 +49,10 @@ class WhatsAppGuardEngine(
 
         if (policy.hideProfilePhotos) {
             when (screen) {
-                WhatsAppScreen.CHAT_LIST -> maskAvatarRail(root)
+                WhatsAppScreen.CHAT_LIST -> maskAvatarCutRail(root)
                 WhatsAppScreen.CHAT -> maskChatHeader(nodes, root)
                 WhatsAppScreen.CONTACT_INFO -> maskContactInfo(nodes, root)
-                WhatsAppScreen.CONTACT_PICKER -> maskAvatarRail(root, picker = true)
+                WhatsAppScreen.CONTACT_PICKER -> maskAvatarCutRail(root, picker = true)
                 WhatsAppScreen.UPDATES,
                 WhatsAppScreen.UNKNOWN -> Unit
             }
@@ -101,13 +101,16 @@ class WhatsAppGuardEngine(
         return out
     }
 
-    private fun maskAvatarRail(root: AccessibilityNodeInfo, picker: Boolean = false) {
+    /**
+     * Intentionally narrow vertical cut over only the outer edge of the avatar column.
+     * This is not an avatar-sized mask: it makes profile icons look visually clipped
+     * instead of drawing a wide grey rail over the WhatsApp list.
+     */
+    private fun maskAvatarCutRail(root: AccessibilityNodeInfo, picker: Boolean = false) {
         val screen = rootBounds(root)
         val rtl = service.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
-        val width = dp(if (picker) 58 else 72)
+        val width = dp(if (picker) 20 else 22)
         val top = screen.top + dp(if (picker) 96 else 68)
-        // Picker rail is deliberately tighter than the main chat-list rail: cover
-        // only the avatar column and leave the action/header/bottom areas untouched.
         val bottom = screen.bottom - dp(if (picker) 96 else 76)
         if (bottom <= top) return
         overlays.addMask(
