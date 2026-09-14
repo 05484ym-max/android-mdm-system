@@ -49,10 +49,10 @@ class WhatsAppGuardEngine(
 
         if (policy.hideProfilePhotos) {
             when (screen) {
-                WhatsAppScreen.CHAT_LIST -> maskAvatarCutRail(nodes, root)
+                WhatsAppScreen.CHAT_LIST -> maskAvatarCuts(nodes, root)
                 WhatsAppScreen.CHAT -> maskChatHeader(nodes, root)
                 WhatsAppScreen.CONTACT_INFO -> maskContactInfo(nodes, root)
-                WhatsAppScreen.CONTACT_PICKER -> maskAvatarCutRail(nodes, root, picker = true)
+                WhatsAppScreen.CONTACT_PICKER -> maskAvatarCuts(nodes, root, picker = true)
                 WhatsAppScreen.UPDATES,
                 WhatsAppScreen.UNKNOWN -> Unit
             }
@@ -83,8 +83,6 @@ class WhatsAppGuardEngine(
 
         val source = event.source
         if (source != null) {
-            // Two levels are enough to catch the label inside a clicked row without
-            // accidentally scanning unrelated Status/Channel nodes elsewhere on Updates.
             addDescendants(source, 2)
 
             var parent = source.parent
@@ -94,20 +92,18 @@ class WhatsAppGuardEngine(
             }
         }
 
-        // Some WhatsApp builds omit event.source text completely; retain the event
-        // payload itself as one final local signal.
         event.text?.joinToString(" ")?.takeIf { it.isNotBlank() }?.let { out += it to null }
         event.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { out += it to null }
         return out
     }
 
     /**
-     * Visually clips the avatar column by following the actual avatar bounds exposed by
-     * WhatsApp instead of guessing from screen width. This therefore scales across device
-     * sizes and densities. We deliberately draw nothing when the avatar column cannot be
-     * identified with confidence rather than placing a grey strip over unrelated content.
+     * Draw only narrow cuts inside avatar rectangles that WhatsApp itself exposes.
+     * There is no continuous rail and no screen-edge guess, so text, whitespace and
+     * unrelated controls remain untouched on different screen sizes. If we cannot
+     * identify at least two aligned avatar candidates with confidence, draw nothing.
      */
-    private fun maskAvatarCutRail(
+    private fun maskAvatarCuts(
         nodes: List<AccessibilityNodeInfo>,
         root: AccessibilityNodeInfo,
         picker: Boolean = false,
@@ -120,34 +116,41 @@ class WhatsAppGuardEngine(
         val candidates = imageCandidates(nodes, 30, if (picker) 92 else 84)
             .filter { it.centerY() in listTop..listBottom }
             .filter { it.left >= screen.left && it.right <= screen.right }
-        if (candidates.isEmpty()) return
+        if (candidates.size < 2) return
 
         val rtl = service.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
         val outerHalf = candidates.filter {
             if (rtl) it.centerX() >= screen.centerX() else it.centerX() <= screen.centerX()
         }
-        if (outerHalf.isEmpty()) return
+        if (outerHalf.size < 2) return
 
         val anchor = if (rtl) outerHalf.maxByOrNull { it.centerX() } else outerHalf.minByOrNull { it.centerX() }
             ?: return
         val tolerance = maxOf(dp(14), anchor.width() / 3)
-        val column = outerHalf.filter { abs(it.centerX() - anchor.centerX()) <= tolerance }
+        val column = outerHalf
+            .filter { abs(it.centerX() - anchor.centerX()) <= tolerance }
+            .sortedBy { it.top }
         if (column.size < 2) return
 
-        val avatarWidth = column.map { it.width() }.sorted().let { it[it.size / 2] }
-        val cutWidth = (avatarWidth * 0.34f).toInt().coerceIn(dp(10), dp(26))
-        val top = column.minOf { it.top }.coerceAtLeast(listTop)
-        val bottom = column.maxOf { it.bottom }.coerceAtMost(listBottom)
-        if (bottom <= top) return
+        val medianWidth = column.map { it.width() }.sorted().let { it[it.size / 2] }
+        val sizeTolerance = maxOf(dp(8), medianWidth / 4)
+        val verified = column.filter { abs(it.width() - medianWidth) <= sizeTolerance }
+        if (verified.size < 2) return
 
-        val columnLeft = column.map { it.left }.sorted().let { it[it.size / 2] }
-        val columnRight = column.map { it.right }.sorted().let { it[it.size / 2] }
-        val cut = if (rtl) {
-            Rect((columnRight - cutWidth).coerceAtLeast(columnLeft), top, columnRight, bottom)
-        } else {
-            Rect(columnLeft, top, (columnLeft + cutWidth).coerceAtMost(columnRight), bottom)
+        verified.forEach { avatar ->
+            val cutWidth = (avatar.width() * 0.34f).toInt().coerceIn(dp(10), dp(26))
+            val verticalInset = (avatar.height() * 0.08f).toInt().coerceAtLeast(1)
+            val top = (avatar.top + verticalInset).coerceAtLeast(listTop)
+            val bottom = (avatar.bottom - verticalInset).coerceAtMost(listBottom)
+            if (bottom <= top) return@forEach
+
+            val cut = if (rtl) {
+                Rect((avatar.right - cutWidth).coerceAtLeast(avatar.left), top, avatar.right, bottom)
+            } else {
+                Rect(avatar.left, top, (avatar.left + cutWidth).coerceAtMost(avatar.right), bottom)
+            }
+            overlays.addMask(clamp(cut, screen))
         }
-        overlays.addMask(clamp(cut, screen))
     }
 
     private fun maskChatHeader(nodes: List<AccessibilityNodeInfo>, root: AccessibilityNodeInfo) {
@@ -159,8 +162,6 @@ class WhatsAppGuardEngine(
             overlays.addMask(expand(it, dp(4), screen)); return
         }
 
-        // Header-only fallback: never reaches the message composer, therefore
-        // typing and the keyboard remain fully usable.
         val rtl = service.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
         val size = dp(54)
         val top = screen.top + dp(24)
