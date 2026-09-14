@@ -1,8 +1,10 @@
 package org.mdmopen.dpc
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 
 class WhatsAppGuardService : AccessibilityService() {
@@ -11,6 +13,7 @@ class WhatsAppGuardService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var scheduled = false
     private var lastRenderAt = 0L
+    private var lastUpdatesEjectAt = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -35,6 +38,15 @@ class WhatsAppGuardService : AccessibilityService() {
         }
 
         val policy = WhatsAppGuardConfig.load(this)
+
+        // Block the Updates tab at the navigation click itself. We deliberately inspect
+        // only the clicked source/event payload here, not the whole active window, so
+        // unrelated WhatsApp clicks cannot be mistaken for Updates.
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && shouldBlockUpdatesClick(event, policy)) {
+            blockUpdatesNavigation()
+            return
+        }
+
         if (::engine.isInitialized && engine.handleEvent(event, policy)) {
             return
         }
@@ -58,9 +70,40 @@ class WhatsAppGuardService : AccessibilityService() {
         super.onDestroy()
     }
 
+    private fun shouldBlockUpdatesClick(event: AccessibilityEvent, policy: WhatsAppGuardPolicy): Boolean {
+        if (!policy.enabled || (!policy.blockStatuses && !policy.blockChannels)) return false
+        val source = event.source
+        val text = source?.let(WhatsAppScreenClassifier::nodeText)
+            ?: event.text?.joinToString(" ")
+        val id = source?.viewIdResourceName
+        return WhatsAppGuardTerms.isUpdates(text, id)
+    }
+
+    private fun blockUpdatesNavigation() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastUpdatesEjectAt < UPDATES_EJECT_DEBOUNCE_MS) return
+        lastUpdatesEjectAt = now
+        if (::overlays.isInitialized) overlays.clear()
+
+        val backedOut = performGlobalAction(GLOBAL_ACTION_BACK)
+        if (!backedOut) return
+
+        handler.postDelayed({
+            val intent = Intent(this, WhatsAppBlockedActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(WhatsAppBlockedActivity.EXTRA_KIND, WhatsAppBlockedActivity.KIND_UPDATES)
+            }
+            try {
+                startActivity(intent)
+            } catch (_: Exception) {
+                // The navigation block already succeeded through GLOBAL_ACTION_BACK.
+            }
+        }, BLOCKED_SCREEN_DELAY_MS)
+    }
+
     private fun scheduleRender(immediate: Boolean = false) {
         if (!::engine.isInitialized) return
-        val now = android.os.SystemClock.uptimeMillis()
+        val now = SystemClock.uptimeMillis()
         if (immediate && now - lastRenderAt >= MIN_RENDER_INTERVAL_MS) {
             handler.removeCallbacksAndMessages(RENDER_TOKEN)
             scheduled = false
@@ -76,7 +119,7 @@ class WhatsAppGuardService : AccessibilityService() {
     }
 
     private fun renderNow() {
-        lastRenderAt = android.os.SystemClock.uptimeMillis()
+        lastRenderAt = SystemClock.uptimeMillis()
         val root = rootInActiveWindow
         if (root?.packageName?.toString() != WHATSAPP_PACKAGE) {
             overlays.clear()
@@ -89,6 +132,8 @@ class WhatsAppGuardService : AccessibilityService() {
         const val WHATSAPP_PACKAGE = "com.whatsapp"
         private const val COALESCE_DELAY_MS = 50L
         private const val MIN_RENDER_INTERVAL_MS = 24L
+        private const val UPDATES_EJECT_DEBOUNCE_MS = 650L
+        private const val BLOCKED_SCREEN_DELAY_MS = 90L
         private val RENDER_TOKEN = Any()
     }
 }
