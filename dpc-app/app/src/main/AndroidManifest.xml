@@ -44,7 +44,7 @@
             android:name=".WhatsAppMaskCalibrationActivity"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar.Translucent" />
+            android:theme="@style/WhatsAppCalibrationTheme" />
 
         <activity
             android:name=".KioskLauncherActivity"
