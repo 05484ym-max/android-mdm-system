@@ -104,14 +104,14 @@ class PolicyEnforcer(private val context: Context) {
             }
         }
 
-        // Recover approved packages directly from DevicePolicyManager before
-        // relying on PackageManager enumeration. On some Samsung builds a
-        // package hidden by Device Owner can disappear from
-        // getInstalledApplications(), which previously meant an approved
-        // preinstalled app (for example YouTube) was never seen and therefore
-        // never unhidden.
+        // Recover approved AND essential packages directly from DevicePolicyManager
+        // before relying on PackageManager enumeration. On Samsung, a package hidden
+        // by Device Owner can disappear from getInstalledApplications(). That broke
+        // Accessibility Settings when com.samsung.accessibility had been hidden:
+        // Settings crashed with ActivityNotFoundException before the normal package
+        // loop ever had a chance to recover it.
         val directlyUnhidden = mutableSetOf<String>()
-        for (pkg in allowed) {
+        for (pkg in (allowed + essential)) {
             if (pkg == context.packageName) continue
             try {
                 if (dpm.isApplicationHidden(admin, pkg)) {
@@ -382,6 +382,18 @@ class PolicyEnforcer(private val context: Context) {
         val essential = mutableSetOf(context.packageName, "com.android.settings")
         val pm = context.packageManager
 
+        // Samsung Settings delegates its Accessibility page to this package. A hidden
+        // copy makes Settings crash with ActivityNotFoundException. MATCH_UNINSTALLED
+        // is intentional: Device Owner-hidden packages can disappear from ordinary
+        // PackageManager enumeration, which is exactly the failure mode recovered here.
+        val samsungAccessibilityPackage = "com.samsung.accessibility"
+        try {
+            pm.getApplicationInfo(samsungAccessibilityPackage, PackageManager.MATCH_UNINSTALLED_PACKAGES)
+            essential += samsungAccessibilityPackage
+        } catch (_: PackageManager.NameNotFoundException) {
+            // Non-Samsung devices (or Samsung builds without this split package) ignore it.
+        }
+
         fun addResolved(intent: Intent) {
             pm.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
                 ?.activityInfo?.packageName?.let { essential += it }
@@ -517,7 +529,6 @@ class PolicyEnforcer(private val context: Context) {
 
     fun releaseDeviceOwner() {
         check(isDeviceOwner()) { "Not device owner" }
-
         // A permanent release must never strand apps hidden by an older policy.
         // Reuse the same hardened recovery used by reversible FULL_OPEN first.
         val recovery = applyFullOpen()
