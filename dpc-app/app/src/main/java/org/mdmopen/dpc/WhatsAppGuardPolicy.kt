@@ -3,6 +3,7 @@ package org.mdmopen.dpc
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.Settings
 
 data class WhatsAppGuardPolicy(
@@ -58,6 +59,7 @@ object WhatsAppGuardConfig {
 /** Device-Owner enforcement around the accessibility based WhatsApp guard. */
 object WhatsAppGuardProtection {
     const val WHATSAPP_PACKAGE = "com.whatsapp"
+    private const val SAMSUNG_ACCESSIBILITY_PACKAGE = "com.samsung.accessibility"
 
     fun decide(policyEnabled: Boolean, accessibilityEnabled: Boolean, wasProtected: Boolean): WhatsAppGuardDecision =
         when {
@@ -93,6 +95,31 @@ object WhatsAppGuardProtection {
         }
     }
 
+    private fun setSamsungAccessibilitySettingsVisible(
+        context: Context,
+        dpm: DevicePolicyManager,
+        admin: ComponentName,
+        visible: Boolean,
+    ) {
+        // Samsung/One UI delegates Accessibility Settings to this split package.
+        // During first setup (or when the guard is disabled) it must remain visible
+        // so Settings can open normally. Once this Guard has actually been enabled,
+        // hide only that split package so a customer cannot return to the toggle and
+        // switch the managed service off. Non-Samsung devices simply ignore this.
+        try {
+            context.packageManager.getApplicationInfo(
+                SAMSUNG_ACCESSIBILITY_PACKAGE,
+                PackageManager.MATCH_UNINSTALLED_PACKAGES,
+            )
+            dpm.setApplicationHidden(admin, SAMSUNG_ACCESSIBILITY_PACKAGE, !visible)
+        } catch (_: PackageManager.NameNotFoundException) {
+            // Not a Samsung build with this split package.
+        } catch (_: Exception) {
+            // Keep the fail-closed WhatsApp suspension path authoritative even if
+            // an OEM rejects hiding its accessibility Settings component.
+        }
+    }
+
     /** Called after the ordinary app policy was applied. */
     fun reconcile(context: Context, policy: WhatsAppGuardPolicy): String {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -101,23 +128,30 @@ object WhatsAppGuardProtection {
 
         return when (decide(policy.enabled, accessibilityEnabled(context), WhatsAppGuardConfig.wasProtected(context))) {
             WhatsAppGuardDecision.DISABLED -> {
+                setSamsungAccessibilitySettingsVisible(context, dpm, admin, true)
                 setGuardSuspended(context, dpm, admin, false)
                 "DISABLED"
             }
             WhatsAppGuardDecision.FIRST_SETUP_PENDING -> {
-                // One-time setup only: allow WhatsApp while the user enables
-                // this service locally; Android does not let Device Owner do it silently.
+                // One-time setup only: keep Samsung Accessibility Settings reachable
+                // while the user/admin enables this service locally.
+                setSamsungAccessibilitySettingsVisible(context, dpm, admin, true)
                 setGuardSuspended(context, dpm, admin, false)
                 "WAITING_FOR_ACCESSIBILITY"
             }
             WhatsAppGuardDecision.ACCESSIBILITY_LOST_BLOCK -> {
                 // Setup succeeded before, therefore losing Accessibility means
-                // filtering cannot be guaranteed. Fail closed until it returns.
+                // filtering cannot be guaranteed. Keep the customer out of the
+                // accessibility toggle and fail closed by suspending WhatsApp.
+                setSamsungAccessibilitySettingsVisible(context, dpm, admin, false)
                 setGuardSuspended(context, dpm, admin, true)
                 "ACCESSIBILITY_LOST_BLOCKED"
             }
             WhatsAppGuardDecision.PROTECTED -> {
                 WhatsAppGuardConfig.markProtected(context)
+                // The service is confirmed ON. Lock Samsung's Accessibility Settings
+                // split so the customer cannot navigate back to the service toggle.
+                setSamsungAccessibilitySettingsVisible(context, dpm, admin, false)
                 setGuardSuspended(context, dpm, admin, false)
                 "PROTECTED"
             }
