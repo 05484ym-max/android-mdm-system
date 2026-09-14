@@ -1,0 +1,36 @@
+name: Admin Panel Functional Audit
+
+on:
+  pull_request:
+    paths:
+      - 'admin-panel/**'
+      - 'backend/**'
+      - '.github/workflows/admin-panel-functional-audit.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'admin-panel/**'
+      - 'backend/**'
+      - '.github/workflows/admin-panel-functional-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax-check admin scripts
+        run: |
+          for f in admin-panel/*.js; do
+            echo "Checking $f"
+            node --check "$f"
+          done
+          node --check backend/diagnostics.js
+          node --check backend/healthPanel.js
+          node --check backend/test-admin-panel-functional-audit.js
+      - name: Run panel/backend contract and diagnostic consistency audit
+        working-directory: backend
+        run: node test-admin-panel-functional-audit.js

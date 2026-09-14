@@ -10,6 +10,11 @@
   const fmt = iso => iso ? new Date(iso).toLocaleString('he-IL') : '—';
   const statusLabel = status => status === 'RESOLVED' ? 'טופל' : status === 'IN_PROGRESS' ? 'בטיפול' : 'חדש';
 
+  function requireLogin() {
+    const login = document.getElementById('loginScreen');
+    if (login) login.style.display = 'flex';
+  }
+
   function conversationMarkup(t) {
     const customerBubble = `<div class="support-chat-row customer">
       <div class="support-bubble customer-bubble">
@@ -74,17 +79,31 @@
         const id = card.getAttribute('data-ticket');
         const status = card.querySelector('[data-support-status]').value;
         const adminReply = card.querySelector('[data-support-reply]').value.trim();
+        const originalText = btn.textContent;
         btn.disabled = true;
-        const res = await fetch(`/api/support-tickets/${encodeURIComponent(id)}`, {
-          method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status, adminReply}),
-        });
-        btn.disabled = false;
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          alert(body.error || 'שמירת הפנייה נכשלה');
-          return;
+        btn.textContent = 'שומר...';
+        try {
+          const res = await fetch(`/api/support-tickets/${encodeURIComponent(id)}`, {
+            method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status, adminReply}),
+          });
+          if (res.status === 401) {
+            requireLogin();
+            return;
+          }
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            alert(body.error || 'שמירת הפנייה נכשלה');
+            return;
+          }
+          await load();
+        } catch (_) {
+          alert('שגיאת תקשורת בשמירת הפנייה');
+        } finally {
+          if (btn.isConnected) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+          }
         }
-        await load();
       });
     });
 
@@ -100,7 +119,7 @@
     try {
       const res = await fetch('/api/support-tickets');
       if (res.status === 401) {
-        document.getElementById('loginScreen').style.display = 'flex';
+        requireLogin();
         return;
       }
       if (!res.ok) throw new Error('HTTP ' + res.status);
