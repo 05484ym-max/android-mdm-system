@@ -11,9 +11,9 @@
 
   function accessText(d) {
     const a = d && d.subscriptionAccess;
-    if (!a || !a.overrideActive) return 'אין פתיחה חריגה פעילה';
-    if (a.overridePermanent) return 'פתוח לתמיד';
-    return `פתוח עד ${fmt(a.overrideUntil)}`;
+    if (!a || !a.overrideActive) return 'אין החרגת מנוי פעילה';
+    if (a.overridePermanent) return 'החרגה ללא הגבלת זמן';
+    return `החרגת מנוי עד ${fmt(a.overrideUntil)}`;
   }
 
   function controlsHtml(deviceId, compact) {
@@ -22,24 +22,24 @@
     return `<div class="subscription-unblock-card${compact ? ' compact' : ''}" data-sub-unblock-card="${esc(deviceId)}">
       <div class="subscription-unblock-head">
         <div>
-          <strong>פתיחת חסימת מנוי</strong>
+          <strong>החרגת מנוי</strong>
           <div class="subscription-unblock-status">${esc(accessText(d))}</div>
         </div>
-        ${active ? '<span class="subscription-unblock-badge">פתוח</span>' : '<span class="subscription-unblock-badge inactive">ללא פתיחה</span>'}
+        ${active ? '<span class="subscription-unblock-badge">מוחרג</span>' : '<span class="subscription-unblock-badge inactive">ללא החרגה</span>'}
       </div>
       <div class="subscription-unblock-grid">
         <select class="customer-input" data-sub-unblock-mode>
           <option value="24h">24 שעות</option>
           <option value="days">מספר ימים</option>
           <option value="until">עד תאריך ושעה</option>
-          <option value="permanent">לתמיד</option>
+          <option value="permanent">ללא הגבלת זמן</option>
         </select>
         <input class="customer-input" type="number" min="1" max="3650" value="3" data-sub-unblock-days style="display:none" aria-label="מספר ימים" />
         <input class="customer-input" type="datetime-local" data-sub-unblock-until style="display:none" aria-label="תאריך סיום" />
-        <button type="button" class="renew-btn" data-sub-unblock-apply>פתח חסימה</button>
-        ${active ? '<button type="button" class="toggle-btn cmd-danger" data-sub-unblock-clear>בטל פתיחה</button>' : ''}
+        <button type="button" class="renew-btn" data-sub-unblock-apply>הפעל החרגת מנוי</button>
+        ${active ? '<button type="button" class="toggle-btn cmd-danger" data-sub-unblock-clear>בטל החרגה</button>' : ''}
       </div>
-      <div class="subscription-unblock-note">הפתיחה אינה מסירה Device Owner ואינה מבטלת את סינון התוכן.</div>
+      <div class="subscription-unblock-note">החרגת המנוי מאפשרת ללקוח להמשיך להשתמש בשירות גם אם המנוי פג. היא לא פותחת את המכשיר, לא מסירה Device Owner ולא מבטלת את סינון התוכן.</div>
     </div>`;
   }
 
@@ -70,7 +70,7 @@
       await submit(deviceId, payload, apply);
     });
     if (clear) clear.addEventListener('click', async () => {
-      if (!confirm('לבטל את פתיחת החסימה ולחזור למצב המנוי הרגיל?')) return;
+      if (!confirm('לבטל את החרגת המנוי ולחזור למצב המנוי הרגיל?')) return;
       await submit(deviceId, { mode: 'clear' }, clear);
     });
   }
@@ -84,14 +84,14 @@
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) { alert(body.error || 'שמירת פתיחת החסימה נכשלה'); return; }
+      if (!res.ok) { alert(body.error || 'שמירת החרגת המנוי נכשלה'); return; }
       const devices = Array.isArray(window.__allDevices) ? window.__allDevices : [];
       const idx = devices.findIndex(d => d.deviceId === deviceId);
       if (idx >= 0) devices[idx] = body;
       if (typeof window.loadDevices === 'function') await window.loadDevices();
       else remount();
     } catch (_) {
-      alert('שגיאת תקשורת בשמירת פתיחת החסימה');
+      alert('שגיאת תקשורת בשמירת החרגת המנוי');
     } finally {
       button.disabled = false;
       button.textContent = old;
@@ -123,7 +123,7 @@
     const subscription = sections.find(s => s.querySelector('h3')?.textContent.trim() === 'מנוי');
     if (!subscription) return;
     const holder = document.createElement('div');
-    holder.innerHTML = `<div class="detail-section"><h3>פתיחת חסימת מנוי</h3>${controlsHtml(deviceId, false)}</div>`;
+    holder.innerHTML = `<div class="detail-section"><h3>החרגת מנוי</h3>${controlsHtml(deviceId, false)}</div>`;
     const section = holder.firstElementChild;
     subscription.insertAdjacentElement('afterend', section);
     bindCard(section.querySelector('[data-sub-unblock-card]'));
