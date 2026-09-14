@@ -17,22 +17,20 @@ class WhatsAppGuardEngine(
     fun handleEvent(event: AccessibilityEvent?, policy: WhatsAppGuardPolicy): Boolean {
         if (event == null || !policy.enabled) return false
 
-        // For Status/Channels we deliberately do not use an overlay. A click on
-        // a blocked destination is ejected with Back, which avoids stale masks
-        // or accidentally hiding unrelated WhatsApp UI.
+        // Status/Channel blocking is deliberately event-driven and target-specific.
+        // Never eject merely because WhatsApp is on the Updates tab or because a
+        // broad screen classifier sees Updates-related nodes in the accessibility tree.
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             val source = event.source
             val text = source?.let(WhatsAppScreenClassifier::nodeText)
                 ?: event.text?.joinToString(" ")
             val id = source?.viewIdResourceName
+            val updatesNavigation = WhatsAppGuardTerms.isUpdates(text, id)
 
-            if (policy.blockStatuses && WhatsAppGuardTerms.isStatus(text, id)) {
+            if (!updatesNavigation && policy.blockStatuses && WhatsAppGuardTerms.isStatus(text, id)) {
                 return ejectBack()
             }
-            if (policy.blockChannels && WhatsAppGuardTerms.isChannel(text, id)) {
-                return ejectBack()
-            }
-            if (policy.blockStatuses && policy.blockChannels && WhatsAppGuardTerms.isUpdates(text, id)) {
+            if (!updatesNavigation && policy.blockChannels && WhatsAppGuardTerms.isChannel(text, id)) {
                 return ejectBack()
             }
         }
@@ -46,16 +44,6 @@ class WhatsAppGuardEngine(
         }
 
         val screen = WhatsAppScreenClassifier.classify(root)
-
-        // If both Status and Channels are disabled, the Updates area has no
-        // allowed destination for this policy. Eject from it instead of drawing
-        // any blocker/mask over the page.
-        if (policy.blockStatuses && policy.blockChannels && screen == WhatsAppScreen.UPDATES) {
-            overlays.clear()
-            ejectBack()
-            return
-        }
-
         overlays.beginFrame()
         val nodes = WhatsAppScreenClassifier.flatten(root)
 
@@ -71,7 +59,7 @@ class WhatsAppGuardEngine(
         }
 
         // Status/Channels intentionally have no overlay fallback. They are
-        // handled by event-driven Back ejection above.
+        // handled only by target-specific click ejection above.
         overlays.endFrame()
     }
 

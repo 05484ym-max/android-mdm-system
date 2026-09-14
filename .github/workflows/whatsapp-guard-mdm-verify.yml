@@ -42,6 +42,7 @@ jobs:
           service = (base / 'WhatsAppGuardService.kt').read_text()
           policy = (base / 'WhatsAppGuardPolicy.kt').read_text()
           matcher = (base / 'WhatsAppGuardTerms.kt').read_text()
+          enforcer = (base / 'PolicyEnforcer.kt').read_text()
           xml = Path('dpc-app/app/src/main/res/xml/whatsapp_guard_accessibility.xml').read_text()
 
           checks = {
@@ -49,7 +50,9 @@ jobs:
               'window topology events observed': 'typeWindowsChanged' in xml,
               'status click eject exists': 'policy.blockStatuses && WhatsAppGuardTerms.isStatus' in engine,
               'channel click eject exists': 'policy.blockChannels && WhatsAppGuardTerms.isChannel' in engine,
-              'whole updates eject only when both blocked': 'policy.blockStatuses && policy.blockChannels && screen == WhatsAppScreen.UPDATES' in engine,
+              'updates navigation is exempt from eject': 'val updatesNavigation = WhatsAppGuardTerms.isUpdates(text, id)' in engine and '!updatesNavigation && policy.blockStatuses' in engine and '!updatesNavigation && policy.blockChannels' in engine,
+              'no whole-updates screen eject': 'screen == WhatsAppScreen.UPDATES) {' not in engine,
+              'no updates click eject': 'policy.blockStatuses && policy.blockChannels && WhatsAppGuardTerms.isUpdates' not in engine,
               'global back ejection used': 'performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)' in engine,
               'no status/channel overlay fallback': 'Status/Channels intentionally have no overlay fallback' in engine,
               'eject debounce exists': 'EJECT_DEBOUNCE_MS' in engine,
@@ -57,7 +60,11 @@ jobs:
               'render root verified as WhatsApp': 'root?.packageName?.toString() != WHATSAPP_PACKAGE' in service,
               'service re-locks managed accessibility': 'allowManagedAccessibilityService()' in service,
               'device owner required by guard protection': 'isDeviceOwnerApp' in policy,
-              'post-setup accessibility loss fails closed': 'ACCESSIBILITY_LOST_BLOCK' in policy and 'setGuardSuspended(context, dpm, admin, true)' in policy,
+              'first setup keeps Samsung accessibility visible': 'FIRST_SETUP_PENDING' in policy and 'setSamsungAccessibilitySettingsVisible(context, dpm, admin, true)' in policy,
+              'protected state hides Samsung accessibility settings': 'PROTECTED' in policy and 'setSamsungAccessibilitySettingsVisible(context, dpm, admin, false)' in policy,
+              'Samsung accessibility remains essential during setup': 'com.samsung.accessibility' in enforcer and 'essential += samsungAccessibilityPackage' in enforcer,
+              'post-setup accessibility loss fails open': 'ACCESSIBILITY_LOST_OPEN' in policy and 'setGuardSuspended(context, dpm, admin, false)' in policy,
+              'legacy fail-closed accessibility state removed': 'ACCESSIBILITY_LOST_BLOCK' not in policy and 'ACCESSIBILITY_LOST_BLOCKED' not in policy,
               'first setup remains separately modeled': 'FIRST_SETUP_PENDING' in policy,
           }
           failed = [name for name, ok in checks.items() if not ok]

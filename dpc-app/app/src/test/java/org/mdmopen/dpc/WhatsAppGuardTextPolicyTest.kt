@@ -53,13 +53,13 @@ class WhatsAppGuardTextPolicyTest {
     }
 
     @Test
-    fun guard_decision_allows_only_first_time_setup_to_remain_open() {
+    fun guard_decision_keeps_first_setup_and_post_setup_loss_open() {
         assertEquals(
             WhatsAppGuardDecision.FIRST_SETUP_PENDING,
             WhatsAppGuardProtection.decide(policyEnabled = true, accessibilityEnabled = false, wasProtected = false),
         )
         assertEquals(
-            WhatsAppGuardDecision.ACCESSIBILITY_LOST_BLOCK,
+            WhatsAppGuardDecision.ACCESSIBILITY_LOST_OPEN,
             WhatsAppGuardProtection.decide(policyEnabled = true, accessibilityEnabled = false, wasProtected = true),
         )
     }
