@@ -17,7 +17,7 @@ data class WhatsAppGuardPolicy(
 enum class WhatsAppGuardDecision {
     DISABLED,
     FIRST_SETUP_PENDING,
-    ACCESSIBILITY_LOST_BLOCK,
+    ACCESSIBILITY_LOST_OPEN,
     PROTECTED,
 }
 
@@ -65,7 +65,7 @@ object WhatsAppGuardProtection {
         when {
             !policyEnabled -> WhatsAppGuardDecision.DISABLED
             accessibilityEnabled -> WhatsAppGuardDecision.PROTECTED
-            wasProtected -> WhatsAppGuardDecision.ACCESSIBILITY_LOST_BLOCK
+            wasProtected -> WhatsAppGuardDecision.ACCESSIBILITY_LOST_OPEN
             else -> WhatsAppGuardDecision.FIRST_SETUP_PENDING
         }
 
@@ -115,8 +115,8 @@ object WhatsAppGuardProtection {
         } catch (_: PackageManager.NameNotFoundException) {
             // Not a Samsung build with this split package.
         } catch (_: Exception) {
-            // Keep the fail-closed WhatsApp suspension path authoritative even if
-            // an OEM rejects hiding its accessibility Settings component.
+            // Best effort only. WhatsApp must remain usable even if an OEM rejects
+            // hiding its accessibility Settings component.
         }
     }
 
@@ -139,13 +139,14 @@ object WhatsAppGuardProtection {
                 setGuardSuspended(context, dpm, admin, false)
                 "WAITING_FOR_ACCESSIBILITY"
             }
-            WhatsAppGuardDecision.ACCESSIBILITY_LOST_BLOCK -> {
-                // Setup succeeded before, therefore losing Accessibility means
-                // filtering cannot be guaranteed. Keep the customer out of the
-                // accessibility toggle and fail closed by suspending WhatsApp.
+            WhatsAppGuardDecision.ACCESSIBILITY_LOST_OPEN -> {
+                // Fail open: if Accessibility is lost after setup, filtering is not
+                // guaranteed, but WhatsApp must remain available to the customer.
+                // Keep the customer out of the ordinary accessibility toggle; an admin
+                // can explicitly reopen the setup window when repair is needed.
                 setSamsungAccessibilitySettingsVisible(context, dpm, admin, false)
-                setGuardSuspended(context, dpm, admin, true)
-                "ACCESSIBILITY_LOST_BLOCKED"
+                setGuardSuspended(context, dpm, admin, false)
+                "ACCESSIBILITY_LOST_OPEN"
             }
             WhatsAppGuardDecision.PROTECTED -> {
                 WhatsAppGuardConfig.markProtected(context)
