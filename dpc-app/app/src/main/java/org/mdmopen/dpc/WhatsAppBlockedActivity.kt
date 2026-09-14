@@ -2,69 +2,48 @@ package org.mdmopen.dpc
 
 import android.app.Activity
 import android.content.Intent
-import android.graphics.Color
 import android.os.Bundle
-import android.view.Gravity
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
 
 class WhatsAppBlockedActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        render()
+    }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (intent != null) setIntent(intent)
+        render()
+    }
+
+    private fun render() {
         val kind = intent.getStringExtra(EXTRA_KIND)
-        val (title, message) = when (kind) {
-            KIND_CHANNEL -> "הערוץ חסום" to "הגישה לערוצים חסומה במכשיר זה."
-            KIND_UPDATES -> "העדכונים חסומים" to "הגישה לעדכונים, סטטוסים וערוצים חסומה במכשיר זה."
-            else -> "הסטטוס חסום" to "הגישה לסטטוסים חסומה במכשיר זה."
+        val copy = when (kind) {
+            KIND_CHANNEL -> UnifiedBlockedScreenStyle.Copy(
+                eyebrow = "תוכן חסום",
+                title = "הערוץ חסום",
+                message = "הגישה לערוצים אינה זמינה במכשיר זה בהתאם להגדרות ההגנה.",
+                button = "חזרה ל-WhatsApp",
+            )
+            KIND_UPDATES -> UnifiedBlockedScreenStyle.Copy(
+                eyebrow = "הגנת WhatsApp",
+                title = "העדכונים חסומים",
+                message = "הגישה לעדכונים, סטטוסים וערוצים חסומה במכשיר זה.",
+                button = "חזרה ל-WhatsApp",
+            )
+            else -> UnifiedBlockedScreenStyle.Copy(
+                eyebrow = "תוכן חסום",
+                title = "הסטטוס חסום",
+                message = "הגישה לסטטוסים אינה זמינה במכשיר זה בהתאם להגדרות ההגנה.",
+                button = "חזרה ל-WhatsApp",
+            )
         }
 
-        val density = resources.displayMetrics.density
-        fun dp(value: Int) = (value * density).toInt()
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(28), dp(36), dp(28), dp(36))
-            setBackgroundColor(Color.rgb(248, 250, 252))
-        }
-
-        val titleView = TextView(this).apply {
-            text = title
-            textSize = 28f
-            setTextColor(Color.rgb(15, 23, 42))
-            gravity = Gravity.CENTER
-        }
-        root.addView(titleView, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ))
-
-        val messageView = TextView(this).apply {
-            text = message
-            textSize = 17f
-            setTextColor(Color.rgb(71, 85, 105))
-            gravity = Gravity.CENTER
-            setPadding(0, dp(14), 0, dp(28))
-        }
-        root.addView(messageView, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-        ))
-
-        val button = Button(this).apply {
-            text = "חזרה ל-WhatsApp"
-            textSize = 16f
-            setOnClickListener { returnToWhatsApp() }
-        }
-        root.addView(button, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(52),
-        ))
-
-        setContentView(root)
+        setContentView(
+            UnifiedBlockedScreenStyle.create(this, copy) {
+                returnToWhatsApp()
+            },
+        )
     }
 
     private fun returnToWhatsApp() {
