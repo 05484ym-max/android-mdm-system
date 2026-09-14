@@ -49,10 +49,10 @@ class WhatsAppGuardEngine(
 
         if (policy.hideProfilePhotos) {
             when (screen) {
-                WhatsAppScreen.CHAT_LIST -> maskAvatarCutRail(root)
+                WhatsAppScreen.CHAT_LIST -> maskAvatarCutRail(nodes, root)
                 WhatsAppScreen.CHAT -> maskChatHeader(nodes, root)
                 WhatsAppScreen.CONTACT_INFO -> maskContactInfo(nodes, root)
-                WhatsAppScreen.CONTACT_PICKER -> maskAvatarCutRail(root, picker = true)
+                WhatsAppScreen.CONTACT_PICKER -> maskAvatarCutRail(nodes, root, picker = true)
                 WhatsAppScreen.UPDATES,
                 WhatsAppScreen.UNKNOWN -> Unit
             }
@@ -102,21 +102,52 @@ class WhatsAppGuardEngine(
     }
 
     /**
-     * Intentionally narrow vertical cut over only the outer edge of the avatar column.
-     * This is not an avatar-sized mask: it makes profile icons look visually clipped
-     * instead of drawing a wide grey rail over the WhatsApp list.
+     * Visually clips the avatar column by following the actual avatar bounds exposed by
+     * WhatsApp instead of guessing from screen width. This therefore scales across device
+     * sizes and densities. We deliberately draw nothing when the avatar column cannot be
+     * identified with confidence rather than placing a grey strip over unrelated content.
      */
-    private fun maskAvatarCutRail(root: AccessibilityNodeInfo, picker: Boolean = false) {
+    private fun maskAvatarCutRail(
+        nodes: List<AccessibilityNodeInfo>,
+        root: AccessibilityNodeInfo,
+        picker: Boolean = false,
+    ) {
         val screen = rootBounds(root)
+        val listTop = screen.top + dp(if (picker) 72 else 54)
+        val listBottom = screen.bottom - dp(if (picker) 56 else 48)
+        if (listBottom <= listTop) return
+
+        val candidates = imageCandidates(nodes, 30, if (picker) 92 else 84)
+            .filter { it.centerY() in listTop..listBottom }
+            .filter { it.left >= screen.left && it.right <= screen.right }
+        if (candidates.isEmpty()) return
+
         val rtl = service.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
-        val width = dp(if (picker) 20 else 22)
-        val top = screen.top + dp(if (picker) 96 else 68)
-        val bottom = screen.bottom - dp(if (picker) 96 else 76)
+        val outerHalf = candidates.filter {
+            if (rtl) it.centerX() >= screen.centerX() else it.centerX() <= screen.centerX()
+        }
+        if (outerHalf.isEmpty()) return
+
+        val anchor = if (rtl) outerHalf.maxByOrNull { it.centerX() } else outerHalf.minByOrNull { it.centerX() }
+            ?: return
+        val tolerance = maxOf(dp(14), anchor.width() / 3)
+        val column = outerHalf.filter { abs(it.centerX() - anchor.centerX()) <= tolerance }
+        if (column.size < 2) return
+
+        val avatarWidth = column.map { it.width() }.sorted().let { it[it.size / 2] }
+        val cutWidth = (avatarWidth * 0.34f).toInt().coerceIn(dp(10), dp(26))
+        val top = column.minOf { it.top }.coerceAtLeast(listTop)
+        val bottom = column.maxOf { it.bottom }.coerceAtMost(listBottom)
         if (bottom <= top) return
-        overlays.addMask(
-            if (rtl) Rect(screen.right - width, top, screen.right, bottom)
-            else Rect(screen.left, top, screen.left + width, bottom),
-        )
+
+        val columnLeft = column.map { it.left }.sorted().let { it[it.size / 2] }
+        val columnRight = column.map { it.right }.sorted().let { it[it.size / 2] }
+        val cut = if (rtl) {
+            Rect((columnRight - cutWidth).coerceAtLeast(columnLeft), top, columnRight, bottom)
+        } else {
+            Rect(columnLeft, top, (columnLeft + cutWidth).coerceAtMost(columnRight), bottom)
+        }
+        overlays.addMask(clamp(cut, screen))
     }
 
     private fun maskChatHeader(nodes: List<AccessibilityNodeInfo>, root: AccessibilityNodeInfo) {
