@@ -12,13 +12,17 @@ import android.widget.Space
 import android.widget.TextView
 
 object UnifiedBlockedScreenStyle {
-    private val NAVY = Color.rgb(9, 28, 53)
-    private val NAVY_CARD = Color.rgb(17, 48, 83)
-    private val NAVY_CARD_DEEP = Color.rgb(12, 38, 69)
-    private val GOLD = Color.rgb(214, 176, 67)
-    private val GOLD_SOFT = Color.rgb(236, 208, 122)
-    private val WHITE = Color.rgb(248, 250, 252)
-    private val MUTED = Color.rgb(197, 211, 228)
+    // Match the current "יהודי כשר" app palette.
+    private val BG = Color.parseColor("#F2F1E6")
+    private val BG_SOFT = Color.parseColor("#E8E9D8")
+    private val CARD = Color.parseColor("#FBFAF4")
+    private val TEXT = Color.parseColor("#1C1C1C")
+    private val MUTED = Color.parseColor("#6F746A")
+    private val GREEN = Color.parseColor("#4B6B45")
+    private val GREEN_DARK = Color.parseColor("#31482E")
+    private val GREEN_OK = Color.parseColor("#328A52")
+    private val GREEN_SOFT = Color.parseColor("#DDE7D8")
+    private val WHITE = Color.WHITE
 
     data class Copy(
         val eyebrow: String,
@@ -37,7 +41,7 @@ object UnifiedBlockedScreenStyle {
 
         val background = GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
-            intArrayOf(Color.rgb(7, 23, 44), NAVY, Color.rgb(13, 42, 76)),
+            intArrayOf(BG, Color.parseColor("#ECEBDD"), BG_SOFT),
         )
 
         val root = LinearLayout(context).apply {
@@ -50,11 +54,11 @@ object UnifiedBlockedScreenStyle {
 
         val brand = TextView(context).apply {
             text = "יהודי"
-            textSize = 26f
-            setTextColor(GOLD_SOFT)
+            textSize = 25f
+            setTextColor(GREEN_DARK)
             gravity = Gravity.CENTER
             setPadding(dp(18), dp(8), dp(18), dp(8))
-            background = roundedStroke(dp(999), Color.TRANSPARENT, GOLD, dp(1))
+            background = roundedStroke(dp(999), GREEN_SOFT, GREEN, dp(1))
         }
         root.addView(
             brand,
@@ -64,26 +68,23 @@ object UnifiedBlockedScreenStyle {
             ),
         )
 
-        root.addView(Space(context), LinearLayout.LayoutParams(1, dp(26)))
+        root.addView(Space(context), LinearLayout.LayoutParams(1, dp(24)))
 
         val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(24), dp(28), dp(24), dp(24))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(NAVY_CARD, NAVY_CARD_DEEP),
-            ).apply { cornerRadius = dp(28).toFloat() }
+            background = roundedStroke(dp(28), CARD, Color.parseColor("#D9DDCF"), dp(1))
             elevation = dp(10).toFloat()
         }
 
         val badge = TextView(context).apply {
             text = copy.eyebrow
             textSize = 13f
-            setTextColor(NAVY)
+            setTextColor(WHITE)
             gravity = Gravity.CENTER
             setPadding(dp(14), dp(6), dp(14), dp(6))
-            background = roundedStroke(dp(999), GOLD, GOLD, 0)
+            background = roundedStroke(dp(999), GREEN, GREEN, 0)
         }
         card.addView(
             badge,
@@ -96,15 +97,17 @@ object UnifiedBlockedScreenStyle {
         card.addView(Space(context), LinearLayout.LayoutParams(1, dp(18)))
 
         val icon = TextView(context).apply {
-            text = "✦"
-            textSize = 34f
-            setTextColor(GOLD_SOFT)
+            text = "✓"
+            textSize = 31f
+            setTextColor(GREEN_OK)
             gravity = Gravity.CENTER
+            background = roundedStroke(dp(999), GREEN_SOFT, Color.TRANSPARENT, 0)
+            setPadding(dp(13), dp(6), dp(13), dp(7))
         }
         card.addView(
             icon,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ),
         )
@@ -112,9 +115,9 @@ object UnifiedBlockedScreenStyle {
         val title = TextView(context).apply {
             text = copy.title
             textSize = 29f
-            setTextColor(WHITE)
+            setTextColor(TEXT)
             gravity = Gravity.CENTER
-            setPadding(0, dp(8), 0, 0)
+            setPadding(0, dp(14), 0, 0)
         }
         card.addView(
             title,
@@ -144,9 +147,9 @@ object UnifiedBlockedScreenStyle {
             text = copy.button
             textSize = 16f
             isAllCaps = false
-            setTextColor(NAVY)
+            setTextColor(WHITE)
             gravity = Gravity.CENTER
-            background = roundedStroke(dp(16), GOLD, GOLD, 0)
+            background = roundedStroke(dp(16), GREEN, GREEN, 0)
             setOnClickListener { onAction() }
         }
         card.addView(
@@ -166,12 +169,13 @@ object UnifiedBlockedScreenStyle {
         }
         root.addView(card, cardParams)
 
-        root.addView(Space(context), LinearLayout.LayoutParams(1, dp(22)))
+        root.addView(Space(context), LinearLayout.LayoutParams(1, dp(20)))
 
         val footer = TextView(context).apply {
             text = "יהודי כשר • הגנה פעילה"
             textSize = 12f
-            setTextColor(Color.rgb(146, 171, 200))
+            setTextColor(GREEN_DARK)
+            alpha = 0.72f
             gravity = Gravity.CENTER
         }
         root.addView(
