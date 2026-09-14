@@ -18,21 +18,21 @@ class WhatsAppGuardEngine(
         if (event == null || !policy.enabled) return false
 
         // Status/Channel blocking is deliberately event-driven and target-specific.
-        // Never eject merely because WhatsApp is on the Updates tab or because a
-        // broad screen classifier sees Updates-related nodes in the accessibility tree.
+        // WhatsApp often reports the clicked row/container rather than the child label,
+        // so inspect only the clicked node's small local subtree and its own ancestors.
+        // Never inspect the whole active window here: uncertain clicks must fail open.
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
-            val source = event.source
-            val text = source?.let(WhatsAppScreenClassifier::nodeText)
-                ?: event.text?.joinToString(" ")
-            val id = source?.viewIdResourceName
-            val updatesNavigation = WhatsAppGuardTerms.isUpdates(text, id)
+            val signals = clickSignals(event)
 
-            if (!updatesNavigation && policy.blockStatuses && WhatsAppGuardTerms.isStatus(text, id)) {
-                return ejectBack()
+            val statusTarget = policy.blockStatuses && signals.any { (text, id) ->
+                !WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus(text, id)
             }
-            if (!updatesNavigation && policy.blockChannels && WhatsAppGuardTerms.isChannel(text, id)) {
-                return ejectBack()
+            if (statusTarget) return ejectBack()
+
+            val channelTarget = policy.blockChannels && signals.any { (text, id) ->
+                !WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isChannel(text, id)
             }
+            if (channelTarget) return ejectBack()
         }
         return false
     }
@@ -63,14 +63,52 @@ class WhatsAppGuardEngine(
         overlays.endFrame()
     }
 
+    private fun clickSignals(event: AccessibilityEvent): List<Pair<String?, String?>> {
+        val out = mutableListOf<Pair<String?, String?>>()
+        val seen = mutableSetOf<AccessibilityNodeInfo>()
+
+        fun add(node: AccessibilityNodeInfo?) {
+            if (node == null || !seen.add(node)) return
+            out += WhatsAppScreenClassifier.nodeText(node) to node.viewIdResourceName
+        }
+
+        fun addDescendants(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth < 0) return
+            add(node)
+            if (depth == 0) return
+            for (i in 0 until node.childCount) {
+                addDescendants(node.getChild(i), depth - 1)
+            }
+        }
+
+        val source = event.source
+        if (source != null) {
+            // Two levels are enough to catch the label inside a clicked row without
+            // accidentally scanning unrelated Status/Channel nodes elsewhere on Updates.
+            addDescendants(source, 2)
+
+            var parent = source.parent
+            repeat(2) {
+                add(parent)
+                parent = parent?.parent
+            }
+        }
+
+        // Some WhatsApp builds omit event.source text completely; retain the event
+        // payload itself as one final local signal.
+        event.text?.joinToString(" ")?.takeIf { it.isNotBlank() }?.let { out += it to null }
+        event.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { out += it to null }
+        return out
+    }
+
     private fun maskAvatarRail(root: AccessibilityNodeInfo, picker: Boolean = false) {
         val screen = rootBounds(root)
         val rtl = service.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
-        val width = dp(if (picker) 78 else 72)
-        val top = screen.top + dp(if (picker) 82 else 68)
-        // Stop well above the bottom composer/keyboard area. This rail is only
-        // used on list/picker screens and never inside an active chat.
-        val bottom = screen.bottom - dp(if (picker) 68 else 76)
+        val width = dp(if (picker) 58 else 72)
+        val top = screen.top + dp(if (picker) 96 else 68)
+        // Picker rail is deliberately tighter than the main chat-list rail: cover
+        // only the avatar column and leave the action/header/bottom areas untouched.
+        val bottom = screen.bottom - dp(if (picker) 96 else 76)
         if (bottom <= top) return
         overlays.addMask(
             if (rtl) Rect(screen.right - width, top, screen.right, bottom)
