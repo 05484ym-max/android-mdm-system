@@ -1,24 +1,15 @@
-// Pure classification logic for the admin-panel "health dashboard" (no DB, no
-// HTTP) - takes the flat rows from db.listDeviceHealth() and decides each
-// device's overall status plus why. Kept separate so the thresholds/rules
-// are one place, and testable without a server or database.
+// Pure classification logic for the admin-panel health dashboard.
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 const DEFAULT_WARNING_AFTER_MS = 3 * HOUR_MS;
 const DEFAULT_CRITICAL_AFTER_MS = DAY_MS;
-const BATTERY_WARNING_MAX = 20;
-const FREE_STORAGE_WARNING_MAX_BYTES = 500 * 1024 * 1024;
 const LAST_SYNC_STALE_AFTER_MS = 6 * HOUR_MS;
 const UNKNOWN_TO_CRITICAL_AFTER_MS = DAY_MS;
 
 const RANK = { ok: 0, warning: 1, critical: 2 };
 
-/** last-seen thresholds scale with the device's own sync interval, so a
- * device configured for infrequent syncing isn't flagged for behaving
- * exactly as configured. Falls back to the fixed defaults when the policy
- * doesn't carry a usable interval. */
 function seenThresholds(syncIntervalMinutes) {
   if (!Number.isFinite(syncIntervalMinutes) || syncIntervalMinutes <= 0) {
     return { warningAfterMs: DEFAULT_WARNING_AFTER_MS, criticalAfterMs: DEFAULT_CRITICAL_AFTER_MS };
@@ -30,21 +21,13 @@ function seenThresholds(syncIntervalMinutes) {
   };
 }
 
-/** True once the device has reported anything through the new health
- * columns at least once. False for a freshly-registered device that hasn't
- * synced yet - that's "unknown", not "ok". */
 function hasAnyHealthData(device) {
   return device.lastSeenAt != null ||
     device.currentVersionCode != null ||
     device.isDeviceOwner != null ||
-    device.batteryLevel != null ||
-    device.freeStorageBytes != null ||
     device.lastUpdateStatus != null;
 }
 
-/** A FAILED update stops being reported as critical once the device is
- * actually running the version that failed (or a newer one) - the failure
- * is history at that point, not an open problem. */
 function updateFailureResolved(device) {
   return device.lastUpdateVersion != null &&
     device.currentVersionCode != null &&
@@ -52,11 +35,9 @@ function updateFailureResolved(device) {
 }
 
 /**
- * Classifies one device-health row into { status, reasons, flags }.
- * status is one of 'unknown' | 'ok' | 'warning' | 'critical'.
- * reasons are human-readable (Hebrew) strings for display.
- * flags are booleans a caller (e.g. summarize()) can count on without
- * re-parsing the reason text.
+ * Only conditions that represent a real management problem are promoted to
+ * warning/critical here. Battery and storage remain visible as device facts
+ * in the panel, but are intentionally not faults by themselves.
  */
 function classify(device, now = Date.now()) {
   const flags = {
@@ -65,8 +46,6 @@ function classify(device, now = Date.now()) {
     updateFailed: false,
     staleLastSeen: false,
     staleSync: false,
-    lowBattery: false,
-    lowStorage: false,
   };
 
   if (!hasAnyHealthData(device)) {
@@ -80,7 +59,7 @@ function classify(device, now = Date.now()) {
         flags,
       };
     }
-    return { status: 'unknown', reasons: ['ממתין לנתונים ראשונים מהמכשיר'], flags };
+    return { status: 'unknown', reasons: ['ממתין לסנכרון ראשון מהמכשיר'], flags };
   }
 
   const reasons = [];
@@ -92,12 +71,12 @@ function classify(device, now = Date.now()) {
 
   if (device.isDeviceOwner === false) {
     flags.deviceOwnerLost = true;
-    bump('critical', 'המכשיר אינו רשום כ-Device Owner');
+    bump('critical', 'ניהול Device Owner אינו פעיל');
   }
 
   if (device.lastUpdateStatus === 'FAILED' && !updateFailureResolved(device)) {
     flags.updateFailed = true;
-    bump('critical', 'עדכון הגרסה האחרון נכשל');
+    bump('critical', 'העדכון האחרון נכשל');
   }
 
   const { warningAfterMs, criticalAfterMs } = seenThresholds(device.syncIntervalMinutes);
@@ -116,37 +95,17 @@ function classify(device, now = Date.now()) {
     }
   }
 
-  // Only meaningful when the device is otherwise checking in fine. This gate
-  // is intentionally the fixed default (not the interval-scaled
-  // warningAfterMs above) - a slow-interval device stretching "fresh" out
-  // for hours would make the fixed 6h stale-sync threshold below fire on
-  // completely normal behavior. If lastSeenAt is itself stale, the rule
-  // above already covers it.
   if (seenAge != null && seenAge <= DEFAULT_WARNING_AFTER_MS) {
     const syncAge = device.lastSyncAt == null ? Infinity : now - new Date(device.lastSyncAt).getTime();
     if (syncAge > LAST_SYNC_STALE_AFTER_MS) {
       flags.staleSync = true;
-      bump('warning', 'המכשיר מתקשר עם השרת אך לא משלים סנכרון מלא');
+      bump('warning', 'המכשיר מחובר אך הסנכרון לא הושלם');
     }
-  }
-
-  if (device.batteryLevel != null && device.batteryLevel <= BATTERY_WARNING_MAX) {
-    flags.lowBattery = true;
-    bump('warning', `סוללה נמוכה (${device.batteryLevel}%)`);
-  }
-
-  if (device.freeStorageBytes != null && device.freeStorageBytes < FREE_STORAGE_WARNING_MAX_BYTES) {
-    flags.lowStorage = true;
-    bump('warning', 'שטח אחסון פנוי נמוך');
   }
 
   return { status, reasons, flags };
 }
 
-/** Aggregate counts for the dashboard's summary row. outdatedVersion is
- * intentionally always null - version-outdated classification is deferred
- * until app_releases/staged rollout exists, so a TEST device on a newer
- * build doesn't make the rest of the fleet look stale. */
 function summarize(classifiedDevices) {
   const summary = {
     total: classifiedDevices.length,
@@ -169,13 +128,8 @@ function summarize(classifiedDevices) {
 module.exports = {
   classify,
   summarize,
-  // Exported so diagnostics.js can reuse the exact same rules/thresholds
-  // instead of re-implementing them - the two modules must never disagree
-  // about whether a given condition applies to a device.
   HOUR_MS,
   DEFAULT_WARNING_AFTER_MS,
-  BATTERY_WARNING_MAX,
-  FREE_STORAGE_WARNING_MAX_BYTES,
   LAST_SYNC_STALE_AFTER_MS,
   UNKNOWN_TO_CRITICAL_AFTER_MS,
   seenThresholds,
