@@ -8,17 +8,6 @@
     return devices.find(d => d && d.deviceId === id) || null;
   }
 
-  function removeLegacySubscriptionUnblockUi() {
-    document.querySelectorAll('[data-sub-unblock-card]').forEach(card => {
-      const section = card.closest('.detail-section');
-      if (section && section.querySelector('h3')?.textContent.trim() === 'פתיחת חסימת מנוי') {
-        section.remove();
-      } else {
-        card.remove();
-      }
-    });
-  }
-
   function cardHtml(deviceId, compact) {
     const d = deviceById(deviceId);
     const active = d && d.fullOpenMode === true;
@@ -41,7 +30,7 @@
 
   async function submit(deviceId, enabled, button) {
     const prompt = enabled
-      ? 'לפתוח את המכשיר בפועל? הפעולה תפעיל Full Open, תפתח את האפליקציות והתקנות ותשחרר את הגבלות המדיניות. Device Owner יישאר פעיל כדי שתוכל לסגור שוב מרחוק.'
+      ? 'לפתוח את המכשיר בפועל? הפעולה תפעיל Full Open, תפתח את האפליקציות וההתקנות ותשחרר את הגבלות המדיניות. Device Owner יישאר פעיל כדי שתוכל לסגור שוב מרחוק.'
       : 'להחזיר את החסימה, הסינון ורשימת האפליקציות הרגילה למכשיר?';
     if (!confirm(prompt)) return;
 
@@ -102,14 +91,16 @@
     const holder = document.createElement('div');
     holder.innerHTML = `<div class="detail-section"><h3>פתיחת המכשיר</h3>${cardHtml(id, false)}</div>`;
     const section = holder.firstElementChild;
+    const subscriptionExceptionSection = [...detail.querySelectorAll('.detail-section')]
+      .find(s => s.querySelector('h3')?.textContent.trim() === 'החרגת מנוי');
     const subscriptionSection = [...detail.querySelectorAll('.detail-section')]
       .find(s => s.querySelector('h3')?.textContent.trim() === 'מנוי');
-    subscriptionSection ? subscriptionSection.insertAdjacentElement('afterend', section) : detail.appendChild(section);
+    const anchor = subscriptionExceptionSection || subscriptionSection;
+    anchor ? anchor.insertAdjacentElement('afterend', section) : detail.appendChild(section);
     bind(section.querySelector('[data-full-open-card]'));
   }
 
   function remount() {
-    removeLegacySubscriptionUnblockUi();
     mountUnified();
     mountDetail();
   }
