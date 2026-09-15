@@ -26,7 +26,6 @@ object AutoUpdater {
         }.start()
     }
 
-    /** Blocking variant for JobService. */
     fun checkBlocking(context: Context) {
         if (!running.compareAndSet(false, true)) return
 
@@ -49,10 +48,8 @@ object AutoUpdater {
 
         val baseUrl = Config.serverUrl(context).trimEnd('/')
         val metadataUrl = "$baseUrl/downloads/version.json"
-
         val metadata = JSONObject(downloadText(metadataUrl))
         val remoteVersion = metadata.getLong("versionCode")
-
         val currentVersion = context.packageManager
             .getPackageInfo(context.packageName, 0)
             .longVersionCode
@@ -66,7 +63,6 @@ object AutoUpdater {
         Log.i(TAG, "New version: $remoteVersion")
 
         val apk = File(context.cacheDir, "mdm-update-$remoteVersion.apk")
-
         try {
             downloadFile(apkUrl, apk)
             verifyApk(context, apk, remoteVersion)
@@ -195,10 +191,4 @@ object AutoUpdater {
             throw e
         }
     }
-
-    /** Backward-compatible entry point for older call sites/build state. */
-    fun recoverInstallBlockIfNeeded(context: Context) = ManagedInstallWindow.recoverIfNeeded(context)
-
-    /** Backward-compatible entry point; centralized implementation owns the policy now. */
-    fun restoreInstallBlock(context: Context) = ManagedInstallWindow.forceClose(context)
 }
