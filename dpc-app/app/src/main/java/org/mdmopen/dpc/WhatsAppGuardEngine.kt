@@ -20,19 +20,33 @@ class WhatsAppGuardEngine(
         if (event == null || !policy.enabled) return false
 
         // Status/Channel blocking stays completely separate from profile-photo masking.
-        // Only a local click target can trigger GLOBAL_ACTION_BACK.
+        // A click is classified from strong local evidence first. If the clicked card has
+        // no explicit label, the visible Status/Channels section headers are used as
+        // geometric anchors. Ambiguous clicks fail open rather than blocking the wrong item.
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             val signals = clickSignals(event)
 
             val statusTarget = policy.blockStatuses && signals.any { (text, id) ->
                 !WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus(text, id)
             }
-            if (statusTarget) return ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
-
             val channelTarget = policy.blockChannels && signals.any { (text, id) ->
-                !WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isChannel(text, id)
+                !WhatsAppGuardTerms.isUpdates(text, id) &&
+                    (WhatsAppGuardTerms.isChannel(text, id) || WhatsAppGuardTerms.isChannelContext(text))
             }
-            if (channelTarget) return ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
+
+            when {
+                statusTarget && !channelTarget -> return ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
+                channelTarget && !statusTarget -> return ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
+                else -> when (classifyBySectionGeometry(event)) {
+                    ClickKind.STATUS -> if (policy.blockStatuses) {
+                        return ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
+                    }
+                    ClickKind.CHANNEL -> if (policy.blockChannels) {
+                        return ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
+                    }
+                    ClickKind.UNKNOWN -> Unit
+                }
+            }
         }
         return false
     }
@@ -62,6 +76,62 @@ class WhatsAppGuardEngine(
         // by target-specific click ejection above and by Updates navigation in the service.
         overlays.endFrame()
     }
+
+    private fun classifyBySectionGeometry(event: AccessibilityEvent): ClickKind {
+        val root = service.rootInActiveWindow ?: return ClickKind.UNKNOWN
+        if (root.packageName?.toString() != WHATSAPP_PACKAGE) return ClickKind.UNKNOWN
+
+        val source = event.source ?: return ClickKind.UNKNOWN
+        val clickBounds = Rect().also(source::getBoundsInScreen)
+        if (clickBounds.isEmpty) return ClickKind.UNKNOWN
+        val clickY = clickBounds.centerY()
+
+        val nodes = WhatsAppScreenClassifier.flatten(root)
+        val statusTop = sectionAnchorTop(nodes, ClickKind.STATUS)
+        val channelTop = sectionAnchorTop(nodes, ClickKind.CHANNEL)
+        val margin = dp(6)
+
+        // The Channels heading is the strongest structural separator in the Updates tab.
+        // Anything clearly below it belongs to the channels section, even when the channel
+        // card itself only exposes the channel name and no literal "channel" text.
+        if (channelTop != null && clickY > channelTop + margin) return ClickKind.CHANNEL
+
+        // A status is accepted only when we can place the click below the Status heading
+        // and, when Channels is visible, strictly above the Channels boundary.
+        if (statusTop != null && clickY > statusTop + margin) {
+            if (channelTop == null || clickY < channelTop - margin) return ClickKind.STATUS
+        }
+
+        return ClickKind.UNKNOWN
+    }
+
+    private fun sectionAnchorTop(
+        nodes: List<AccessibilityNodeInfo>,
+        kind: ClickKind,
+    ): Int? {
+        var bestNonClickable: Int? = null
+        var bestAny: Int? = null
+        for (node in nodes) {
+            val text = WhatsAppScreenClassifier.nodeText(node)
+            val id = node.viewIdResourceName
+            if (WhatsAppGuardTerms.isUpdates(text, id)) continue
+            val matches = when (kind) {
+                ClickKind.STATUS -> WhatsAppGuardTerms.isStatus(text, id)
+                ClickKind.CHANNEL -> WhatsAppGuardTerms.isChannel(text, id)
+                ClickKind.UNKNOWN -> false
+            }
+            if (!matches) continue
+
+            val bounds = Rect().also(node::getBoundsInScreen)
+            if (bounds.isEmpty || bounds.top < 0) continue
+            bestAny = minOfNullable(bestAny, bounds.top)
+            if (!node.isClickable) bestNonClickable = minOfNullable(bestNonClickable, bounds.top)
+        }
+        return bestNonClickable ?: bestAny
+    }
+
+    private fun minOfNullable(current: Int?, value: Int): Int =
+        if (current == null) value else minOf(current, value)
 
     private fun clickSignals(event: AccessibilityEvent): List<Pair<String?, String?>> {
         val out = mutableListOf<Pair<String?, String?>>()
@@ -128,7 +198,13 @@ class WhatsAppGuardEngine(
         service.resources.displayMetrics.heightPixels,
     )
 
+    private fun dp(value: Int): Int =
+        (value * service.resources.displayMetrics.density).toInt().coerceAtLeast(1)
+
+    private enum class ClickKind { STATUS, CHANNEL, UNKNOWN }
+
     companion object {
+        private const val WHATSAPP_PACKAGE = "com.whatsapp"
         private const val EJECT_DEBOUNCE_MS = 650L
         private const val BLOCKED_SCREEN_DELAY_MS = 90L
     }
