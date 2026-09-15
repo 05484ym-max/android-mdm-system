@@ -38,26 +38,36 @@ function installReliabilityBridge(db, push) {
   const pendingEnrollments = new Map();
   let lastImageCacheCleanupAt = 0;
 
-  const ready = pool.query(`
-    ALTER TABLE commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
-    ALTER TABLE commands ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+  let readyPromise = null;
+function ensureReady() {
+  if (!readyPromise) {
+    // universalEntry installs this bridge before index.js invokes db.init().
+    // Defer bridge DDL until first real operation; by then the HTTP server
+    // is listening only after db.init() completed. Calling db.init() here as
+    // well makes direct/test use safe and is idempotent.
+    readyPromise = db.init().then(() => pool.query(`
+      ALTER TABLE commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+      ALTER TABLE commands ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
 
-    UPDATE commands
-       SET lease_expires_at = 'infinity'::timestamptz
-     WHERE delivered_at IS NOT NULL
-       AND completed_at IS NULL
-       AND lease_expires_at IS NULL;
+      UPDATE commands
+         SET lease_expires_at = 'infinity'::timestamptz
+       WHERE delivered_at IS NOT NULL
+         AND completed_at IS NULL
+         AND lease_expires_at IS NULL;
 
-    CREATE INDEX IF NOT EXISTS commands_lease_due_idx
-      ON commands (device_id, queued_at)
-      WHERE completed_at IS NULL;
+      CREATE INDEX IF NOT EXISTS commands_lease_due_idx
+        ON commands (device_id, queued_at)
+        WHERE completed_at IS NULL;
 
-    CREATE TABLE IF NOT EXISTS enrollment_attempts (
-      token_hash TEXT PRIMARY KEY,
-      device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
+      CREATE TABLE IF NOT EXISTS enrollment_attempts (
+        token_hash TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `));
+  }
+  return readyPromise;
+}
 
   function toCommand(row) {
     const command = {
@@ -103,7 +113,7 @@ function installReliabilityBridge(db, push) {
   });
 
   db.takePendingCommands = async function takeLeasedCommands(deviceId) {
-    await ready;
+    await ensureReady();
     const { rows } = await pool.query(
       `WITH due AS (
          SELECT id
@@ -128,7 +138,7 @@ function installReliabilityBridge(db, push) {
   };
 
   db.completeCommand = async function completeLeasedCommand(deviceId, commandId, status, message) {
-    await ready;
+    await ensureReady();
     const { rowCount } = await pool.query(
       `UPDATE commands
           SET result_status = $3,
@@ -153,7 +163,7 @@ function installReliabilityBridge(db, push) {
    * only recovery mechanism.
    */
   db.registerDeviceIdempotent = async function registerDeviceIdempotent(tokenHash, candidateDeviceId) {
-    await ready;
+    await ensureReady();
     const deviceToken = deriveEnrollmentToken(tokenHash);
     const authTokenHash = sha256(deviceToken);
     const client = await pool.connect();
@@ -223,7 +233,7 @@ function installReliabilityBridge(db, push) {
   // separately. New /register uses registerDeviceIdempotent directly.
   const originalCreateDevice = db.createDevice.bind(db);
   db.consumeEnrollment = async function validateEnrollment(tokenHash, deviceId) {
-    await ready;
+    await ensureReady();
     const { rowCount } = await pool.query(
       `SELECT 1
          FROM enrollments
@@ -245,7 +255,7 @@ function installReliabilityBridge(db, push) {
     const pending = pendingEnrollments.get(deviceId);
     if (!pending) return originalCreateDevice(deviceId, authTokenHash);
 
-    await ready;
+    await ensureReady();
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -281,7 +291,7 @@ function installReliabilityBridge(db, push) {
 
   const originalListDevices = db.listDevices.bind(db);
   db.listDevices = async function listDevicesWithPushState() {
-    await ready;
+    await ensureReady();
     const [devices, tokenRows] = await Promise.all([
       originalListDevices(),
       pool.query('SELECT device_id, (push_token IS NOT NULL) AS has_push_token FROM devices'),
@@ -297,7 +307,7 @@ function installReliabilityBridge(db, push) {
   if (typeof db.listDeviceHealth === 'function') {
     const originalListDeviceHealth = db.listDeviceHealth.bind(db);
     db.listDeviceHealth = async function listHealthWithPushState() {
-      await ready;
+      await ensureReady();
       const [devices, tokenRows] = await Promise.all([
         originalListDeviceHealth(),
         pool.query('SELECT device_id, (push_token IS NOT NULL) AS has_push_token FROM devices'),
@@ -319,7 +329,7 @@ function installReliabilityBridge(db, push) {
       const now = Date.now();
       if (now - lastImageCacheCleanupAt >= IMAGE_CACHE_CLEANUP_INTERVAL_MS) {
         lastImageCacheCleanupAt = now;
-        await ready;
+        await ensureReady();
         await pool.query(
           `DELETE FROM browser_image_moderation_cache
             WHERE checked_at < now() - ($1 * interval '1 day')`,
@@ -335,7 +345,7 @@ function installReliabilityBridge(db, push) {
     push.wake = async function wakeAndPrune(pushToken, data) {
       const result = await originalWake(pushToken, data);
       if (result && result.reason === 'token_unregistered' && pushToken) {
-        await ready;
+        await ensureReady();
         await pool.query('UPDATE devices SET push_token = NULL WHERE push_token = $1', [pushToken]);
       }
       return result;
