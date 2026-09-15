@@ -19,15 +19,9 @@ if (serviceAccount) {
 /**
  * Tells one device that something changed, so it syncs now instead of waiting
  * for its next poll. A failure here is never fatal: the poll is the fallback.
- * Returns { sent, reason } so a caller that cares (e.g. an explicit "retry
- * sync" action) can report the real outcome; existing callers that don't
- * check the return value are unaffected.
- *
- * `data` defaults to the plain sync nudge every existing caller relies on
- * (savePolicyAndWake, the /commands route, retry-sync). A caller that needs
- * the device to do something more than a routine sync - e.g. retry-update
- * also running AutoUpdater.check() - passes a different `action` value;
- * MdmMessagingService on the device branches on it.
+ * Returns { sent, reason } so callers can distinguish a transient send failure
+ * from a permanently dead registration token. reliabilityBridge clears dead
+ * tokens from the DB by value without ever exposing them to the browser.
  */
 async function wake(pushToken, data = { action: 'sync' }) {
   if (!messaging) return { sent: false, reason: 'push_not_configured' };
@@ -40,6 +34,12 @@ async function wake(pushToken, data = { action: 'sync' }) {
     });
     return { sent: true };
   } catch (err) {
+    const code = String(err && err.code ? err.code : '');
+    if (code === 'messaging/registration-token-not-registered' ||
+        code === 'messaging/invalid-registration-token') {
+      console.warn('Push token is no longer registered; it will be pruned.');
+      return { sent: false, reason: 'token_unregistered' };
+    }
     console.warn('Push failed:', err.message);
     return { sent: false, reason: 'send_failed' };
   }
