@@ -2,6 +2,7 @@ package org.mdmopen.dpc
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -21,6 +22,7 @@ class WhatsAppGuardService : AccessibilityService() {
         super.onServiceConnected()
         overlays = WhatsAppOverlayController(this)
         engine = WhatsAppGuardEngine(this, overlays)
+        configureObservedPackages()
         WhatsAppGuardProtection.reconcile(this, WhatsAppGuardConfig.load(this))
         try {
             val enforcer = PolicyEnforcer(applicationContext)
@@ -45,12 +47,15 @@ class WhatsAppGuardService : AccessibilityService() {
             if (shouldEjectManagedAccessibilitySettings(event, packageName)) {
                 ejectManagedAccessibilitySettings()
             }
-            if (::overlays.isInitialized) overlays.clear()
+            clearOverlaysAndCancelRender()
             return
         }
 
+        // The accessibility service also observes the current Home/Launcher package.
+        // Clear immediately and cancel any coalesced WhatsApp render so an old render
+        // cannot re-add a retained accessibility overlay after the user presses Home.
         if (packageName != WHATSAPP_PACKAGE) {
-            if (::overlays.isInitialized) overlays.clear()
+            clearOverlaysAndCancelRender()
             return
         }
 
@@ -76,13 +81,60 @@ class WhatsAppGuardService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        if (::overlays.isInitialized) overlays.clear()
+        clearOverlaysAndCancelRender()
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        scheduled = false
         if (::overlays.isInitialized) overlays.clear()
         super.onDestroy()
+    }
+
+    /**
+     * The XML intentionally limits accessibility traffic to WhatsApp/Settings for
+     * battery and privacy reasons. Add the device's actual Home package at runtime
+     * so pressing Home always produces an event that lets us remove retained masks.
+     * Keep Samsung's launcher as a fallback for One UI devices where HOME resolution
+     * can temporarily return the Android resolver during boot/user setup.
+     */
+    private fun configureObservedPackages() {
+        val observed = linkedSetOf(
+            WHATSAPP_PACKAGE,
+            AOSP_SETTINGS_PACKAGE,
+            SAMSUNG_ACCESSIBILITY_PACKAGE,
+            SAMSUNG_LAUNCHER_PACKAGE,
+        )
+
+        val homePackage = try {
+            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+            }
+            packageManager.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo
+                ?.packageName
+        } catch (_: Exception) {
+            null
+        }
+
+        if (!homePackage.isNullOrBlank() && homePackage != "android") {
+            observed += homePackage
+        }
+
+        try {
+            val info = serviceInfo ?: return
+            info.packageNames = observed.toTypedArray()
+            serviceInfo = info
+        } catch (_: Exception) {
+            // Keep the XML package filter if an OEM rejects a runtime service-info update.
+            // Samsung is still covered by the explicit XML/runtime fallback package.
+        }
+    }
+
+    private fun clearOverlaysAndCancelRender() {
+        handler.removeCallbacksAndMessages(RENDER_TOKEN)
+        scheduled = false
+        if (::overlays.isInitialized) overlays.clear()
     }
 
     private fun shouldEjectManagedAccessibilitySettings(
@@ -152,7 +204,7 @@ class WhatsAppGuardService : AccessibilityService() {
         val now = SystemClock.uptimeMillis()
         if (now - lastUpdatesEjectAt < UPDATES_EJECT_DEBOUNCE_MS) return
         lastUpdatesEjectAt = now
-        if (::overlays.isInitialized) overlays.clear()
+        clearOverlaysAndCancelRender()
 
         val backedOut = performGlobalAction(GLOBAL_ACTION_BACK)
         if (!backedOut) return
@@ -191,7 +243,7 @@ class WhatsAppGuardService : AccessibilityService() {
         lastRenderAt = SystemClock.uptimeMillis()
         val root = rootInActiveWindow
         if (root?.packageName?.toString() != WHATSAPP_PACKAGE) {
-            overlays.clear()
+            if (::overlays.isInitialized) overlays.clear()
             return
         }
         engine.render(root, WhatsAppGuardConfig.load(this))
@@ -201,6 +253,7 @@ class WhatsAppGuardService : AccessibilityService() {
         const val WHATSAPP_PACKAGE = "com.whatsapp"
         private const val AOSP_SETTINGS_PACKAGE = "com.android.settings"
         private const val SAMSUNG_ACCESSIBILITY_PACKAGE = "com.samsung.accessibility"
+        private const val SAMSUNG_LAUNCHER_PACKAGE = "com.sec.android.app.launcher"
         private val ACCESSIBILITY_SETTINGS_PACKAGES = setOf(
             AOSP_SETTINGS_PACKAGE,
             SAMSUNG_ACCESSIBILITY_PACKAGE,
