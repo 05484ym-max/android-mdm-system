@@ -32,10 +32,6 @@ object SyncScheduler {
     /**
      * Keeps exactly one periodic policy sync. WorkManager survives reboot and
      * retries transient failures with backoff instead of relying on a raw thread.
-     *
-     * PolicySync calls this after every successful sync. Avoid updating the
-     * WorkManager request when the interval did not change: replacing metadata
-     * every cycle is unnecessary scheduler/database work and can disturb batching.
      */
     fun schedule(context: Context) {
         val appContext = context.applicationContext
@@ -64,7 +60,14 @@ object SyncScheduler {
         prefs.edit().putLong(KEY_SCHEDULED_INTERVAL, minutes).apply()
     }
 
-    /** Coalesces bursts of FCM pushes while preserving an explicit retry-update. */
+    /**
+     * Push-triggered syncs are appended behind an already-running push sync
+     * instead of KEEP-dropping the new request. This matters when a policy or
+     * command changes while the current HTTP sync is already in flight: at
+     * least one follow-up cycle is guaranteed to observe the newer server state.
+     * WorkManager still serializes this unique chain, so PolicySync executions
+     * do not run concurrently.
+     */
     fun enqueueImmediate(context: Context, retryUpdate: Boolean = false) {
         val appContext = context.applicationContext
         val request = OneTimeWorkRequestBuilder<PolicySyncWorker>()
@@ -75,7 +78,7 @@ object SyncScheduler {
 
         WorkManager.getInstance(appContext).enqueueUniqueWork(
             if (retryUpdate) UNIQUE_RETRY_UPDATE_WORK else UNIQUE_PUSH_WORK,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             request,
         )
     }
