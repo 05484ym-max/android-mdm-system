@@ -9,6 +9,7 @@ const diagnostics = require('./diagnostics');
 const root = path.resolve(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 const index = read('backend/index.js');
+const panelHtml = read('admin-panel/index.html');
 const protectionRoutes = read('backend/protectionAdminRoutes.js');
 const customerSearch = read('admin-panel/customer-search.js');
 const healthUi = read('admin-panel/health.js');
@@ -56,6 +57,16 @@ excludes(customerSearch, 'WhatsApp יישאר נעול עד אז', 'stale WhatsA
 includes(customerSearch, 'מצב חסימת WhatsApp במכשיר:', 'actual WhatsApp block status');
 includes(customerSearch, 'מצב נגישות:', 'separate accessibility status');
 includes(customerSearch, 'data-wa-channels-only', 'channels-only WhatsApp preset');
+includes(customerSearch, 'data-inline-diagnostics-content', 'inline customer diagnostics');
+includes(customerSearch, 'setCustomerFocus(true)', 'focused customer workspace');
+includes(diagnosticsUi, 'loadDeviceDiagnosticsInline', 'reusable inline diagnostics loader');
+includes(panelHtml, 'data-tab-content="customers"', 'customers workspace');
+includes(panelHtml, 'חיפוש לקוח — שם, מספר לקוח או מזהה מכשיר', 'customer-only search label');
+excludes(panelHtml, 'data-tab="health"', 'separate health navigation');
+
+const customersTabAt = panelHtml.indexOf('data-tab-content="customers"');
+const quickSearchAt = panelHtml.indexOf('id="quickCustomerSearch"');
+assert(customersTabAt >= 0 && quickSearchAt > customersTabAt, 'customer search must live inside the customers tab');
 
 excludes(healthUi, 'על גרסה ישנה', 'unimplemented version diagnostic');
 excludes(healthUi, 'בקרוב', 'placeholder health value');

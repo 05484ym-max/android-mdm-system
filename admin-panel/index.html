@@ -424,21 +424,17 @@
     <button id="drawerCloseBtn" class="drawer-close-btn" aria-label="סגור תפריט">✕</button>
   </div>
   <nav class="side-drawer-nav" id="sideDrawerNav">
-    <button class="nav-btn" data-tab="enroll">
-      <span class="nav-icon">✚</span>
-      <span class="nav-label">רישום מכשיר</span>
+    <button class="nav-btn active" data-tab="customers">
+      <span class="nav-icon">👤</span>
+      <span class="nav-label">לקוחות</span>
     </button>
     <button class="nav-btn" data-tab="catalog">
       <span class="nav-icon">▦</span>
       <span class="nav-label">חנות אפליקציות</span>
     </button>
-    <button class="nav-btn active" data-tab="customers">
-      <span class="nav-icon">👤</span>
-      <span class="nav-label">לקוחות</span>
-    </button>
-    <button class="nav-btn" data-tab="health">
-      <span class="nav-icon">🩺</span>
-      <span class="nav-label">בריאות מכשירים</span>
+    <button class="nav-btn" data-tab="enroll">
+      <span class="nav-icon">✚</span>
+      <span class="nav-label">רישום מכשיר</span>
     </button>
     <button class="nav-btn" data-tab="alerts">
       <span class="nav-icon">🔔</span>
@@ -455,13 +451,12 @@
   </nav>
 </aside>
 
-<div class="quick-search-card">
-  <input class="search-input" id="quickCustomerSearch"
-         placeholder="חיפוש מהיר — שם לקוח, מספר לקוח או מזהה מכשיר..." autocomplete="off" />
-  <div id="quickCustomerResults" class="quick-search-results"></div>
-</div>
-
 <div class="tab-content active" data-tab-content="customers">
+  <div class="quick-search-card">
+    <input class="search-input" id="quickCustomerSearch"
+           placeholder="חיפוש לקוח — שם, מספר לקוח או מזהה מכשיר..." autocomplete="off" />
+    <div id="quickCustomerResults" class="quick-search-results"></div>
+  </div>
   <div class="stats">
     <div class="stat-card">
       <div class="label">סה"כ מכשירים</div>
