@@ -53,6 +53,33 @@ class WhatsAppGuardTextPolicyTest {
     }
 
     @Test
+    fun matcher_does_not_block_names_or_messages_that_merely_contain_keywords() {
+        assertFalse(WhatsAppGuardTerms.isChannel("ערוץ החדשות של יוסי", null))
+        assertFalse(WhatsAppGuardTerms.isChannel("My favorite channel is here", null))
+        assertFalse(WhatsAppGuardTerms.isStatus("זה הסטטוס שלי היום", null))
+        assertFalse(WhatsAppGuardTerms.isStatus("Status report for work", null))
+        assertFalse(WhatsAppGuardTerms.isChannel(null, "com.whatsapp:id/channel_name_text"))
+        assertFalse(WhatsAppGuardTerms.isStatus(null, "com.whatsapp:id/user_status_message"))
+    }
+
+    @Test
+    fun matcher_accepts_only_explicit_channel_context_tokens() {
+        assertTrue(WhatsAppGuardTerms.isChannelContext("עקוב"))
+        assertTrue(WhatsAppGuardTerms.isChannelContext("1.2K followers"))
+        assertTrue(WhatsAppGuardTerms.isChannelContext("Following"))
+        assertFalse(WhatsAppGuardTerms.isChannelContext("followup meeting"))
+        assertFalse(WhatsAppGuardTerms.isChannelContext("news followerboard"))
+    }
+
+    @Test
+    fun updates_tab_is_not_mistaken_for_a_status_target() {
+        val id = "com.whatsapp:id/status_tab"
+        assertTrue(WhatsAppGuardTerms.isUpdates(null, id))
+        assertTrue(WhatsAppGuardTerms.isStatus(null, id))
+        // Engine must always exclude isUpdates(...) before treating this as Status.
+    }
+
+    @Test
     fun guard_decision_keeps_first_setup_and_post_setup_loss_open() {
         assertEquals(
             WhatsAppGuardDecision.FIRST_SETUP_PENDING,
