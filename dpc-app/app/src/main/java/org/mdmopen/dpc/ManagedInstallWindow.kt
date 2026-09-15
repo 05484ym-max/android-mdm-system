@@ -13,22 +13,44 @@ import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
 
 /**
- * Single source of truth for temporarily lifting DISALLOW_INSTALL_APPS.
- * PackageInstaller checks the restriction when createSession() is called, so callers
- * must open this window before session creation. Persisted reference counting protects
- * overlapping installs; a bounded WorkManager failsafe restores the restriction if a
- * callback is lost or the process dies after opening the window.
+ * Single source of truth for temporary install permission.
+ *
+ * Every path that temporarily needs DISALLOW_INSTALL_APPS lifted (silent APK,
+ * self-update and Play Store) takes a reference-counted lease here. The current
+ * server policy separately records whether installs should be blocked after all
+ * leases close. This prevents a late PackageInstaller/Play callback from
+ * re-blocking installs after Full Open was enabled, and prevents one installer
+ * from closing another installer's window.
  */
 object ManagedInstallWindow {
     private const val TAG = "ManagedInstallWindow"
     private const val PREFS = "dpc_managed_install_window"
     private const val KEY_ACTIVE = "active_operations"
+    private const val KEY_DESIRED_BLOCKED = "desired_install_blocked"
     private const val RELOCK_WORK = "managed-install-relock"
     private const val FAILSAFE_MINUTES = 10L
 
     fun isOpen(context: Context): Boolean =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getInt(KEY_ACTIVE, 0) > 0
+        prefs(context).getInt(KEY_ACTIVE, 0) > 0
+
+    /** Called whenever a fresh server policy is received. */
+    @Synchronized
+    fun setDesiredInstallBlocked(context: Context, blocked: Boolean) {
+        val appContext = context.applicationContext
+        val preferences = prefs(appContext)
+        check(preferences.edit().putBoolean(KEY_DESIRED_BLOCKED, blocked).commit()) {
+            "Could not persist desired install restriction"
+        }
+        if (preferences.getInt(KEY_ACTIVE, 0).coerceAtLeast(0) == 0) {
+            applyDesiredRestriction(appContext)
+        } else {
+            // A lease is active, so installs must remain temporarily allowed.
+            clearRestriction(appContext)
+        }
+    }
+
+    fun desiredInstallBlocked(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DESIRED_BLOCKED, true)
 
     @Synchronized
     fun open(context: Context) {
@@ -36,19 +58,13 @@ object ManagedInstallWindow {
         val dpm = appContext.getSystemService(DevicePolicyManager::class.java)
         if (!dpm.isDeviceOwnerApp(appContext.packageName)) return
 
-        val admin = ComponentName(appContext, DpcDeviceAdminReceiver::class.java)
-        val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val current = prefs.getInt(KEY_ACTIVE, 0).coerceAtLeast(0)
+        val preferences = prefs(appContext)
+        val current = preferences.getInt(KEY_ACTIVE, 0).coerceAtLeast(0)
+        if (current == 0) clearRestriction(appContext)
 
-        if (current == 0) {
-            dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
-        }
-
-        val persisted = prefs.edit().putInt(KEY_ACTIVE, current + 1).commit()
+        val persisted = preferences.edit().putInt(KEY_ACTIVE, current + 1).commit()
         if (!persisted) {
-            if (current == 0) {
-                dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
-            }
+            if (current == 0) applyDesiredRestriction(appContext)
             error("Could not persist managed-install window")
         }
         scheduleFailsafe(appContext)
@@ -57,22 +73,28 @@ object ManagedInstallWindow {
     @Synchronized
     fun close(context: Context) {
         val appContext = context.applicationContext
-        val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val current = prefs.getInt(KEY_ACTIVE, 0).coerceAtLeast(0)
+        val preferences = prefs(appContext)
+        val current = preferences.getInt(KEY_ACTIVE, 0).coerceAtLeast(0)
         val remaining = (current - 1).coerceAtLeast(0)
-        prefs.edit().putInt(KEY_ACTIVE, remaining).commit()
+        if (!preferences.edit().putInt(KEY_ACTIVE, remaining).commit()) {
+            Log.e(TAG, "Could not persist managed-install close; fail-safe remains armed")
+            return
+        }
 
         if (remaining == 0) {
-            restoreRestriction(appContext)
+            applyDesiredRestriction(appContext)
             WorkManager.getInstance(appContext).cancelUniqueWork(RELOCK_WORK)
         }
     }
 
+    /**
+     * Emergency stale-state recovery. This ends all temporary leases, but it
+     * restores the *current desired policy* instead of blindly blocking.
+     */
     @Synchronized
     fun forceClose(context: Context) {
         val appContext = context.applicationContext
-        appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putInt(KEY_ACTIVE, 0).commit()
+        prefs(appContext).edit().putInt(KEY_ACTIVE, 0).commit()
 
         // Clean legacy state from the two pre-centralization implementations.
         appContext.getSharedPreferences("dpc_updater", Context.MODE_PRIVATE)
@@ -80,7 +102,7 @@ object ManagedInstallWindow {
         appContext.getSharedPreferences("dpc_installer", Context.MODE_PRIVATE)
             .edit().putBoolean("install_temporarily_allowed", false).apply()
 
-        restoreRestriction(appContext)
+        applyDesiredRestriction(appContext)
         WorkManager.getInstance(appContext).cancelUniqueWork(RELOCK_WORK)
     }
 
@@ -97,12 +119,28 @@ object ManagedInstallWindow {
         }
     }
 
-    private fun restoreRestriction(context: Context) {
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private fun clearRestriction(context: Context) {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         if (!dpm.isDeviceOwnerApp(context.packageName)) return
         val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
-        dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
-        Log.i(TAG, "Install blocking restored")
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+        Log.i(TAG, "Install permission lease active")
+    }
+
+    private fun applyDesiredRestriction(context: Context) {
+        val dpm = context.getSystemService(DevicePolicyManager::class.java)
+        if (!dpm.isDeviceOwnerApp(context.packageName)) return
+        val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
+        if (desiredInstallBlocked(context)) {
+            dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+            Log.i(TAG, "Install blocking restored from desired policy")
+        } else {
+            dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+            Log.i(TAG, "Install blocking remains disabled by desired policy")
+        }
     }
 
     private fun scheduleFailsafe(context: Context) {
