@@ -110,10 +110,12 @@
   }
   .enroll-card h2 { color: var(--text); font-size: 1.05rem; margin: 0 0 12px; font-weight: 700; }
   .code-box {
-    font-family: monospace; font-size: 1.4rem; letter-spacing: 3px; color: var(--accent);
+    font-family: monospace; font-size: clamp(.98rem, 4.5vw, 1.22rem); letter-spacing: 1px; color: var(--accent);
     background: var(--accent-tint); border: 1px dashed var(--accent-soft); border-radius: 12px;
-    padding: 14px; text-align: center; margin-top: 12px; direction: ltr;
+    padding: 14px 12px; text-align: center; margin-top: 12px; direction: ltr;
+    max-width: 100%; overflow-wrap: anywhere; word-break: break-all; line-height: 1.55;
   }
+  .enroll-code-actions { display:flex; justify-content:center; margin-top:10px; }
   .stats {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
     gap: 12px; margin-bottom: 18px;
@@ -499,14 +501,23 @@
     <!-- Always-visible add-app area - deliberately placed here, right after
          search/filter and before the (potentially long) app list below, so
          it never requires scrolling past the whole catalog to reach. -->
-    <div class="add-app-row" id="appImportActions" style="margin-top:10px;">
-      <button class="add-app-btn" id="openPlaySearchBtn">חפש ב-Google Play</button>
-      <button class="add-app-btn" id="openApkUploadBtn">העלה APK</button>
-    </div>
-    <div class="add-app-row" id="addAppToCatalogRow">
-      <input class="package-input" id="newAppName" placeholder="שם האפליקציה (לדוגמה: וויז)" />
-      <input class="package-input" id="newAppPackage" placeholder="com.waze" />
-      <button class="add-app-btn" id="addAppToCatalogBtn">הוסף לקטלוג</button>
+    <div class="catalog-add-card" id="catalogAddCard">
+      <div class="catalog-add-title">הוספת אפליקציה</div>
+      <div class="catalog-add-hint">בחר חיפוש ב-Google Play, העלאת APK, או הוספה ידנית לפי package.</div>
+      <div class="add-app-row catalog-primary-actions" id="appImportActions">
+        <button class="add-app-btn" id="openPlaySearchBtn">חפש ב-Google Play</button>
+        <button class="add-app-btn secondary-action" id="openApkUploadBtn">העלה APK</button>
+      </div>
+      <div class="add-app-row catalog-manual-row" id="addAppToCatalogRow">
+        <input class="package-input" id="newAppName" placeholder="שם האפליקציה" />
+        <input class="package-input" id="newAppPackage" placeholder="com.example.app" />
+        <button class="add-app-btn" id="addAppToCatalogBtn">הוסף ידנית</button>
+      </div>
+      <div class="catalog-category-create" id="catalogCategoryCreate">
+        <input class="package-input" id="newCategoryLabel" maxlength="40" placeholder="קטגוריה חדשה (למשל: תפילה)" />
+        <button class="toggle-btn" id="addCategoryBtn">הוסף קטגוריה</button>
+        <span class="catalog-category-status" id="categoryCreateStatus"></span>
+      </div>
     </div>
     <div id="catalogList"><div class="empty-state">טוען...</div></div>
   </div>
@@ -586,6 +597,7 @@
     <h2>רישום מכשיר חדש</h2>
     <button class="renew-btn" id="genCodeBtn">צור קוד רישום</button>
     <div id="codeBox" class="code-box" style="display:none;"></div>
+    <div class="enroll-code-actions"><button class="toggle-btn" id="copyEnrollCodeBtn" style="display:none;">העתק קוד</button></div>
   </div>
 </div>
 
@@ -865,7 +877,7 @@ function renderQuickCustomerSearch() {
 
   results.innerHTML = matches.map(d => {
     const title = d.customerName || 'לקוח ללא שם';
-    const number = d.customerNumber ? ' · #' + d.customerNumber : '';
+    const number = d.customerNumber ? ' · ' + d.customerNumber : '';
     return `
       <button class="quick-search-result" data-quick-device="${escapeHtml(d.deviceId)}">
         <div class="main">${escapeHtml(title + number)}</div>
@@ -923,7 +935,7 @@ function renderDeviceList(devices) {
     return `
       <div class="device-row">
         <div class="device-info">
-          <div class="customer-name">${d.customerName ? escapeHtml(d.customerName) : 'ללא שם'}${d.customerNumber ? ' · #' + escapeHtml(d.customerNumber) : ''}</div>
+          <div class="customer-name">${d.customerName ? escapeHtml(d.customerName) : 'ללא שם'}${d.customerNumber ? ' · ' + escapeHtml(d.customerNumber) : ''}</div>
           <div class="device-id">מזהה מכשיר: ${id}</div>
           <div class="${status.cls}">${escapeHtml(status.text)}</div>
         </div>
@@ -1330,6 +1342,21 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
   loadDevices();
 });
 
+document.getElementById('copyEnrollCodeBtn').addEventListener('click', async () => {
+  const box = document.getElementById('codeBox');
+  const token = box.dataset.rawToken || box.textContent || '';
+  if (!token) return;
+  try {
+    await navigator.clipboard.writeText(token);
+    const btn = document.getElementById('copyEnrollCodeBtn');
+    const original = btn.textContent;
+    btn.textContent = '✓ הועתק';
+    setTimeout(() => { if (btn.isConnected) btn.textContent = original; }, 1200);
+  } catch (_) {
+    alert('לא ניתן להעתיק אוטומטית. לחץ לחיצה ארוכה על הקוד.');
+  }
+});
+
 document.getElementById('genCodeBtn').addEventListener('click', async () => {
   const box = document.getElementById('codeBox');
   const res = await fetch('/api/enrollments', { method: 'POST' });
@@ -1337,6 +1364,8 @@ document.getElementById('genCodeBtn').addEventListener('click', async () => {
   if (!res.ok) { box.textContent = 'שגיאה'; return; }
   const data = await res.json();
   box.textContent = data.token;
+  box.dataset.rawToken = data.token;
+  document.getElementById('copyEnrollCodeBtn').style.display = 'inline-block';
 });
 
 let allCategories = [];
@@ -1472,6 +1501,7 @@ document.querySelectorAll('[data-catalog-mode]').forEach(btn => {
     document.getElementById('googleServicesUpdateBtn').style.display = catalogMode === 'customer' ? 'inline-block' : 'none';
     document.getElementById('addAppToCatalogRow').style.display = catalogMode === 'all' ? 'flex' : 'none';
     document.getElementById('appImportActions').style.display = catalogMode === 'all' ? 'flex' : 'none';
+    document.getElementById('catalogAddCard').style.display = catalogMode === 'all' ? 'block' : 'none';
     renderCatalog(filterCatalog(document.getElementById('catalogSearch').value));
   });
 });
@@ -1716,6 +1746,25 @@ document.querySelectorAll('[data-install-store]').forEach(btn => {
     });
   });
 }
+
+document.getElementById('addCategoryBtn').addEventListener('click', async () => {
+  const input = document.getElementById('newCategoryLabel');
+  const status = document.getElementById('categoryCreateStatus');
+  const label = input.value.trim();
+  if (!label) { status.textContent = 'נא להזין שם קטגוריה'; return; }
+  const btn = document.getElementById('addCategoryBtn');
+  btn.disabled = true; status.textContent = 'שומר...';
+  try {
+    const res = await fetch('/api/apps/categories', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'הוספת הקטגוריה נכשלה');
+    input.value = ''; status.textContent = '✓ הקטגוריה נוספה';
+    await loadCategories();
+  } catch (e) { status.textContent = e.message || 'שגיאת תקשורת'; }
+  finally { btn.disabled = false; }
+});
 
 document.getElementById('addAppToCatalogBtn').addEventListener('click', async () => {
   const nameInput = document.getElementById('newAppName');
