@@ -2,7 +2,8 @@ name: One-shot WhatsApp customer UI patch
 
 on:
   push:
-    branches: [ fix/comprehensive-mdm-hardening ]
+    branches:
+      - fix/comprehensive-mdm-hardening
     paths:
       - '.github/workflows/one-shot-whatsapp-customer-ui.yml'
 
@@ -19,194 +20,14 @@ jobs:
           fetch-depth: 0
 
       - name: Integrate WhatsApp controls into customer personal area
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
+        run: python3 .github/scripts/patch_customer_whatsapp.py
 
-          path = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
-          text = path.read_text()
-          start_marker = '    private fun whatsAppFeaturedCard(): LinearLayout {'
-          end_marker = '    // ---------------------------------------------------------------------\n    // App Store - approved two-column card redesign'
-          start = text.find(start_marker)
-          end = text.find(end_marker, start)
-          if start < 0 or end < 0:
-              raise SystemExit('WhatsApp customer card markers not found; refusing unsafe patch')
-
-          replacement = r'''    private fun whatsAppFeaturedCard(): LinearLayout {
-        val enabled = WhatsAppGuardProtection.accessibilityEnabled(this)
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = featuredCardBackground()
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-
-            addView(LinearLayout(this@CustomerActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-
-                addView(ImageView(this@CustomerActivity).apply {
-                    setImageResource(R.drawable.ic_row_chat)
-                    scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
-                    background = circle(if (enabled) OK else ACCENT_DARK)
-                    val pad = dp(15)
-                    setPadding(pad, pad, pad, pad)
-                }, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(13) })
-
-                addView(LinearLayout(this@CustomerActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.RIGHT
-                    addView(TextView(this@CustomerActivity).apply {
-                        text = "הגנת WhatsApp"
-                        textSize = 18f
-                        typeface = heavyFont
-                        setTextColor(Color.parseColor(ACCENT_DARK))
-                        gravity = Gravity.RIGHT
-                    })
-                    addView(TextView(this@CustomerActivity).apply {
-                        text = if (enabled) {
-                            "ההגנה פעילה. חסימת סטטוסים וערוצים מנוהלת מהפאנל בלבד."
-                        } else {
-                            "נדרשת הפעלה חד-פעמית של הנגישות על ידי מתקין עם קוד מנהל. WhatsApp נשאר זמין גם אם השירות אינו פעיל."
-                        }
-                        textSize = 12.5f
-                        typeface = mediumFont
-                        setTextColor(Color.parseColor(MUTED))
-                        gravity = Gravity.RIGHT
-                        maxLines = 4
-                        setPadding(0, dp(4), 0, 0)
-                    })
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            })
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = if (enabled) "✓ נגישות פעילה ומוגנת" else "⚠ נגישות אינה פעילה"
-                textSize = 12f
-                typeface = heavyFont
-                setTextColor(Color.parseColor(if (enabled) OK else "#B52F24"))
-                gravity = Gravity.RIGHT
-                setPadding(0, dp(12), 0, 0)
-            })
-
-            if (!enabled) {
-                addView(Button(this@CustomerActivity).apply {
-                    text = "הגדרת מתקין — הפעל נגישות"
-                    textSize = 14.5f
-                    isAllCaps = false
-                    typeface = heavyFont
-                    setTextColor(Color.WHITE)
-                    background = rounded(ACCENT, 14)
-                    setOnClickListener {
-                        requestAdminPinForWhatsApp("הפעלת הגנת WhatsApp") {
-                            openWhatsAppAccessibilitySettings()
-                        }
-                    }
-                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply {
-                    topMargin = dp(14)
-                })
-            }
-
-            addView(Button(this@CustomerActivity).apply {
-                text = "כיול תמונות פרופיל"
-                textSize = 14f
-                isAllCaps = false
-                typeface = heavyFont
-                setTextColor(Color.parseColor(ACCENT_DARK))
-                background = rounded(ACCENT_TINT, 14)
-                setOnClickListener {
-                    // The private calibration screen performs its own admin-PIN check.
-                    startActivity(Intent(this@CustomerActivity, WhatsAppMaskCalibrationLauncherActivity::class.java))
-                }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)).apply {
-                topMargin = dp(10)
-            })
-
-            addView(TextView(this@CustomerActivity).apply {
-                text = "כיול זה משנה רק את שכבת הכיסוי של תמונות הפרופיל. חסימת סטטוסים וערוצים אינה ניתנת לשינוי במכשיר."
-                textSize = 11.5f
-                typeface = mediumFont
-                setTextColor(Color.parseColor(MUTED))
-                gravity = Gravity.RIGHT
-                setPadding(0, dp(8), 0, 0)
-            })
-        }
-    }
-
-    private fun requestAdminPinForWhatsApp(title: String, onSuccess: () -> Unit) {
-        if (!Config.hasAdminPin(this)) {
-            Toast.makeText(this, "לא מוגדר קוד מנהל במכשיר", Toast.LENGTH_LONG).show()
-            return
-        }
-        val input = EditText(this).apply {
-            hint = "קוד מנהל"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            setSingleLine()
-            gravity = Gravity.CENTER
-        }
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage("פעולה זו זמינה למתקין/מנהל בלבד")
-            .setView(input)
-            .setNegativeButton("ביטול", null)
-            .setPositiveButton("המשך", null)
-            .create()
-        dialog.setOnShowListener {
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                if (Config.checkAdminPin(this, input.text.toString())) {
-                    dialog.dismiss()
-                    onSuccess()
-                } else {
-                    input.error = "קוד מנהל שגוי"
-                }
-            }
-        }
-        dialog.show()
-    }
-
-    private fun openWhatsAppAccessibilitySettings() {
-        try {
-            val enforcer = PolicyEnforcer(this)
-            if (!enforcer.isDeviceOwner()) {
-                Toast.makeText(this, "המכשיר אינו במצב ניהול מלא", Toast.LENGTH_LONG).show()
-                return
-            }
-            // This persisted, bounded window is the only time the managed
-            // accessibility Settings surface is allowed to stay open.
-            enforcer.beginAccessibilitySetupWindow()
-            try { stopLockTask() } catch (_: Exception) {}
-            enforcer.disableKiosk()
-            accessibilitySetupWindowOpen = true
-        } catch (e: Exception) {
-            Toast.makeText(this, "לא ניתן לפתוח חלון נגישות: ${e.message}", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        val attempts = listOf(
-            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
-            Intent(Settings.ACTION_SETTINGS),
-        )
-        Toast.makeText(this, "מתקין: הפעילו ‘יהודי כשר — הגנת WhatsApp’", Toast.LENGTH_LONG).show()
-        for (intent in attempts) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            if (intent.resolveActivity(packageManager) == null) continue
-            try {
-                startActivity(intent)
-                return
-            } catch (_: Exception) {}
-        }
-        accessibilitySetupWindowOpen = false
-        try { PolicyEnforcer(this).finishAccessibilitySetupWindow() } catch (_: Exception) {}
-        Toast.makeText(this, "לא ניתן לפתוח את הגדרות הנגישות במכשיר זה", Toast.LENGTH_LONG).show()
-    }
-
-'''
-          path.write_text(text[:start] + replacement + text[end:])
-          PY
-
-      - name: Remove one-shot workflow and commit patch
+      - name: Remove temporary patch files and commit
         run: |
           rm .github/workflows/one-shot-whatsapp-customer-ui.yml
+          rm .github/scripts/patch_customer_whatsapp.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt .github/workflows/one-shot-whatsapp-customer-ui.yml
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt .github/workflows/one-shot-whatsapp-customer-ui.yml .github/scripts/patch_customer_whatsapp.py
           git commit -m "Integrate WhatsApp setup and calibration into customer area"
           git push origin HEAD:fix/comprehensive-mdm-hardening
