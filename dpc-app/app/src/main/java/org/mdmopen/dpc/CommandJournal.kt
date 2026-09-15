@@ -4,21 +4,18 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Small durable idempotency journal for server commands.
- *
- * The server is allowed to re-deliver a leased command when an HTTP response or
- * ACK is lost. The device therefore records a command ID before side effects and
- * remembers terminal outcomes across process death/reboot. The journal is
- * deliberately bounded so a long-lived device cannot grow SharedPreferences
- * forever.
- */
+/** Durable, bounded idempotency journal for server commands. */
 object CommandJournal {
     private const val PREFS = "dpc_command_journal"
     private const val KEY_ORDER = "_order"
     private const val MAX_ENTRIES = 200
 
-    data class Entry(val status: String, val message: String?) {
+    data class Entry(
+        val status: String,
+        val message: String?,
+        val metadata: String?,
+        val startedAt: Long?,
+    ) {
         val terminal: Boolean get() = status == "SUCCESS" || status == "FAILED"
     }
 
@@ -30,37 +27,79 @@ object CommandJournal {
             Entry(
                 status = json.optString("status", "STARTED"),
                 message = if (json.isNull("message")) null else json.optString("message", null),
+                metadata = if (json.isNull("metadata")) null else json.optString("metadata", null),
+                startedAt = if (json.has("startedAt") && !json.isNull("startedAt")) json.optLong("startedAt") else null,
             )
         }.getOrNull()
     }
 
     @Synchronized
-    fun markStarted(context: Context, commandId: String) {
-        if (get(context, commandId)?.terminal == true) return
-        put(context, commandId, "STARTED", null)
+    fun markStarted(context: Context, commandId: String, metadata: String? = null) {
+        val existing = get(context, commandId)
+        if (existing?.terminal == true) return
+        put(
+            context,
+            commandId,
+            "STARTED",
+            null,
+            metadata ?: existing?.metadata,
+            existing?.startedAt ?: System.currentTimeMillis(),
+        )
+    }
+
+    @Synchronized
+    fun updateStartedMetadata(context: Context, commandId: String, metadata: String?) {
+        val existing = get(context, commandId) ?: return
+        if (existing.terminal) return
+        put(
+            context,
+            commandId,
+            existing.status,
+            existing.message,
+            metadata,
+            existing.startedAt ?: System.currentTimeMillis(),
+        )
     }
 
     @Synchronized
     fun markTerminal(context: Context, commandId: String, status: String, message: String?) {
         require(status == "SUCCESS" || status == "FAILED")
-        put(context, commandId, status, message?.take(500))
+        val existing = get(context, commandId)
+        put(
+            context,
+            commandId,
+            status,
+            message?.take(500),
+            existing?.metadata,
+            existing?.startedAt,
+        )
     }
 
-    private fun put(context: Context, commandId: String, status: String, message: String?) {
+    private fun put(
+        context: Context,
+        commandId: String,
+        status: String,
+        message: String?,
+        metadata: String?,
+        startedAt: Long?,
+    ) {
         val p = prefs(context)
         val order = readOrder(p).toMutableList().apply {
             remove(commandId)
             add(commandId)
         }
-        val editor = p.edit().putString(
-            commandId,
-            JSONObject().put("status", status).put("message", message).toString(),
-        )
+        val json = JSONObject()
+            .put("status", status)
+            .put("message", message)
+            .put("metadata", metadata)
+            .put("startedAt", startedAt)
+        val editor = p.edit().putString(commandId, json.toString())
         while (order.size > MAX_ENTRIES) {
-            val removed = order.removeAt(0)
-            editor.remove(removed)
+            editor.remove(order.removeAt(0))
         }
-        editor.putString(KEY_ORDER, JSONArray(order).toString()).commit()
+        check(editor.putString(KEY_ORDER, JSONArray(order).toString()).commit()) {
+            "Could not persist command journal"
+        }
     }
 
     private fun readOrder(p: android.content.SharedPreferences): List<String> =
