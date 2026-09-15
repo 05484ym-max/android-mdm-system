@@ -251,6 +251,27 @@
 (function () {
   'use strict';
 
+  function waModeLabel(wa) {
+    const parts = [];
+    if (wa && wa.hideProfilePhotos) parts.push('תמונות פרופיל');
+    if (wa && wa.blockStatuses) parts.push('סטטוסים');
+    if (wa && wa.blockChannels) parts.push('ערוצים');
+    if (!parts.length) return 'פתוח';
+    if (wa.blockChannels && !wa.blockStatuses && !wa.hideProfilePhotos) return 'חסום: ערוצים בלבד';
+    return 'חסום: ' + parts.join(', ');
+  }
+
+  function reportedWa(deviceStatus) {
+    const hasReported = ['whatsappGuardBlockStatuses','whatsappGuardBlockChannels','whatsappGuardHideProfilePhotos']
+      .every(k => typeof deviceStatus[k] === 'boolean');
+    if (!hasReported) return null;
+    return {
+      blockStatuses: deviceStatus.whatsappGuardBlockStatuses,
+      blockChannels: deviceStatus.whatsappGuardBlockChannels,
+      hideProfilePhotos: deviceStatus.whatsappGuardHideProfilePhotos,
+    };
+  }
+
   let detailHookInstalled = false;
 
   function installDetailHook() {
