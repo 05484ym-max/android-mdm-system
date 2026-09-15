@@ -522,39 +522,101 @@ class CustomerActivity : Activity() {
                     })
                     addView(TextView(this@CustomerActivity).apply {
                         text = if (enabled) {
-                            "ההגנה פעילה במכשיר זה"
+                            "ההגנה פעילה. חסימת סטטוסים וערוצים מנוהלת מהפאנל בלבד."
                         } else {
-                            "הפעלה חד-פעמית של שירות ‘יהודי כשר’ להגנת WhatsApp במכשיר זה."
+                            "נדרשת הפעלה חד-פעמית של הנגישות על ידי מתקין עם קוד מנהל. WhatsApp נשאר זמין גם אם השירות אינו פעיל."
                         }
                         textSize = 12.5f
                         typeface = mediumFont
                         setTextColor(Color.parseColor(MUTED))
                         gravity = Gravity.RIGHT
-                        maxLines = 3
+                        maxLines = 4
                         setPadding(0, dp(4), 0, 0)
                     })
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             })
 
+            addView(TextView(this@CustomerActivity).apply {
+                text = if (enabled) "✓ נגישות פעילה ומוגנת" else "⚠ נגישות אינה פעילה"
+                textSize = 12f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(if (enabled) OK else "#B52F24"))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(12), 0, 0)
+            })
+
             if (!enabled) {
                 addView(Button(this@CustomerActivity).apply {
-                    text = "הפעל הגנת WhatsApp"
-                    textSize = 15f
+                    text = "הגדרת מתקין — הפעל נגישות"
+                    textSize = 14.5f
                     isAllCaps = false
                     typeface = heavyFont
                     setTextColor(Color.WHITE)
                     background = rounded(ACCENT, 14)
-                    val icon = getDrawable(R.drawable.ic_row_shield)?.mutate()?.apply {
-                        setTint(Color.WHITE)
+                    setOnClickListener {
+                        requestAdminPinForWhatsApp("הפעלת הגנת WhatsApp") {
+                            openWhatsAppAccessibilitySettings()
+                        }
                     }
-                    setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null)
-                    compoundDrawablePadding = dp(8)
-                    setOnClickListener { openWhatsAppAccessibilitySettings() }
-                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply {
                     topMargin = dp(14)
                 })
             }
+
+            addView(Button(this@CustomerActivity).apply {
+                text = "כיול תמונות פרופיל"
+                textSize = 14f
+                isAllCaps = false
+                typeface = heavyFont
+                setTextColor(Color.parseColor(ACCENT_DARK))
+                background = rounded(ACCENT_TINT, 14)
+                setOnClickListener {
+                    startActivity(Intent(this@CustomerActivity, WhatsAppMaskCalibrationLauncherActivity::class.java))
+                }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)).apply {
+                topMargin = dp(10)
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = "כיול זה משנה רק את שכבת הכיסוי של תמונות הפרופיל. חסימת סטטוסים וערוצים אינה ניתנת לשינוי במכשיר."
+                textSize = 11.5f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(8), 0, 0)
+            })
         }
+    }
+
+    private fun requestAdminPinForWhatsApp(title: String, onSuccess: () -> Unit) {
+        if (!Config.hasAdminPin(this)) {
+            Toast.makeText(this, "לא מוגדר קוד מנהל במכשיר", Toast.LENGTH_LONG).show()
+            return
+        }
+        val input = EditText(this).apply {
+            hint = "קוד מנהל"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            setSingleLine()
+            gravity = Gravity.CENTER
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage("פעולה זו זמינה למתקין/מנהל בלבד")
+            .setView(input)
+            .setNegativeButton("ביטול", null)
+            .setPositiveButton("המשך", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (Config.checkAdminPin(this, input.text.toString())) {
+                    dialog.dismiss()
+                    onSuccess()
+                } else {
+                    input.error = "קוד מנהל שגוי"
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun openWhatsAppAccessibilitySettings() {
@@ -577,7 +639,7 @@ class CustomerActivity : Activity() {
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
             Intent(Settings.ACTION_SETTINGS),
         )
-        Toast.makeText(this, "הפעילו: יהודי כשר — הגנת WhatsApp", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "מתקין: הפעילו ‘יהודי כשר — הגנת WhatsApp’", Toast.LENGTH_LONG).show()
         for (intent in attempts) {
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             if (intent.resolveActivity(packageManager) == null) continue
