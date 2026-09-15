@@ -10,147 +10,87 @@ permissions:
   contents: write
 
 jobs:
-  guarded-patch:
+  finalize-reliability:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/comprehensive-mdm-hardening
           fetch-depth: 0
-      - name: Apply guarded production replacements
+      - name: Make reliability schema initialization lazy and safe
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          path = Path('backend/index.js')
+          path = Path('backend/reliabilityBridge.js')
           text = path.read_text()
+          old = '''  const ready = pool.query(`
+              ALTER TABLE commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+              ALTER TABLE commands ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
 
-          register_pattern = re.compile(
-              r"(?ms)^  const deviceId = await db\.generateUniqueDeviceId\(\);\n"
-              r"  const consumed = await db\.consumeEnrollment\(\n"
-              r"    sha256\(enrollmentToken\.trim\(\)\.toUpperCase\(\)\),\n"
-              r"    deviceId,\n"
-              r"  \);\n"
-              r"  if \(!consumed\) \{\n"
-              r"    return res\.status\(401\)\.json\(\{ error: 'invalid or expired enrollment token' \}\);\n"
-              r"  \}\n\n"
-              r"  const deviceToken = crypto\.randomBytes\(32\)\.toString\('hex'\);\n"
-              r"  await db\.createDevice\(deviceId, sha256\(deviceToken\)\);\n"
-              r"  res\.json\(\{ status: 'enrolled', deviceId, deviceToken \}\);"
-          )
-          new_register = '''  const tokenHash = sha256(enrollmentToken.trim().toUpperCase());
-          const candidateDeviceId = await db.generateUniqueDeviceId();
-          const enrolled = await db.registerDeviceIdempotent(tokenHash, candidateDeviceId);
-          if (!enrolled) {
-            return res.status(401).json({ error: 'invalid, expired, or already-finalized enrollment token' });
-          }
+              UPDATE commands
+                 SET lease_expires_at = 'infinity'::timestamptz
+               WHERE delivered_at IS NOT NULL
+                 AND completed_at IS NULL
+                 AND lease_expires_at IS NULL;
 
-          res.json({
-            status: enrolled.replayed ? 'enrolled_replay' : 'enrolled',
-            deviceId: enrolled.deviceId,
-            deviceToken: enrolled.deviceToken,
-          });'''
+              CREATE INDEX IF NOT EXISTS commands_lease_due_idx
+                ON commands (device_id, queued_at)
+                WHERE completed_at IS NULL;
 
-          classifier_pattern = re.compile(
-              r"(?ms)^const browserClassifierRate = new Map\(\);\n"
-              r"const BROWSER_CLASSIFIER_WINDOW_MS = 60 \* 1000;\n"
-              r"const BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW = 30;\n\n"
-              r"function browserClassifierRateAllowed\(ip\) \{\n"
-              r"  const now = Date\.now\(\);\n"
-              r"  const key = String\(ip \|\| 'unknown'\)\.slice\(0, 100\);\n"
-              r"  const state = browserClassifierRate\.get\(key\);\n"
-              r"  if \(!state \|\| now - state\.startedAt >= BROWSER_CLASSIFIER_WINDOW_MS\) \{\n"
-              r"    browserClassifierRate\.set\(key, \{ startedAt: now, misses: 1 \}\);\n"
-              r"    return true;\n"
-              r"  \}\n"
-              r"  if \(state\.misses >= BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW\) return false;\n"
-              r"  state\.misses \+= 1;\n"
-              r"  return true;\n"
-              r"\}"
-          )
-          new_classifier = '''const browserClassifierRate = new Map();
-          const BROWSER_CLASSIFIER_WINDOW_MS = 60 * 1000;
-          const BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW = 30;
-          const PUBLIC_RATE_MAP_MAX_ENTRIES = 4096;
+              CREATE TABLE IF NOT EXISTS enrollment_attempts (
+                token_hash TEXT PRIMARY KEY,
+                device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+              );
+            `);'''
+          new = '''  let readyPromise = null;
+          function ensureReady() {
+            if (!readyPromise) {
+              // universalEntry installs this bridge before index.js invokes db.init().
+              // Defer bridge DDL until first real operation; by then the HTTP server
+              // is listening only after db.init() completed. Calling db.init() here as
+              // well makes direct/test use safe and is idempotent.
+              readyPromise = db.init().then(() => pool.query(`
+                ALTER TABLE commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+                ALTER TABLE commands ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
 
-          function prunePublicRateMap(map, now, windowMs) {
-            for (const [key, state] of map) {
-              if (!state || now - state.startedAt >= windowMs * 2) map.delete(key);
+                UPDATE commands
+                   SET lease_expires_at = 'infinity'::timestamptz
+                 WHERE delivered_at IS NOT NULL
+                   AND completed_at IS NULL
+                   AND lease_expires_at IS NULL;
+
+                CREATE INDEX IF NOT EXISTS commands_lease_due_idx
+                  ON commands (device_id, queued_at)
+                  WHERE completed_at IS NULL;
+
+                CREATE TABLE IF NOT EXISTS enrollment_attempts (
+                  token_hash TEXT PRIMARY KEY,
+                  device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+              `));
             }
-            while (map.size >= PUBLIC_RATE_MAP_MAX_ENTRIES) {
-              const oldestKey = map.keys().next().value;
-              if (oldestKey === undefined) break;
-              map.delete(oldestKey);
-            }
-          }
-
-          function browserClassifierRateAllowed(ip) {
-            const now = Date.now();
-            const key = String(ip || 'unknown').slice(0, 100);
-            const state = browserClassifierRate.get(key);
-            if (!state || now - state.startedAt >= BROWSER_CLASSIFIER_WINDOW_MS) {
-              prunePublicRateMap(browserClassifierRate, now, BROWSER_CLASSIFIER_WINDOW_MS);
-              browserClassifierRate.set(key, { startedAt: now, misses: 1 });
-              return true;
-            }
-            if (state.misses >= BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW) return false;
-            state.misses += 1;
-            return true;
+            return readyPromise;
           }'''
-
-          image_pattern = re.compile(
-              r"(?ms)^function imageProxyRateAllowed\(ip\) \{\n"
-              r"  const now = Date\.now\(\);\n"
-              r"  const key = String\(ip \|\| 'unknown'\)\.slice\(0, 100\);\n"
-              r"  const state = imageProxyRate\.get\(key\);\n"
-              r"  if \(!state \|\| now - state\.startedAt >= IMAGE_PROXY_WINDOW_MS\) \{\n"
-              r"    imageProxyRate\.set\(key, \{ startedAt: now, count: 1 \}\);\n"
-              r"    return true;\n"
-              r"  \}\n"
-              r"  if \(state\.count >= IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW\) return false;\n"
-              r"  state\.count \+= 1;\n"
-              r"  return true;\n"
-              r"\}"
-          )
-          new_image = '''function imageProxyRateAllowed(ip) {
-            const now = Date.now();
-            const key = String(ip || 'unknown').slice(0, 100);
-            const state = imageProxyRate.get(key);
-            if (!state || now - state.startedAt >= IMAGE_PROXY_WINDOW_MS) {
-              prunePublicRateMap(imageProxyRate, now, IMAGE_PROXY_WINDOW_MS);
-              imageProxyRate.set(key, { startedAt: now, count: 1 });
-              return true;
-            }
-            if (state.count >= IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW) return false;
-            state.count += 1;
-            return true;
-          }'''
-
-          replacements = [
-              ('registration', register_pattern, new_register),
-              ('classifier map', classifier_pattern, new_classifier),
-              ('image map', image_pattern, new_image),
-          ]
-          for name, pattern, replacement in replacements:
-              text, count = pattern.subn(replacement, text, count=1)
-              if count != 1:
-                  raise SystemExit(f'{name}: expected exactly one source block, found {count}')
-
+          if text.count(old) != 1:
+              raise SystemExit(f'ready block expected once, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          count = text.count('await ready;')
+          if count < 5:
+              raise SystemExit(f'expected multiple await ready sites, found {count}')
+          text = text.replace('await ready;', 'await ensureReady();')
           path.write_text(text)
           PY
-          node --check backend/index.js
-          grep -q 'registerDeviceIdempotent' backend/index.js
-          grep -q 'PUBLIC_RATE_MAP_MAX_ENTRIES = 4096' backend/index.js
-          grep -q 'prunePublicRateMap(imageProxyRate' backend/index.js
-      - name: Commit guarded patch
+          node --check backend/reliabilityBridge.js
+          grep -q 'function ensureReady()' backend/reliabilityBridge.js
+          ! grep -q 'await ready;' backend/reliabilityBridge.js
+      - name: Commit final patch and remove one-shot workflow
         run: |
-          if git diff --quiet; then
-            echo 'No patch needed'
-            exit 0
-          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add backend/index.js
-          git commit -m 'Fix enrollment replay and bound public rate maps'
+          git rm .github/workflows/critical-production-patch.yml
+          git add backend/reliabilityBridge.js
+          git commit -m 'Make reliability bootstrap ordering safe'
           git push origin HEAD:fix/comprehensive-mdm-hardening
