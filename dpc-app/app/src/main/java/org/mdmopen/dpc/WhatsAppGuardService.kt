@@ -192,7 +192,12 @@ class WhatsAppGuardService : AccessibilityService() {
     }
 
     private fun shouldBlockUpdatesClick(event: AccessibilityEvent, policy: WhatsAppGuardPolicy): Boolean {
-        if (!policy.enabled || (!policy.blockStatuses && !policy.blockChannels)) return false
+        // Only block the whole Updates tab when BOTH content families are blocked.
+        // With a partial policy (statuses-only or channels-only), Updates must stay
+        // reachable and WhatsAppGuardEngine blocks only the matching cards/section.
+        // This is especially important on fresh WhatsApp installs that have no
+        // statuses yet: channels-only must not make the entire Updates tab unusable.
+        if (!policy.enabled || !policy.blockStatuses || !policy.blockChannels) return false
         val source = event.source
         val text = source?.let(WhatsAppScreenClassifier::nodeText)
             ?: event.text?.joinToString(" ")
