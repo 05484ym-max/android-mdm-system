@@ -49,7 +49,7 @@ class AppInstaller(private val context: Context) {
                 }
                 session.commit(
                     statusSender(
-                        sessionId,
+                        requestCode(commandId, attemptId, sessionId),
                         commandId,
                         attemptId,
                         managedInstallWindow = true,
@@ -77,9 +77,20 @@ class AppInstaller(private val context: Context) {
         commandId: String? = null,
         attemptId: String? = null,
     ): String {
-        context.packageManager.packageInstaller
-            .uninstall(packageName, statusSender(packageName.hashCode(), commandId, attemptId))
+        context.packageManager.packageInstaller.uninstall(
+            packageName,
+            statusSender(
+                requestCode(commandId, attemptId, packageName.hashCode()),
+                commandId,
+                attemptId,
+            ),
+        )
         return "הסרה הופעלה עבור $packageName"
+    }
+
+    private fun requestCode(commandId: String?, attemptId: String?, fallback: Int): Int {
+        if (commandId == null && attemptId == null) return fallback
+        return ("${commandId.orEmpty()}:${attemptId.orEmpty()}".hashCode() and Int.MAX_VALUE)
     }
 
     private fun downloadToFile(url: URL, target: File) {
