@@ -24,8 +24,13 @@ object WhatsAppGuardTerms {
     )
 
     private val channelContextWords = setOf(
-        "עקוב", "עוקב", "עוקבים", "עקיבה",
+        "עקוב", "עוקב", "עוקבים", "עקיבה", "במעקב",
         "follow", "following", "followers",
+    )
+
+    private val statusContextPrefixes = setOf(
+        "עדכון סטטוס", "הסטטוס שלי", "סטטוס חדש",
+        "status update", "my status", "new status",
     )
 
     fun isStatus(text: String?, viewId: String?): Boolean =
@@ -46,6 +51,14 @@ object WhatsAppGuardTerms {
                 normalized.startsWith("$word ") ||
                 normalized.endsWith(" $word") ||
                 normalized.contains(" $word ")
+        }
+    }
+
+    fun isStatusContext(text: String?): Boolean {
+        val normalized = normalizeText(text)
+        if (normalized.isEmpty()) return false
+        return statusContextPrefixes.any { prefix ->
+            normalized == prefix || normalized.startsWith("$prefix ") || normalized.startsWith("$prefix,")
         }
     }
 

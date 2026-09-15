@@ -27,7 +27,8 @@ class WhatsAppGuardEngine(
             val signals = clickSignals(event)
 
             val statusTarget = policy.blockStatuses && signals.any { (text, id) ->
-                !WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus(text, id)
+                !WhatsAppGuardTerms.isUpdates(text, id) &&
+                    (WhatsAppGuardTerms.isStatus(text, id) || WhatsAppGuardTerms.isStatusContext(text))
             }
             val channelTarget = policy.blockChannels && signals.any { (text, id) ->
                 !WhatsAppGuardTerms.isUpdates(text, id) &&
@@ -154,11 +155,14 @@ class WhatsAppGuardEngine(
         val source = event.source
         if (source != null) {
             addDescendants(source, 2)
-            var parent = source.parent
-            repeat(2) {
-                add(parent)
-                parent = parent?.parent
-            }
+
+            // Newer WhatsApp builds often expose identifying text as a sibling
+            // of the exact node that receives the click. Inspect only the
+            // immediate card subtree so individual status/channel blocking can
+            // see that local context without scanning unrelated rows.
+            val card = source.parent
+            addDescendants(card, 2)
+            add(card?.parent)
         }
 
         event.text?.joinToString(" ")?.takeIf { it.isNotBlank() }?.let { out += it to null }
