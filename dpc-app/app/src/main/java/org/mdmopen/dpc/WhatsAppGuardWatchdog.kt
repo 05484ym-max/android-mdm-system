@@ -8,14 +8,13 @@ import android.content.ComponentName
 import android.content.Context
 
 /**
- * Periodically re-checks the one runtime dependency the WhatsApp guard cannot
- * enable by itself: its AccessibilityService. If the service is switched off,
- * the next watchdog pass suspends WhatsApp instead of leaving it unfiltered.
+ * Periodic backstop for the WhatsApp accessibility dependency.
  *
- * Android's minimum periodic JobScheduler cadence is roughly 15 minutes, so
- * this is a backstop in addition to normal sync, boot handling and the
- * AccessibilityService's own onServiceConnected reconciliation. It is not
- * described as instantaneous tamper detection.
+ * The guard is deliberately fail-open if Accessibility is lost, and Samsung's
+ * accessibility settings are hidden after successful setup. That makes a
+ * 15-minute wakeup unnecessarily aggressive. Normal policy sync, boot handling,
+ * service connection and an immediate boot check still reconcile the state; the
+ * periodic backstop can safely run hourly and let Android batch it in Doze.
  */
 class WhatsAppGuardWatchdogJobService : JobService() {
     override fun onStartJob(params: JobParameters?): Boolean {
@@ -29,14 +28,18 @@ class WhatsAppGuardWatchdogJobService : JobService() {
 
 object WhatsAppGuardWatchdogScheduler {
     private const val JOB_ID = 0x574147 // "WAG"
-    private const val PERIOD_MS = 15 * 60 * 1000L
+    private const val PERIOD_MS = 60 * 60 * 1000L
 
     fun reconcileSchedule(context: Context) {
         val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
         if (!WhatsAppGuardConfig.load(context).enabled) {
             scheduler.cancel(JOB_ID)
+            scheduler.cancel(JOB_ID + 1)
             return
         }
+
+        // Do not replace an identical persisted job every time PolicySync runs.
+        if (scheduler.getPendingJob(JOB_ID) != null) return
 
         val component = ComponentName(context, WhatsAppGuardWatchdogJobService::class.java)
         val info = JobInfo.Builder(JOB_ID, component)
