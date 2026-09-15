@@ -7,99 +7,113 @@ object PolicySync {
 
     const val TAG = "DpcSync"
     private val syncLock = Any()
+    private val commandLock = Any()
     private val asyncPackageCommands = setOf("INSTALL_APP", "UNINSTALL_APP")
     private val irreversibleCommands = setOf("REBOOT", "WIPE", "RELEASE_DEVICE_OWNER")
 
+    private data class PreparedSync(
+        val api: ApiClient,
+        val deviceId: String,
+        val commands: List<QueuedCommand>,
+        val summary: String,
+    )
+
     /**
-     * A full cycle in one request: status out, policy and commands in. Status reaches
-     * the server before any command runs, so a reboot or wipe cannot swallow it.
-     *
-     * All callers share one process-wide lock so manual, scheduled and push-triggered
-     * syncs cannot apply policy/config changes concurrently.
+     * Policy/config application is serialized independently from command side
+     * effects. A large APK download can therefore no longer block a newer FCM,
+     * manual or periodic policy sync for minutes. Commands themselves remain
+     * serialized by commandLock, and server leases + CommandJournal make a
+     * re-delivered command idempotent.
      */
-    fun run(context: Context): String = synchronized(syncLock) {
-        val serverUrl = Config.serverUrl(context)
-        require(serverUrl.isNotEmpty()) { "לא הוגדרה כתובת שרת" }
+    fun run(context: Context): String {
+        val prepared = synchronized(syncLock) {
+            val serverUrl = Config.serverUrl(context)
+            require(serverUrl.isNotEmpty()) { "לא הוגדרה כתובת שרת" }
 
-        val deviceToken = Config.deviceToken(context)
-            ?: throw IllegalStateException("המכשיר אינו רשום — יש להזין קוד רישום")
+            val deviceToken = Config.deviceToken(context)
+                ?: throw IllegalStateException("המכשיר אינו רשום — יש להזין קוד רישום")
 
-        val deviceId = Config.deviceId(context)
-        val enforcer = PolicyEnforcer(context)
-        val api = ApiClient(serverUrl, deviceToken)
+            val deviceId = Config.deviceId(context)
+            val enforcer = PolicyEnforcer(context)
+            val api = ApiClient(serverUrl, deviceToken)
 
-        val result = api.sync(
-            deviceId,
-            DeviceHealth.collect(context, enforcer.isDeviceOwner()),
-        )
+            val result = api.sync(
+                deviceId,
+                DeviceHealth.collect(context, enforcer.isDeviceOwner()),
+            )
 
-        // Universal target lookup is additive and guidance-only. A temporary
-        // failure here must never break the established Device Owner sync path.
-        runCatching {
-            api.fetchProtectionTarget(deviceId)
-        }.onSuccess { target ->
-            RequestedProtectionStore.save(context, target)
+            // Universal target lookup is additive and guidance-only. A temporary
+            // failure here must never break the established Device Owner sync path.
+            runCatching {
+                api.fetchProtectionTarget(deviceId)
+            }.onSuccess { target ->
+                RequestedProtectionStore.save(context, target)
+            }
+
+            Config.setAllowedApps(context, result.policy.allowedApps)
+            Config.setAppCatalog(context, result.catalog)
+            Config.setKioskEnabled(context, result.policy.kioskEnabled)
+            Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)
+            Config.setCustomerName(context, result.policy.customerName)
+            Config.setCustomerNumber(context, result.policy.customerNumber)
+            WhatsAppGuardConfig.save(context, result.policy.whatsappGuard)
+            Config.setDnsPolicy(
+                context,
+                result.dns.desiredProviderHost,
+                result.dns.filteringRequested,
+                result.dns.allowCustomerToggle,
+                result.dns.desiredProviderFilters,
+            )
+            Config.setDnsPendingCustomerRequest(context, null)
+            Config.setSubscriptionAccess(context, result.subscriptionAccess)
+
+            // Record the server-authoritative post-lease state before policy/apply or
+            // any async installer callback can run. Every temporary install path now
+            // returns to this desired state instead of blindly re-blocking installs.
+            ManagedInstallWindow.setDesiredInstallBlocked(context, !result.policy.fullOpen)
+
+            val dnsReconcileResult = AdBlockDns.reconcile(context)
+            val dnsFailSafeResult = AdBlockDns.runFailSafeCheckCycle(context)
+
+            val enforcement = enforcer.apply(result.policy)
+            val whatsappGuardResult = WhatsAppGuardProtection.reconcile(
+                context,
+                result.policy.whatsappGuard,
+            )
+            WhatsAppGuardWatchdogScheduler.reconcileSchedule(context)
+            DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
+            SyncScheduler.schedule(context)
+            UpdateCheckScheduler.scheduleIfNeeded(context)
+            DnsFailSafeScheduler.scheduleIfNeeded(context)
+            PushRegistration.ensureRegistered(context)
+            val wallpaperResult = WallpaperBranding.apply(context)
+
+            val summary = buildString {
+                append("רקע: $wallpaperResult")
+                append("\nמותרות ${result.policy.allowedApps.size} · ")
+                append("הושעו ${enforcement.suspended.size} · ")
+                append("שוחררו ${enforcement.unsuspended.size} · ")
+                append("נכשלו ${enforcement.failed.size} · ")
+                append("דולגו ${enforcement.systemAppsSkipped} מערכת · ")
+                append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
+                append("סנכרון כל ${result.policy.syncIntervalMinutes} דק'")
+                append("\n• WhatsApp Guard: $whatsappGuardResult")
+                dnsReconcileResult?.let { append("\n• DNS: $it") }
+                dnsFailSafeResult?.let { append("\n• $it") }
+            }
+
+            PreparedSync(api, deviceId, result.commands, summary)
         }
 
-        Config.setAllowedApps(context, result.policy.allowedApps)
-        Config.setAppCatalog(context, result.catalog)
-        Config.setKioskEnabled(context, result.policy.kioskEnabled)
-        Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)
-        Config.setCustomerName(context, result.policy.customerName)
-        Config.setCustomerNumber(context, result.policy.customerNumber)
-        WhatsAppGuardConfig.save(context, result.policy.whatsappGuard)
-        Config.setDnsPolicy(
-            context,
-            result.dns.desiredProviderHost,
-            result.dns.filteringRequested,
-            result.dns.allowCustomerToggle,
-            result.dns.desiredProviderFilters,
-        )
-        Config.setDnsPendingCustomerRequest(context, null)
-        Config.setSubscriptionAccess(context, result.subscriptionAccess)
-
-        // Record the server-authoritative post-lease state before policy/apply or
-        // any async installer callback can run. Every temporary install path now
-        // returns to this desired state instead of blindly re-blocking installs.
-        ManagedInstallWindow.setDesiredInstallBlocked(context, !result.policy.fullOpen)
-
-        val dnsReconcileResult = AdBlockDns.reconcile(context)
-        val dnsFailSafeResult = AdBlockDns.runFailSafeCheckCycle(context)
-
-        val enforcement = enforcer.apply(result.policy)
-        val whatsappGuardResult = WhatsAppGuardProtection.reconcile(
-            context,
-            result.policy.whatsappGuard,
-        )
-        WhatsAppGuardWatchdogScheduler.reconcileSchedule(context)
-        DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
-        SyncScheduler.schedule(context)
-        UpdateCheckScheduler.scheduleIfNeeded(context)
-        DnsFailSafeScheduler.scheduleIfNeeded(context)
-        PushRegistration.ensureRegistered(context)
-        val wallpaperResult = WallpaperBranding.apply(context)
-
-        val executor = CommandExecutor(context)
-        val outcomes = result.commands.map { queued ->
-            executeCommandIdempotently(context, api, deviceId, executor, queued)
+        val outcomes = synchronized(commandLock) {
+            val executor = CommandExecutor(context)
+            prepared.commands.map { queued ->
+                executeCommandIdempotently(context, prepared.api, prepared.deviceId, executor, queued)
+            }
         }
 
-        // Update checks have their own 6-7 hour persisted JobScheduler cadence.
-        // Do not open a second network connection on every normal policy sync.
-        // An explicit admin retry-update still bypasses this path in PolicySyncWorker.
-
-        buildString {
-            append("רקע: $wallpaperResult")
-            append("\nמותרות ${result.policy.allowedApps.size} · ")
-            append("הושעו ${enforcement.suspended.size} · ")
-            append("שוחררו ${enforcement.unsuspended.size} · ")
-            append("נכשלו ${enforcement.failed.size} · ")
-            append("דולגו ${enforcement.systemAppsSkipped} מערכת · ")
-            append("קיוסק ${if (enforcement.kioskEnabled) "פעיל" else "כבוי"} · ")
-            append("סנכרון כל ${result.policy.syncIntervalMinutes} דק'")
-            append("\n• WhatsApp Guard: $whatsappGuardResult")
-            dnsReconcileResult?.let { append("\n• DNS: $it") }
-            dnsFailSafeResult?.let { append("\n• $it") }
+        return buildString {
+            append(prepared.summary)
             outcomes.forEach { append("\n• $it") }
         }
     }
