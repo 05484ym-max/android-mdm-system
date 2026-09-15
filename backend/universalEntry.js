@@ -9,12 +9,14 @@ const protectionPersistence = require('./protectionPersistence');
 const { installProtectionRuntimeBridge } = require('./protectionRuntimeBridge');
 const { installFleetCatalogBridge } = require('./fleetCatalogBridge');
 const { installReliabilityBridge } = require('./reliabilityBridge');
+const { installUploadMemoryGuard } = require('./uploadMemoryGuard');
 const { installProtectionAdminRoutes } = require('./protectionAdminRoutes');
 const { installProtectionDeviceRoutes } = require('./protectionDeviceRoutes');
 const { captureExpressApp } = require('./expressAppCapture');
 
-// Reliability wrappers must be installed before index.js captures references to
-// the exported db/push operations used by legacy routes.
+// These wrappers must be installed before index.js requires/constructs the
+// legacy upload and route handlers.
+installUploadMemoryGuard();
 installReliabilityBridge(db, push);
 installProtectionRuntimeBridge(db, protectionSync, protectionPersistence);
 installFleetCatalogBridge(db, push);
