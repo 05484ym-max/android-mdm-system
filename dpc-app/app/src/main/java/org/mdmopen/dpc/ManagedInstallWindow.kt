@@ -25,8 +25,12 @@ object ManagedInstallWindow {
     private const val TAG = "ManagedInstallWindow"
     private const val PREFS = "dpc_managed_install_window"
     private const val KEY_ACTIVE = "active_operations"
-    private const val RELock_WORK = "managed-install-relock"
+    private const val RELOCK_WORK = "managed-install-relock"
     private const val FAILSAFE_MINUTES = 10L
+
+    fun isOpen(context: Context): Boolean =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_ACTIVE, 0) > 0
 
     @Synchronized
     fun open(context: Context) {
@@ -41,7 +45,9 @@ object ManagedInstallWindow {
         if (current == 0) {
             dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         }
-        prefs.edit().putInt(KEY_ACTIVE, current + 1).commit()
+        check(prefs.edit().putInt(KEY_ACTIVE, current + 1).commit()) {
+            "Could not persist managed-install window"
+        }
         scheduleFailsafe(appContext)
     }
 
@@ -55,7 +61,7 @@ object ManagedInstallWindow {
 
         if (remaining == 0) {
             restoreRestriction(appContext)
-            WorkManager.getInstance(appContext).cancelUniqueWork(RELock_WORK)
+            WorkManager.getInstance(appContext).cancelUniqueWork(RELOCK_WORK)
         }
     }
 
@@ -74,13 +80,12 @@ object ManagedInstallWindow {
             .edit().putBoolean("install_temporarily_allowed", false).apply()
 
         restoreRestriction(appContext)
-        WorkManager.getInstance(appContext).cancelUniqueWork(RELock_WORK)
+        WorkManager.getInstance(appContext).cancelUniqueWork(RELOCK_WORK)
     }
 
     fun recoverIfNeeded(context: Context) {
         val appContext = context.applicationContext
-        val active = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getInt(KEY_ACTIVE, 0) > 0
+        val active = isOpen(appContext)
         val legacyUpdater = appContext.getSharedPreferences("dpc_updater", Context.MODE_PRIVATE)
             .getBoolean("install_in_progress", false)
         val legacyInstaller = appContext.getSharedPreferences("dpc_installer", Context.MODE_PRIVATE)
@@ -104,7 +109,7 @@ object ManagedInstallWindow {
             .setInitialDelay(FAILSAFE_MINUTES, TimeUnit.MINUTES)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            RELock_WORK,
+            RELOCK_WORK,
             ExistingWorkPolicy.REPLACE,
             request,
         )
@@ -119,7 +124,7 @@ class ManagedInstallRelockWorker(
         return try {
             ManagedInstallWindow.forceClose(applicationContext)
             Result.success()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             Result.retry()
         }
     }
