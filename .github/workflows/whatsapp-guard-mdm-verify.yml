@@ -46,6 +46,7 @@ jobs:
           policy = (base / 'WhatsAppGuardPolicy.kt').read_text()
           matcher = (base / 'WhatsAppGuardTerms.kt').read_text()
           enforcer = (base / 'PolicyEnforcer.kt').read_text()
+          customer = (base / 'CustomerActivity.kt').read_text()
           calibration = (base / 'WhatsAppMaskCalibration.kt').read_text()
           calibration_ui = (base / 'WhatsAppMaskCalibrationActivity.kt').read_text()
           calibration_launcher = (base / 'WhatsAppMaskCalibrationLauncherActivity.kt').read_text()
@@ -53,7 +54,7 @@ jobs:
           xml = Path('dpc-app/app/src/main/res/xml/whatsapp_guard_accessibility.xml').read_text()
 
           checks = {
-              'service scoped to WhatsApp package': 'android:packageNames="com.whatsapp"' in xml,
+              'service observes WhatsApp and managed accessibility settings': all(x in xml for x in ['com.whatsapp', 'com.android.settings', 'com.samsung.accessibility']),
               'window topology events observed': 'typeWindowsChanged' in xml,
               'updates tab click blocked before engine': 'shouldBlockUpdatesClick(event, policy)' in service and 'blockUpdatesNavigation()' in service and 'WhatsAppGuardTerms.isUpdates(text, id)' in service,
               'updates block uses global back': 'performGlobalAction(GLOBAL_ACTION_BACK)' in service,
@@ -74,7 +75,14 @@ jobs:
               'calibration overlay is draggable and resizable': 'MaskEditorView' in calibration_ui and 'DragMode.MOVE' in calibration_ui and 'DragMode.LEFT' in calibration_ui and 'DragMode.RIGHT' in calibration_ui,
               'calibration save reset cancel controls exist': all(x in calibration_ui for x in ['שמור', 'איפוס', 'ביטול']),
               'calibration launcher requires admin pin': 'Config.checkAdminPin' in calibration_launcher and 'Config.hasAdminPin' in calibration_launcher,
-              'calibration overlay registered private': 'android:name=".WhatsAppMaskCalibrationActivity"' in manifest and 'android:exported="false"' in manifest,
+              'calibration has no separate launcher icon': 'android:name=".WhatsAppMaskCalibrationLauncherActivity"' in manifest and '<category android:name="android.intent.category.LAUNCHER"' not in manifest.split('WhatsAppMaskCalibrationLauncherActivity',1)[1].split('</activity>',1)[0],
+              'calibration launcher registered private': 'android:name=".WhatsAppMaskCalibrationLauncherActivity"' in manifest and 'android:exported="false"' in manifest.split('WhatsAppMaskCalibrationLauncherActivity',1)[1].split('/>',1)[0],
+              'calibration accessible from customer personal area': 'כיול תמונות פרופיל' in customer and 'WhatsAppMaskCalibrationLauncherActivity::class.java' in customer,
+              'installer accessibility setup requires admin pin': 'requestAdminPinForWhatsApp' in customer and 'Config.checkAdminPin' in customer and 'openWhatsAppAccessibilitySettings()' in customer,
+              'status and channels remain panel-only on device UI': 'חסימת סטטוסים וערוצים אינה ניתנת לשינוי במכשיר' in customer,
+              'managed accessibility settings eject exists': 'shouldEjectManagedAccessibilitySettings' in service and 'ejectManagedAccessibilitySettings' in service and 'SETTINGS_EJECT_DEBOUNCE_MS' in service,
+              'installer setup window bypasses settings eject': 'Config.accessibilitySetupWindowActive(this)' in service,
+              'settings eject does not block WhatsApp fail-open path': 'if (!policy.enabled) return false' in service and 'WhatsApp נשאר זמין' in customer,
               'global back ejection used for status/channel': 'performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)' in engine,
               'no status/channel overlay fallback': 'Status/Channels intentionally have no overlay fallback' in engine,
               'eject debounce exists': 'EJECT_DEBOUNCE_MS' in engine and 'UPDATES_EJECT_DEBOUNCE_MS' in service,
