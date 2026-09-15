@@ -243,13 +243,13 @@
     root.querySelectorAll('[data-enrollment]').forEach(btn => btn.addEventListener('click', () => generateEnrollment(btn)));
   }
 
-  function renderDiagnostics(data, publicDevice) {
+  function renderDiagnostics(data, publicDevice, targetRoot) {
     const h = data.health || {};
     const faults = [...(Array.isArray(data.faults) ? data.faults : [])];
     faults.push(...clientFaults(publicDevice, faults));
 
     const title = document.getElementById('diagnosticsTitle');
-    if (title) title.textContent = h.customerName || 'לקוח ללא שם';
+    if (!targetRoot && title) title.textContent = h.customerName || 'לקוח ללא שם';
     const owner = h.isDeviceOwner === true ? 'פעיל' : h.isDeviceOwner === false ? 'לא פעיל' : 'אין נתון';
     const version = [h.currentVersionName, h.currentVersionCode != null ? `(${h.currentVersionCode})` : null].filter(Boolean).join(' ') || '—';
 
@@ -265,9 +265,32 @@
       ? faults.map(f => faultCard(f, data.deviceId)).join('')
       : '<div class="empty-state" style="color:var(--ok)">✓ לא נמצאה תקלה שדורשת טיפול</div>';
 
-    const root = document.getElementById('diagnosticsContent');
+    const root = targetRoot || document.getElementById('diagnosticsContent');
+    if (!root) return;
     root.innerHTML = header + `<div class="diag-section"><h3>מה דורש טיפול</h3>${faultsHtml}</div>` + dnsSectionHtml(data.deviceId, h, data.dnsProviderFilters);
     bindActions(root);
+  }
+
+  async function loadDeviceDiagnosticsInline(deviceId, root) {
+    if (!root) return;
+    root.innerHTML = '<div class="empty-state">בודק את המכשיר...</div>';
+    try {
+      const [diagRes, devicesRes] = await Promise.all([
+        fetch(`/api/health/devices/${encodeURIComponent(deviceId)}/diagnostics`),
+        fetch('/api/devices'),
+      ]);
+      if (diagRes.status === 401 || devicesRes.status === 401) { loginRequired(); return; }
+      if (!diagRes.ok) throw new Error('לא ניתן לטעון את האבחון');
+      const data = await diagRes.json();
+      let publicDevice = null;
+      if (devicesRes.ok) {
+        const devices = await devicesRes.json();
+        publicDevice = Array.isArray(devices) ? devices.find(d => d.deviceId === deviceId) || null : null;
+      }
+      renderDiagnostics(data, publicDevice, root);
+    } catch (e) {
+      root.innerHTML = `<div class="empty-state">${esc(e && e.message ? e.message : 'שגיאת תקשורת')}</div>`;
+    }
   }
 
   async function openDeviceDiagnostics(deviceId) {
@@ -302,4 +325,5 @@
 
   document.getElementById('diagnosticsBackBtn')?.addEventListener('click', closeDiagnostics);
   window.openDeviceDiagnostics = openDeviceDiagnostics;
+  window.loadDeviceDiagnosticsInline = loadDeviceDiagnosticsInline;
 })();

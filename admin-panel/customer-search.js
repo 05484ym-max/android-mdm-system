@@ -55,6 +55,16 @@
     return panel;
   }
 
+  function setCustomerFocus(focused) {
+    const tab = document.querySelector('.tab-content[data-tab-content="customers"]');
+    if (!tab) return;
+    Array.from(tab.children).forEach(el => {
+      if (el.classList.contains('stats') || el.classList.contains('devices-section')) {
+        el.style.display = focused ? 'none' : '';
+      }
+    });
+  }
+
   function render(deviceId) {
     const panel = ensurePanel();
     if (!panel) return;
@@ -68,6 +78,7 @@
 
     const status = getStatus(d);
     const p = d.policy || {};
+    const subscription = d.subscription || {};
     const apps = Array.isArray(p.allowedApps) ? p.allowedApps : [];
     const pending = Array.isArray(d.pendingCommands) ? d.pendingCommands : [];
     const history = Array.isArray(d.commandHistory) ? d.commandHistory : [];
@@ -92,6 +103,8 @@
       <div class="unified-profile-grid">
         <div class="unified-info-card"><span>מזהה מכשיר</span><strong dir="ltr">${esc(d.deviceId)}</strong></div>
         <div class="unified-info-card"><span>מצב מנוי</span><strong class="${esc(status.cls || '')}">${esc(status.text || '—')}</strong></div>
+        <div class="unified-info-card"><span>תוקף מנוי</span><strong>${esc(fmtDate(subscription.expiryDate))}</strong></div>
+        <div class="unified-info-card"><span>מחיר מנוי</span><strong>${subscription.price != null ? esc(subscription.price) + ' ₪' : '—'}</strong></div>
         <div class="unified-info-card"><span>נרשם</span><strong>${esc(fmtDate(d.registeredAt))}</strong></div>
         <div class="unified-info-card"><span>דגם</span><strong>${esc(deviceStatus.model || '—')}</strong></div>
         <div class="unified-info-card"><span>Android</span><strong>${esc(deviceStatus.androidVersion || '—')}</strong></div>
@@ -124,12 +137,32 @@
         ${lastCommands.length ? `<div class="unified-last-commands">${lastCommands.map(c => `<div>${esc(typeof window.commandLabel === 'function' ? window.commandLabel(c.command) : c.command)} · ${esc(fmtDate(c.deliveredAt || c.queuedAt))}</div>`).join('')}</div>` : '<div class="no-apps">אין היסטוריית פקודות</div>'}
       </div>
 
+      <div class="unified-profile-section" data-inline-diagnostics>
+        <div class="unified-profile-head">
+          <h3 style="margin:0">אבחון המכשיר</h3>
+          <button type="button" class="toggle-btn" data-inline-diagnostics-refresh>⟳ רענן אבחון</button>
+        </div>
+        <div data-inline-diagnostics-content><div class="empty-state">טוען אבחון...</div></div>
+      </div>
+
       <div class="unified-profile-actions">
-        <button type="button" class="add-app-btn" data-unified-manage="${esc(d.deviceId)}">פתח ניהול מלא</button>
-        <button type="button" class="toggle-btn" data-unified-diagnostics="${esc(d.deviceId)}">אבחון מלא</button>
+        <button type="button" class="add-app-btn" data-unified-manage="${esc(d.deviceId)}">פתח ניהול ופעולות</button>
       </div>
     `;
     panel.style.display = 'block';
+    setCustomerFocus(true);
+
+    const inlineDiagnosticsRoot = panel.querySelector('[data-inline-diagnostics-content]');
+    const loadInlineDiagnostics = () => {
+      if (!inlineDiagnosticsRoot) return;
+      if (typeof window.loadDeviceDiagnosticsInline !== 'function') {
+        inlineDiagnosticsRoot.innerHTML = '<div class="empty-state">האבחון אינו זמין כרגע</div>';
+        return;
+      }
+      window.loadDeviceDiagnosticsInline(d.deviceId, inlineDiagnosticsRoot);
+    };
+    loadInlineDiagnostics();
+    panel.querySelector('[data-inline-diagnostics-refresh]')?.addEventListener('click', loadInlineDiagnostics);
 
     panel.querySelectorAll('[data-wa-key]').forEach(btn => btn.addEventListener('click', async e => {
       const key = e.currentTarget.getAttribute('data-wa-key');
@@ -179,15 +212,12 @@
     panel.querySelector('[data-unified-close]')?.addEventListener('click', () => {
       panel.style.display = 'none';
       panel.innerHTML = '';
+      setCustomerFocus(false);
       const input = document.getElementById('quickCustomerSearch');
       if (input) input.value = '';
     });
     panel.querySelector('[data-unified-manage]')?.addEventListener('click', e => {
       if (typeof window.openDeviceDetail === 'function') window.openDeviceDetail(e.currentTarget.getAttribute('data-unified-manage'));
-    });
-    panel.querySelector('[data-unified-diagnostics]')?.addEventListener('click', e => {
-      const id = e.currentTarget.getAttribute('data-unified-diagnostics');
-      if (typeof window.openDeviceDiagnostics === 'function') window.openDeviceDiagnostics(id);
     });
   }
 
@@ -226,6 +256,7 @@
       else if (!input.value.trim()) {
         const panel = ensurePanel();
         if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+        setCustomerFocus(false);
       }
     });
 
