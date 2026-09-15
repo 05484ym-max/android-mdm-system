@@ -1,0 +1,66 @@
+name: Reliability Regression
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/**'
+      - '.github/workflows/reliability-regression.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'dpc-app/app/src/main/java/org/mdmopen/dpc/**'
+      - '.github/workflows/reliability-regression.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  backend-syntax-and-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Run backend syntax gate
+        working-directory: backend
+        run: npm test
+      - name: Verify command reliability contracts
+        run: |
+          set -euo pipefail
+          grep -q 'lease_expires_at' backend/reliabilityBridge.js
+          grep -q 'FOR UPDATE SKIP LOCKED' backend/reliabilityBridge.js
+          grep -q 'completed_at = COALESCE' backend/reliabilityBridge.js
+          grep -q 'BEGIN' backend/reliabilityBridge.js
+          grep -q 'ROLLBACK' backend/reliabilityBridge.js
+          grep -q 'hasPushToken' backend/reliabilityBridge.js
+          grep -q 'token_unregistered' backend/push.js
+          grep -q 'installUploadMemoryGuard' backend/universalEntry.js
+
+  android-reliability-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify durable command and install coordination contracts
+        run: |
+          set -euo pipefail
+          SRC=dpc-app/app/src/main/java/org/mdmopen/dpc
+          grep -q 'object CommandJournal' "$SRC/CommandJournal.kt"
+          grep -q 'ManagedInstallWindow.open' "$SRC/PlayStoreGate.kt"
+          if grep -q 'DISALLOW_INSTALL_APPS' "$SRC/PlayStoreGate.kt"; then
+            echo 'PlayStoreGate must not own DISALLOW_INSTALL_APPS directly' >&2
+            exit 1
+          fi
+          grep -q 'setDesiredInstallBlocked' "$SRC/PolicySync.kt"
+          grep -q 'private val commandLock' "$SRC/PolicySync.kt"
+          grep -q 'MAX_APK_BYTES' "$SRC/AppInstaller.kt"
+          grep -q 'MAX_UPDATE_APK_BYTES' "$SRC/AutoUpdater.kt"
+          grep -q 'runGeneration' "$SRC/UpdateCheckJobService.kt"
+          grep -q 'future.cancel(true)' "$SRC/AdBlockDns.kt"
