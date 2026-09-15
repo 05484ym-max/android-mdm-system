@@ -1,0 +1,46 @@
+name: Fix WhatsApp Updates Boundary
+on:
+  push:
+    branches:
+      - fix/whatsapp-updates-tab-boundary
+    paths:
+      - .github/workflows/fix-whatsapp-updates-boundary.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/whatsapp-updates-tab-boundary
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply minimal boundary fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/WhatsAppGuardEngine.kt')
+          s = p.read_text()
+          old = '''        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {\n            val signals = clickSignals(event)\n\n            val statusTarget = policy.blockStatuses && signals.any { (text, id) ->'''
+          new = '''        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {\n            val signals = clickSignals(event)\n\n            // The bottom navigation Updates tab sits geometrically below the Channels\n            // heading. Never feed that navigation click into section geometry: otherwise\n            // a channels-only policy mistakes the Updates tab itself for a channel card\n            // and immediately ejects the user after entering Updates.\n            if (signals.any { (text, id) -> WhatsAppGuardTerms.isUpdates(text, id) }) return false\n\n            val statusTarget = policy.blockStatuses && signals.any { (text, id) ->'''
+          if s.count(old) != 1:
+              raise SystemExit(f'guard mismatch: expected 1 target, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -F 'if (signals.any { (text, id) -> WhatsAppGuardTerms.isUpdates(text, id) }) return false' dpc-app/app/src/main/java/org/mdmopen/dpc/WhatsAppGuardEngine.kt
+      - name: Android tests and compile
+        working-directory: dpc-app
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+      - name: Commit product fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-whatsapp-updates-boundary.yml
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/WhatsAppGuardEngine.kt
+          git diff --cached --check
+          git commit -m "Keep Updates tab open under partial WhatsApp blocking"
+          git push origin HEAD:fix/whatsapp-updates-tab-boundary
