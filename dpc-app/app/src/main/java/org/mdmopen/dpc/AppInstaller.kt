@@ -77,9 +77,9 @@ class AppInstaller(private val context: Context) {
         }
     }
 
-    fun uninstall(packageName: String): String {
+    fun uninstall(packageName: String, commandId: String? = null): String {
         context.packageManager.packageInstaller
-            .uninstall(packageName, statusSender(packageName.hashCode()))
+            .uninstall(packageName, statusSender(packageName.hashCode(), commandId))
         return "הסרה הופעלה עבור $packageName"
     }
 
@@ -93,8 +93,24 @@ class AppInstaller(private val context: Context) {
             if (connection.responseCode !in 200..299) {
                 throw IllegalStateException("הורדת ה-APK נכשלה: HTTP ${connection.responseCode}")
             }
+            val declaredLength = connection.contentLengthLong
+            if (declaredLength > MAX_APK_BYTES) {
+                throw IllegalStateException("קובץ ה-APK גדול מהמגבלה המותרת")
+            }
             connection.inputStream.use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_APK_BYTES) {
+                            throw IllegalStateException("קובץ ה-APK גדול מהמגבלה המותרת")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                }
             }
         } finally {
             connection.disconnect()
@@ -120,7 +136,7 @@ class AppInstaller(private val context: Context) {
         managedInstallWindow: Boolean = false,
     ): IntentSender {
         val intent = Intent(context, InstallResultReceiver::class.java).apply {
-            commandId?.let { putExtra("commandId", it) }
+            commandId?.let { putExtra(EXTRA_COMMAND_ID, it) }
             putExtra(EXTRA_MANAGED_INSTALL_WINDOW, managedInstallWindow)
         }
         var flags = PendingIntent.FLAG_UPDATE_CURRENT
@@ -131,6 +147,10 @@ class AppInstaller(private val context: Context) {
     }
 
     companion object {
+        // Backend upload limit is 150 MiB. Keep a little protocol/headroom while
+        // still preventing a changed/malicious URL from exhausting device storage.
+        private const val MAX_APK_BYTES = 160L * 1024L * 1024L
+        const val EXTRA_COMMAND_ID = "commandId"
         const val EXTRA_MANAGED_INSTALL_WINDOW = "managedInstallWindow"
     }
 }
