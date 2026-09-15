@@ -10,8 +10,10 @@ import java.util.concurrent.TimeUnit
 object PushRegistration {
 
     /**
-     * Returns false only when obtaining the Firebase token failed transiently.
-     * Registration API failures still throw so WorkManager can retry them.
+     * Re-assert the current token whenever sync runs. Firebase may tell the
+     * server that a token is unregistered and the server then clears its copy;
+     * the device cannot infer that from its own cached token value. Posting the
+     * current token again is idempotent and repairs that split-brain state.
      */
     fun ensureRegistered(context: Context): Boolean {
         val deviceToken = Config.deviceToken(context) ?: return true
@@ -24,8 +26,6 @@ object PushRegistration {
             Log.w(PolicySync.TAG, "Could not obtain a push token", e)
             return false
         }
-
-        if (pushToken == Config.pushToken(context)) return true
 
         ApiClient(serverUrl, deviceToken)
             .registerPushToken(Config.deviceId(context), pushToken)
