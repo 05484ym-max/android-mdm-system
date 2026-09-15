@@ -31,14 +31,12 @@ class CommandExecutor(private val context: Context) {
         "INSTALL_APP" -> {
             val apkUrl = queued.params.getString("apkUrl")
             val expectedSha256 = queued.params.getString("expectedSha256")
-            try {
-                installer.installFromUrl(apkUrl, expectedSha256, queued.id)
-            } catch (e: Exception) {
-                reportInstallFailure(queued.id, e)
-                throw e
-            }
+            installer.installFromUrl(apkUrl, expectedSha256, queued.id)
         }
-        "UNINSTALL_APP" -> installer.uninstall(queued.params.getString("packageName"))
+        "UNINSTALL_APP" -> installer.uninstall(
+            queued.params.getString("packageName"),
+            queued.id,
+        )
         "OPEN_PLAY_STORE_INSTALL" -> {
             val packageName = queued.params.getString("packageName")
             PlayStoreGate.openForInstall(context, packageName)
@@ -79,7 +77,7 @@ class CommandExecutor(private val context: Context) {
         "DISABLE_DNS_FILTERING" -> {
             AdBlockDns.disable(context)
         }
-        else -> "פקודה לא מוכרת: ${queued.command}"
+        else -> throw IllegalArgumentException("פקודה לא מוכרת: ${queued.command}")
     }
 
     private fun requestSelfUninstall(): Boolean = try {
@@ -90,19 +88,5 @@ class CommandExecutor(private val context: Context) {
         true
     } catch (_: Exception) {
         false
-    }
-
-    /** Best-effort - a failed report must never crash the command loop itself;
-     * the original install failure is already being propagated by the caller. */
-    private fun reportInstallFailure(commandId: String, error: Exception) {
-        try {
-            val serverUrl = Config.serverUrl(context)
-            val deviceToken = Config.deviceToken(context) ?: return
-            val deviceId = Config.deviceId(context)
-            ApiClient(serverUrl, deviceToken).reportCommandResult(
-                deviceId, commandId, "FAILED", error.message ?: "התקנה נכשלה"
-            )
-        } catch (_: Exception) {
-        }
     }
 }
