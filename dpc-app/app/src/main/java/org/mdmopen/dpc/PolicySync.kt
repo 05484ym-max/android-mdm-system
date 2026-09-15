@@ -80,10 +80,9 @@ object PolicySync {
             }
         }
 
-        // Successful manual, scheduled and push-triggered syncs all request an
-        // immediate signed DPC update check. AutoUpdater is asynchronous and
-        // internally guarded against concurrent runs.
-        AutoUpdater.check(context.applicationContext)
+        // Update checks have their own 6-7 hour persisted JobScheduler cadence.
+        // Do not open a second network connection on every normal policy sync.
+        // An explicit admin retry-update still bypasses this path in PolicySyncWorker.
 
         buildString {
             append("רקע: $wallpaperResult")
