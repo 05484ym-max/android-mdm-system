@@ -12,20 +12,29 @@ object WhatsAppGuardTerms {
     private val channelWords = setOf("ערוץ", "ערוצים", "channel", "channels")
     private val updatesWords = setOf("עדכונים", "updates")
 
+    private val statusStructuralIds = setOf(
+        "status_header", "status_section", "status_list", "status_item", "status_row", "status_ring",
+    )
+    private val channelStructuralIds = setOf(
+        "channel_header", "channel_section", "channel_list", "channel_card", "channel_item", "channel_row",
+    )
+    private val updatesStructuralIds = setOf(
+        "updates_tab", "update_tab", "status_tab",
+    )
+
     private val channelContextWords = setOf(
         "עקוב", "עוקב", "עוקבים", "עקיבה",
         "follow", "following", "followers",
     )
 
     fun isStatus(text: String?, viewId: String?): Boolean =
-        matchesLabel(text, statusWords) || hasIdToken(viewId, setOf("status"))
+        matchesLabel(text, statusWords) || matchesStructuralId(viewId, statusStructuralIds)
 
     fun isChannel(text: String?, viewId: String?): Boolean =
-        matchesLabel(text, channelWords) || hasIdToken(viewId, setOf("channel"))
+        matchesLabel(text, channelWords) || matchesStructuralId(viewId, channelStructuralIds)
 
     fun isUpdates(text: String?, viewId: String?): Boolean =
-        matchesLabel(text, updatesWords) || hasIdToken(viewId, setOf("update")) ||
-            normalizedId(viewId).contains("status_tab")
+        matchesLabel(text, updatesWords) || matchesStructuralId(viewId, updatesStructuralIds)
 
     /** Extra local evidence that is characteristic of a channel card. */
     fun isChannelContext(text: String?): Boolean {
@@ -50,11 +59,9 @@ object WhatsAppGuardTerms {
         }
     }
 
-    private fun hasIdToken(viewId: String?, tokens: Set<String>): Boolean {
-        val id = normalizedId(viewId)
-        if (id.isEmpty()) return false
-        val parts = id.split('_', '-', '.', '/', ':').filter(String::isNotBlank)
-        return tokens.any(parts::contains)
+    private fun matchesStructuralId(viewId: String?, allowed: Set<String>): Boolean {
+        val idName = normalizedId(viewId).substringAfterLast('/').substringAfterLast(':')
+        return idName in allowed
     }
 
     private fun normalizedId(viewId: String?): String =
