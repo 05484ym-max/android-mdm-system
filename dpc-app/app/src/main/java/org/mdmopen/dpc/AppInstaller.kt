@@ -2,9 +2,6 @@ package org.mdmopen.dpc
 
 import android.app.PendingIntent
 import android.content.Context
-import android.os.UserManager
-import android.content.ComponentName
-import android.app.admin.DevicePolicyManager
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
@@ -16,10 +13,8 @@ import java.security.MessageDigest
 
 /**
  * Installs and removes apps through PackageInstaller. A Device Owner may do this
- * silently, which is what makes remote app management possible - and exactly why
- * the APK is downloaded to a file and its SHA-256 verified against what the admin
- * queued *before* it ever reaches PackageInstaller: silent install means no user
- * consent screen catches a swapped or corrupted APK the way a normal install would.
+ * silently, so every remote APK is downloaded first and its SHA-256 is verified
+ * before PackageInstaller receives it.
  */
 class AppInstaller(private val context: Context) {
 
@@ -30,6 +25,9 @@ class AppInstaller(private val context: Context) {
         }
 
         val tempFile = File(context.cacheDir, "install-${commandId ?: System.currentTimeMillis()}.apk")
+        var sessionId = -1
+        var windowOpened = false
+
         try {
             downloadToFile(url, tempFile)
 
@@ -42,7 +40,13 @@ class AppInstaller(private val context: Context) {
             val params = PackageInstaller.SessionParams(
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL
             )
-            val sessionId = installer.createSession(params)
+
+            // DISALLOW_INSTALL_APPS is checked by createSession(), not only by
+            // commit(), so the managed window must be opened first.
+            ManagedInstallWindow.open(context)
+            windowOpened = true
+
+            sessionId = installer.createSession(params)
             installer.openSession(sessionId).use { session ->
                 tempFile.inputStream().use { input ->
                     session.openWrite("dpc-install", 0, tempFile.length()).use { output ->
@@ -50,10 +54,24 @@ class AppInstaller(private val context: Context) {
                         session.fsync(output)
                     }
                 }
-                temporarilyAllowInstall()
-                session.commit(statusSender(sessionId, commandId))
+                session.commit(statusSender(sessionId, commandId, managedInstallWindow = true))
             }
+
+            // The callback closes the window. A persisted timeout worker and boot
+            // recovery cover lost callbacks/process death.
+            windowOpened = false
             return "התקנה הופעלה מ-$apkUrl"
+        } catch (e: Exception) {
+            if (sessionId >= 0) {
+                try {
+                    context.packageManager.packageInstaller.abandonSession(sessionId)
+                } catch (_: Exception) {
+                }
+            }
+            if (windowOpened) {
+                try { ManagedInstallWindow.close(context) } catch (_: Exception) {}
+            }
+            throw e
         } finally {
             tempFile.delete()
         }
@@ -63,55 +81,6 @@ class AppInstaller(private val context: Context) {
         context.packageManager.packageInstaller
             .uninstall(packageName, statusSender(packageName.hashCode()))
         return "הסרה הופעלה עבור $packageName"
-    }
-
-
-    private fun temporarilyAllowInstall() {
-        val dpm =
-            context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-
-        if (!dpm.isDeviceOwnerApp(context.packageName)) return
-
-        val admin =
-            ComponentName(context, DpcDeviceAdminReceiver::class.java)
-
-        dpm.clearUserRestriction(
-            admin,
-            UserManager.DISALLOW_INSTALL_APPS
-        )
-
-        context.getSharedPreferences(
-            "dpc_installer",
-            Context.MODE_PRIVATE
-        ).edit()
-            .putBoolean("install_temporarily_allowed", true)
-            .apply()
-    }
-
-    /** Restores the install block after any install/uninstall result.
-     * DISALLOW_UNINSTALL_APPS is never applied in the first place (the
-     * customer can freely uninstall apps), so there's nothing to restore
-     * on that side. */
-    fun restoreInstallBlock() {
-        val dpm =
-            context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-
-        if (!dpm.isDeviceOwnerApp(context.packageName)) return
-
-        val admin =
-            ComponentName(context, DpcDeviceAdminReceiver::class.java)
-
-        dpm.addUserRestriction(
-            admin,
-            UserManager.DISALLOW_INSTALL_APPS
-        )
-
-        context.getSharedPreferences(
-            "dpc_installer",
-            Context.MODE_PRIVATE
-        ).edit()
-            .putBoolean("install_temporarily_allowed", false)
-            .apply()
     }
 
     private fun downloadToFile(url: URL, target: File) {
@@ -145,14 +114,23 @@ class AppInstaller(private val context: Context) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun statusSender(requestCode: Int, commandId: String? = null): IntentSender {
+    private fun statusSender(
+        requestCode: Int,
+        commandId: String? = null,
+        managedInstallWindow: Boolean = false,
+    ): IntentSender {
         val intent = Intent(context, InstallResultReceiver::class.java).apply {
             commandId?.let { putExtra("commandId", it) }
+            putExtra(EXTRA_MANAGED_INSTALL_WINDOW, managedInstallWindow)
         }
         var flags = PendingIntent.FLAG_UPDATE_CURRENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             flags = flags or PendingIntent.FLAG_MUTABLE
         }
         return PendingIntent.getBroadcast(context, requestCode, intent, flags).intentSender
+    }
+
+    companion object {
+        const val EXTRA_MANAGED_INSTALL_WINDOW = "managedInstallWindow"
     }
 }
