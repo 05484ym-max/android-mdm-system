@@ -54,6 +54,43 @@ function installReliabilityBridge(db, push) {
     return command;
   }
 
+  function protectPushCredential(device) {
+    if (!device || typeof device !== 'object') return device;
+    if (!Object.prototype.hasOwnProperty.call(device, 'pushToken')) return device;
+    const token = device.pushToken;
+    delete device.pushToken;
+    // Internal server code can still read device.pushToken, but object spread,
+    // JSON.stringify and publicDevice() cannot serialize this credential.
+    Object.defineProperty(device, 'pushToken', {
+      value: token,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    return device;
+  }
+
+  // Protect every common DB operation that returns a device object. This
+  // closes response paths that call publicDevice(updated) after a mutation,
+  // not only the main device-list endpoint.
+  [
+    'getDevice',
+    'createDevice',
+    'setSubscription',
+    'setSubscriptionUnblock',
+    'setFullOpenMode',
+    'setPolicy',
+    'setPushToken',
+    'setStatus',
+    'setCustomerInfo',
+    'setAllowCustomerDnsToggle',
+    'setDnsDesiredState',
+  ].forEach(name => {
+    if (typeof db[name] !== 'function') return;
+    const original = db[name].bind(db);
+    db[name] = async (...args) => protectPushCredential(await original(...args));
+  });
+
   // Lease instead of permanently consuming before the HTTP response reaches
   // the device. If sync/HTTP dies, the same command becomes eligible again;
   // the DPC's durable CommandJournal makes that redelivery idempotent.
@@ -154,7 +191,7 @@ function installReliabilityBridge(db, push) {
       );
       await client.query('COMMIT');
       pendingEnrollments.delete(deviceId);
-      return db.getDevice(deviceId);
+      return protectPushCredential(await db.getDevice(deviceId));
     } catch (error) {
       await client.query('ROLLBACK');
       pendingEnrollments.delete(deviceId);
