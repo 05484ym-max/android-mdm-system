@@ -19,19 +19,40 @@ class WhatsAppGuardEngine(
     fun handleEvent(event: AccessibilityEvent?, policy: WhatsAppGuardPolicy): Boolean {
         if (event == null || !policy.enabled) return false
 
-        // Status/Channel blocking stays completely separate from profile-photo masking.
-        // A click is classified from strong local evidence first. If the clicked card has
-        // no explicit label, the visible Status/Channels section headers are used as
-        // geometric anchors. Ambiguous clicks fail open rather than blocking the wrong item.
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             val signals = clickSignals(event)
 
-            // The bottom navigation Updates tab sits geometrically below the Channels
-            // heading. Never feed that navigation click into section geometry: otherwise
-            // a channels-only policy mistakes the Updates tab itself for a channel card
-            // and immediately ejects the user after entering Updates.
+            // The bottom navigation Updates tab must always stay reachable for a partial
+            // policy. It can appear after the Channels section in traversal order, so
+            // exclude it before any section classifier runs.
             if (signals.any { (text, id) -> WhatsAppGuardTerms.isUpdates(text, id) }) return false
 
+            // Primary classifier: use the Accessibility tree order between the actual
+            // Status and Channels section headings. This is independent of screen Y,
+            // row height, font scaling and the distance between the first channel and
+            // the status area. Once a click is structurally inside a known section,
+            // that answer is authoritative even when the opposite section is blocked.
+            when (classifyByTreeSection(event)) {
+                ClickKind.STATUS -> {
+                    return if (policy.blockStatuses) {
+                        ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
+                    } else {
+                        false
+                    }
+                }
+                ClickKind.CHANNEL -> {
+                    return if (policy.blockChannels) {
+                        ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
+                    } else {
+                        false
+                    }
+                }
+                ClickKind.UNKNOWN -> Unit
+            }
+
+            // Secondary classifier: use only the clicked card's local accessibility
+            // context. This handles WhatsApp layouts where one of the section headings
+            // is not exposed to Accessibility at all.
             val statusTarget = policy.blockStatuses && signals.any { (text, id) ->
                 !WhatsAppGuardTerms.isUpdates(text, id) &&
                     (WhatsAppGuardTerms.isStatus(text, id) || WhatsAppGuardTerms.isStatusContext(text))
@@ -44,15 +65,19 @@ class WhatsAppGuardEngine(
             when {
                 statusTarget && !channelTarget -> return ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
                 channelTarget && !statusTarget -> return ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
-                else -> when (classifyBySectionGeometry(event)) {
-                    ClickKind.STATUS -> if (policy.blockStatuses) {
-                        return ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
-                    }
-                    ClickKind.CHANNEL -> if (policy.blockChannels) {
-                        return ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
-                    }
-                    ClickKind.UNKNOWN -> Unit
+            }
+
+            // Last-resort fallback for unusual WhatsApp builds whose accessibility tree
+            // does not expose stable sibling order. Geometry is deliberately last so a
+            // channel adjacent to the Status block cannot be misclassified merely by Y.
+            when (classifyBySectionGeometry(event)) {
+                ClickKind.STATUS -> if (policy.blockStatuses) {
+                    return ejectBack(WhatsAppBlockedActivity.KIND_STATUS)
                 }
+                ClickKind.CHANNEL -> if (policy.blockChannels) {
+                    return ejectBack(WhatsAppBlockedActivity.KIND_CHANNEL)
+                }
+                ClickKind.UNKNOWN -> Unit
             }
         }
         return false
@@ -70,18 +95,79 @@ class WhatsAppGuardEngine(
             val screen = WhatsAppScreenClassifier.classify(root)
             val target = WhatsAppMaskCalibrationStore.targetFor(screen)
             if (target != null) {
-                // Manual calibration is authoritative. We deliberately do not fall back
-                // to momentary ImageView/row detection: if a screen has not been calibrated,
-                // draw nothing rather than placing inaccurate grey boxes over WhatsApp.
                 WhatsAppMaskCalibrationStore.get(service, target)?.let { calibration ->
                     overlays.addMask(calibration.toScreenRect(displayBounds()))
                 }
             }
         }
 
-        // Status/Channels intentionally have no overlay fallback. They are handled only
-        // by target-specific click ejection above and by Updates navigation in the service.
         overlays.endFrame()
+    }
+
+    private fun classifyByTreeSection(event: AccessibilityEvent): ClickKind {
+        val root = service.rootInActiveWindow ?: return ClickKind.UNKNOWN
+        if (root.packageName?.toString() != WHATSAPP_PACKAGE) return ClickKind.UNKNOWN
+        val source = event.source ?: return ClickKind.UNKNOWN
+
+        val nodes = WhatsAppScreenClassifier.flatten(root)
+        if (nodes.isEmpty()) return ClickKind.UNKNOWN
+
+        val channelIndex = sectionAnchorIndex(nodes, ClickKind.CHANNEL)
+        val statusIndex = sectionAnchorIndex(nodes, ClickKind.STATUS, beforeIndex = channelIndex)
+        if (channelIndex == null && statusIndex == null) return ClickKind.UNKNOWN
+
+        val sourceIndex = sourceTreeIndex(nodes, source) ?: return ClickKind.UNKNOWN
+
+        // In WhatsApp Updates the sections are exposed in document/tree order:
+        // Status heading + status rows, then Channels heading + channel rows. We classify
+        // by that structural boundary instead of pixel coordinates or the channel name.
+        if (channelIndex != null && sourceIndex > channelIndex) return ClickKind.CHANNEL
+        if (statusIndex != null && sourceIndex > statusIndex &&
+            (channelIndex == null || sourceIndex < channelIndex)
+        ) {
+            return ClickKind.STATUS
+        }
+        return ClickKind.UNKNOWN
+    }
+
+    private fun sectionAnchorIndex(
+        nodes: List<AccessibilityNodeInfo>,
+        kind: ClickKind,
+        beforeIndex: Int? = null,
+    ): Int? {
+        var firstAny: Int? = null
+        for ((index, node) in nodes.withIndex()) {
+            if (beforeIndex != null && index >= beforeIndex) break
+            val text = WhatsAppScreenClassifier.nodeText(node)
+            val id = node.viewIdResourceName
+            if (WhatsAppGuardTerms.isUpdates(text, id)) continue
+            val matches = when (kind) {
+                ClickKind.STATUS -> WhatsAppGuardTerms.isStatus(text, id)
+                ClickKind.CHANNEL -> WhatsAppGuardTerms.isChannel(text, id)
+                ClickKind.UNKNOWN -> false
+            }
+            if (!matches) continue
+            if (firstAny == null) firstAny = index
+            // Section headings are normally non-clickable. Prefer them over cards whose
+            // content happens to contain the same word.
+            if (!node.isClickable) return index
+        }
+        return firstAny
+    }
+
+    private fun sourceTreeIndex(
+        nodes: List<AccessibilityNodeInfo>,
+        source: AccessibilityNodeInfo,
+    ): Int? {
+        var current: AccessibilityNodeInfo? = source
+        var depth = 0
+        while (current != null && depth < MAX_SOURCE_ANCESTORS) {
+            val index = nodes.indexOfFirst { it == current }
+            if (index >= 0) return index
+            current = current.parent
+            depth++
+        }
+        return null
     }
 
     private fun classifyBySectionGeometry(event: AccessibilityEvent): ClickKind {
@@ -98,13 +184,8 @@ class WhatsAppGuardEngine(
         val channelTop = sectionAnchorTop(nodes, ClickKind.CHANNEL)
         val margin = dp(6)
 
-        // The Channels heading is the strongest structural separator in the Updates tab.
-        // Anything clearly below it belongs to the channels section, even when the channel
-        // card itself only exposes the channel name and no literal "channel" text.
         if (channelTop != null && clickY > channelTop + margin) return ClickKind.CHANNEL
 
-        // A status is accepted only when we can place the click below the Status heading
-        // and, when Channels is visible, strictly above the Channels boundary.
         if (statusTop != null && clickY > statusTop + margin) {
             if (channelTop == null || clickY < channelTop - margin) return ClickKind.STATUS
         }
@@ -161,11 +242,6 @@ class WhatsAppGuardEngine(
         val source = event.source
         if (source != null) {
             addDescendants(source, 2)
-
-            // Newer WhatsApp builds often expose identifying text as a sibling
-            // of the exact node that receives the click. Inspect only the
-            // immediate card subtree so individual status/channel blocking can
-            // see that local context without scanning unrelated rows.
             val card = source.parent
             addDescendants(card, 2)
             add(card?.parent)
@@ -196,8 +272,6 @@ class WhatsAppGuardEngine(
         try {
             service.startActivity(intent)
         } catch (_: Exception) {
-            // Blocking already succeeded through GLOBAL_ACTION_BACK. Never suspend
-            // WhatsApp merely because the informational screen could not be shown.
         }
     }
 
@@ -217,5 +291,6 @@ class WhatsAppGuardEngine(
         private const val WHATSAPP_PACKAGE = "com.whatsapp"
         private const val EJECT_DEBOUNCE_MS = 650L
         private const val BLOCKED_SCREEN_DELAY_MS = 90L
+        private const val MAX_SOURCE_ANCESTORS = 12
     }
 }
