@@ -1,0 +1,76 @@
+name: Run Admin Enroll Phone Category Polish
+on:
+  push:
+    branches:
+      - fix/admin-enroll-phone-category-polish
+    paths:
+      - scripts/patch_admin_enroll_phone_category.py
+      - .github/workflows/run-admin-enroll-phone-category-polish.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mdm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d mdm_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/mdm_test
+      DATABASE_SSL: disable
+      ALLOW_INSECURE_ADMIN: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/admin-enroll-phone-category-polish
+          fetch-depth: 0
+      - name: Apply guarded patch
+        run: python3 scripts/patch_admin_enroll_phone_category.py
+      - name: Verify JavaScript
+        run: |
+          node --check backend/index.js
+          node --check backend/db.js
+          for f in admin-panel/*.js; do node --check "$f"; done
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Verify admin contracts
+        working-directory: backend
+        run: node test-admin-panel-functional-audit.js
+      - name: Verify database category helpers
+        working-directory: backend
+        run: |
+          node - <<'NODE'
+          process.env.DATABASE_SSL='disable';
+          const db=require('./db');
+          (async()=>{
+            await db.init();
+            const created=await db.createCustomAppCategory('custom_test_ui','בדיקה');
+            if(created.key!=='custom_test_ui') throw new Error('category create failed');
+            if(!(await db.customAppCategoryExists('custom_test_ui'))) throw new Error('category exists failed');
+            const list=await db.listCustomAppCategories();
+            if(!list.some(x=>x.key==='custom_test_ui'&&x.label==='בדיקה')) throw new Error('category list failed');
+            process.exit(0);
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - name: Verify Android
+        working-directory: dpc-app
+        run: gradle testDebugUnitTest --no-daemon
+      - name: Commit product changes only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/run-admin-enroll-phone-category-polish.yml scripts/patch_admin_enroll_phone_category.py
+          git add admin-panel backend dpc-app
+          git diff --cached --check
+          git commit -m "Polish enrollment and catalog controls"
+          git push origin HEAD:fix/admin-enroll-phone-category-polish
