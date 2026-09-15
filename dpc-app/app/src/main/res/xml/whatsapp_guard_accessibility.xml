@@ -6,4 +6,4 @@
     android:canRetrieveWindowContent="true"
     android:description="@string/whatsapp_guard_accessibility_description"
     android:notificationTimeout="50"
-    android:packageNames="com.whatsapp" />
+    android:packageNames="com.whatsapp,com.android.settings,com.samsung.accessibility" />

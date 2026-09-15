@@ -53,7 +53,9 @@ includes(index, "command === 'WIPE' || command === 'RELEASE_DEVICE_OWNER'", 'irr
 includes(index, 'bcrypt.compareSync(adminPassword, ADMIN_PASSWORD_HASH)', 'server password verification');
 
 excludes(customerSearch, 'WhatsApp יישאר נעול עד אז', 'stale WhatsApp fail-closed status');
-includes(customerSearch, 'WhatsApp נשאר זמין, אך הסינון אינו נאכף כרגע', 'WhatsApp fail-open status');
+includes(customerSearch, 'מצב חסימת WhatsApp במכשיר:', 'actual WhatsApp block status');
+includes(customerSearch, 'מצב נגישות:', 'separate accessibility status');
+includes(customerSearch, 'data-wa-channels-only', 'channels-only WhatsApp preset');
 
 excludes(healthUi, 'על גרסה ישנה', 'unimplemented version diagnostic');
 excludes(healthUi, 'בקרוב', 'placeholder health value');

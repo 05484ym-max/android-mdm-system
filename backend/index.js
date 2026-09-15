@@ -494,18 +494,18 @@ app.post('/api/devices/register', deviceRegistrationLimiter, wrap(async (req, re
 
   // The server assigns the ID (a short number, not a UUID) so the admin has
   // something they can read off the device and type into the panel.
-  const deviceId = await db.generateUniqueDeviceId();
-  const consumed = await db.consumeEnrollment(
-    sha256(enrollmentToken.trim().toUpperCase()),
-    deviceId,
-  );
-  if (!consumed) {
-    return res.status(401).json({ error: 'invalid or expired enrollment token' });
-  }
+  const tokenHash = sha256(enrollmentToken.trim().toUpperCase());
+const candidateDeviceId = await db.generateUniqueDeviceId();
+const enrolled = await db.registerDeviceIdempotent(tokenHash, candidateDeviceId);
+if (!enrolled) {
+  return res.status(401).json({ error: 'invalid, expired, or already-finalized enrollment token' });
+}
 
-  const deviceToken = crypto.randomBytes(32).toString('hex');
-  await db.createDevice(deviceId, sha256(deviceToken));
-  res.json({ status: 'enrolled', deviceId, deviceToken });
+res.json({
+  status: enrolled.replayed ? 'enrolled_replay' : 'enrolled',
+  deviceId: enrolled.deviceId,
+  deviceToken: enrolled.deviceToken,
+});
 }));
 
 app.post('/api/devices/:deviceId/recover', deviceRecoveryLimiter, wrap(async (req, res) => {
@@ -2114,12 +2114,25 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
 const browserClassifierRate = new Map();
 const BROWSER_CLASSIFIER_WINDOW_MS = 60 * 1000;
 const BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW = 30;
+const PUBLIC_RATE_MAP_MAX_ENTRIES = 4096;
+
+function prunePublicRateMap(map, now, windowMs) {
+  for (const [key, state] of map) {
+    if (!state || now - state.startedAt >= windowMs * 2) map.delete(key);
+  }
+  while (map.size >= PUBLIC_RATE_MAP_MAX_ENTRIES) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey === undefined) break;
+    map.delete(oldestKey);
+  }
+}
 
 function browserClassifierRateAllowed(ip) {
   const now = Date.now();
   const key = String(ip || 'unknown').slice(0, 100);
   const state = browserClassifierRate.get(key);
   if (!state || now - state.startedAt >= BROWSER_CLASSIFIER_WINDOW_MS) {
+    prunePublicRateMap(browserClassifierRate, now, BROWSER_CLASSIFIER_WINDOW_MS);
     browserClassifierRate.set(key, { startedAt: now, misses: 1 });
     return true;
   }
@@ -2277,6 +2290,7 @@ function imageProxyRateAllowed(ip) {
   const key = String(ip || 'unknown').slice(0, 100);
   const state = imageProxyRate.get(key);
   if (!state || now - state.startedAt >= IMAGE_PROXY_WINDOW_MS) {
+    prunePublicRateMap(imageProxyRate, now, IMAGE_PROXY_WINDOW_MS);
     imageProxyRate.set(key, { startedAt: now, count: 1 });
     return true;
   }

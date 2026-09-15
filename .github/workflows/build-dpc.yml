@@ -11,9 +11,6 @@ on:
 permissions:
   contents: write
 
-# Only the newest DPC build should publish generated APK metadata. This avoids
-# two runs racing to commit the same generated files when DPC commits land
-# close together.
 concurrency:
   group: build-dpc-main
   cancel-in-progress: true
@@ -27,23 +24,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
-        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: 8.9
 
-      # The QR code pins the signing identity by checksum, so it must never drift.
       - name: Decode signing keystore
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -90,18 +86,14 @@ jobs:
 
           python3 - "${{ github.run_number }}" <<'PYVER'
           import json, sys
-
           version_code = int(sys.argv[1])
-
           data = {
               "versionCode": version_code,
               "apkUrl": "https://android-mdm-system.onrender.com/downloads/mdm.apk"
           }
-
           with open("admin-panel/downloads/version.json", "w") as f:
               json.dump(data, f, indent=2)
               f.write("\n")
-
           print("Generated version.json:")
           print(json.dumps(data, indent=2))
           PYVER
@@ -136,15 +128,8 @@ jobs:
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # A non-DPC commit (for example an admin-panel UI change) may land
-          # while this APK is building. Rebase onto current main before
-          # publishing generated files instead of failing with "fetch first".
           git fetch origin main
 
-          # If DPC/workflow source itself changed since this run started, this
-          # APK is stale. Do not publish it over the newer source; the newer
-          # workflow run owns publication.
           if ! git diff --quiet "${GITHUB_SHA}..origin/main" -- dpc-app .github/workflows/build-dpc.yml; then
             echo "Newer DPC source exists on main; skipping stale APK publication."
             echo "published=false" >> "$GITHUB_OUTPUT"

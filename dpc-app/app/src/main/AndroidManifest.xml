@@ -8,9 +8,6 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.SET_WALLPAPER_HINTS" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
         android:name=".MdmApplication"
@@ -21,7 +18,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true">
 
-        <activity android:name=".MainActivity" android:exported="true" />
+        <activity android:name=".MainActivity" android:exported="false" />
 
         <activity android:name=".UniversalSetupActivity" android:exported="true">
             <intent-filter>
@@ -32,13 +29,8 @@
 
         <activity
             android:name=".WhatsAppMaskCalibrationLauncherActivity"
-            android:exported="true"
-            android:label="כיול WhatsApp">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false"
+            android:label="כיול WhatsApp" />
 
         <activity
             android:name=".WhatsAppMaskCalibrationActivity"

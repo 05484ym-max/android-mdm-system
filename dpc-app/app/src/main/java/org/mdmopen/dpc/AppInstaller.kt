@@ -2,9 +2,6 @@ package org.mdmopen.dpc
 
 import android.app.PendingIntent
 import android.content.Context
-import android.os.UserManager
-import android.content.ComponentName
-import android.app.admin.DevicePolicyManager
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
@@ -14,35 +11,35 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/**
- * Installs and removes apps through PackageInstaller. A Device Owner may do this
- * silently, which is what makes remote app management possible - and exactly why
- * the APK is downloaded to a file and its SHA-256 verified against what the admin
- * queued *before* it ever reaches PackageInstaller: silent install means no user
- * consent screen catches a swapped or corrupted APK the way a normal install would.
- */
 class AppInstaller(private val context: Context) {
 
-    fun installFromUrl(apkUrl: String, expectedSha256: String, commandId: String? = null): String {
+    fun installFromUrl(
+        apkUrl: String,
+        expectedSha256: String,
+        commandId: String? = null,
+        attemptId: String? = null,
+    ): String {
         val url = URL(apkUrl)
-        require(url.protocol == "https") {
-            "רק כתובות HTTPS מותרות להתקנת אפליקציה"
-        }
+        require(url.protocol == "https") { "רק כתובות HTTPS מותרות להתקנת אפליקציה" }
 
         val tempFile = File(context.cacheDir, "install-${commandId ?: System.currentTimeMillis()}.apk")
+        var sessionId = -1
+        var windowOpened = false
+
         try {
             downloadToFile(url, tempFile)
-
             val actualSha256 = sha256OfFile(tempFile)
             if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
                 throw IllegalStateException("אימות checksum של ה-APK נכשל")
             }
 
             val installer = context.packageManager.packageInstaller
-            val params = PackageInstaller.SessionParams(
-                PackageInstaller.SessionParams.MODE_FULL_INSTALL
-            )
-            val sessionId = installer.createSession(params)
+            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+
+            ManagedInstallWindow.open(context)
+            windowOpened = true
+
+            sessionId = installer.createSession(params)
             installer.openSession(sessionId).use { session ->
                 tempFile.inputStream().use { input ->
                     session.openWrite("dpc-install", 0, tempFile.length()).use { output ->
@@ -50,68 +47,50 @@ class AppInstaller(private val context: Context) {
                         session.fsync(output)
                     }
                 }
-                temporarilyAllowInstall()
-                session.commit(statusSender(sessionId, commandId))
+                session.commit(
+                    statusSender(
+                        requestCode(commandId, attemptId, sessionId),
+                        commandId,
+                        attemptId,
+                        managedInstallWindow = true,
+                    )
+                )
             }
+
+            windowOpened = false
             return "התקנה הופעלה מ-$apkUrl"
+        } catch (e: Exception) {
+            if (sessionId >= 0) {
+                try { context.packageManager.packageInstaller.abandonSession(sessionId) } catch (_: Exception) {}
+            }
+            if (windowOpened) {
+                try { ManagedInstallWindow.close(context) } catch (_: Exception) {}
+            }
+            throw e
         } finally {
             tempFile.delete()
         }
     }
 
-    fun uninstall(packageName: String): String {
-        context.packageManager.packageInstaller
-            .uninstall(packageName, statusSender(packageName.hashCode()))
+    fun uninstall(
+        packageName: String,
+        commandId: String? = null,
+        attemptId: String? = null,
+    ): String {
+        context.packageManager.packageInstaller.uninstall(
+            packageName,
+            statusSender(
+                requestCode(commandId, attemptId, packageName.hashCode()),
+                commandId,
+                attemptId,
+            ),
+        )
         return "הסרה הופעלה עבור $packageName"
     }
 
-
-    private fun temporarilyAllowInstall() {
-        val dpm =
-            context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-
-        if (!dpm.isDeviceOwnerApp(context.packageName)) return
-
-        val admin =
-            ComponentName(context, DpcDeviceAdminReceiver::class.java)
-
-        dpm.clearUserRestriction(
-            admin,
-            UserManager.DISALLOW_INSTALL_APPS
-        )
-
-        context.getSharedPreferences(
-            "dpc_installer",
-            Context.MODE_PRIVATE
-        ).edit()
-            .putBoolean("install_temporarily_allowed", true)
-            .apply()
-    }
-
-    /** Restores the install block after any install/uninstall result.
-     * DISALLOW_UNINSTALL_APPS is never applied in the first place (the
-     * customer can freely uninstall apps), so there's nothing to restore
-     * on that side. */
-    fun restoreInstallBlock() {
-        val dpm =
-            context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-
-        if (!dpm.isDeviceOwnerApp(context.packageName)) return
-
-        val admin =
-            ComponentName(context, DpcDeviceAdminReceiver::class.java)
-
-        dpm.addUserRestriction(
-            admin,
-            UserManager.DISALLOW_INSTALL_APPS
-        )
-
-        context.getSharedPreferences(
-            "dpc_installer",
-            Context.MODE_PRIVATE
-        ).edit()
-            .putBoolean("install_temporarily_allowed", false)
-            .apply()
+    private fun requestCode(commandId: String?, attemptId: String?, fallback: Int): Int {
+        if (commandId == null && attemptId == null) return fallback
+        return ("${commandId.orEmpty()}:${attemptId.orEmpty()}".hashCode() and Int.MAX_VALUE)
     }
 
     private fun downloadToFile(url: URL, target: File) {
@@ -124,8 +103,24 @@ class AppInstaller(private val context: Context) {
             if (connection.responseCode !in 200..299) {
                 throw IllegalStateException("הורדת ה-APK נכשלה: HTTP ${connection.responseCode}")
             }
+            val declaredLength = connection.contentLengthLong
+            if (declaredLength > MAX_APK_BYTES) {
+                throw IllegalStateException("קובץ ה-APK גדול מהמגבלה המותרת")
+            }
             connection.inputStream.use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_APK_BYTES) {
+                            throw IllegalStateException("קובץ ה-APK גדול מהמגבלה המותרת")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                }
             }
         } finally {
             connection.disconnect()
@@ -145,14 +140,28 @@ class AppInstaller(private val context: Context) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun statusSender(requestCode: Int, commandId: String? = null): IntentSender {
+    private fun statusSender(
+        requestCode: Int,
+        commandId: String? = null,
+        attemptId: String? = null,
+        managedInstallWindow: Boolean = false,
+    ): IntentSender {
         val intent = Intent(context, InstallResultReceiver::class.java).apply {
-            commandId?.let { putExtra("commandId", it) }
+            commandId?.let { putExtra(EXTRA_COMMAND_ID, it) }
+            attemptId?.let { putExtra(EXTRA_COMMAND_ATTEMPT_ID, it) }
+            putExtra(EXTRA_MANAGED_INSTALL_WINDOW, managedInstallWindow)
         }
         var flags = PendingIntent.FLAG_UPDATE_CURRENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             flags = flags or PendingIntent.FLAG_MUTABLE
         }
         return PendingIntent.getBroadcast(context, requestCode, intent, flags).intentSender
+    }
+
+    companion object {
+        private const val MAX_APK_BYTES = 160L * 1024L * 1024L
+        const val EXTRA_COMMAND_ID = "commandId"
+        const val EXTRA_COMMAND_ATTEMPT_ID = "commandAttemptId"
+        const val EXTRA_MANAGED_INSTALL_WINDOW = "managedInstallWindow"
     }
 }

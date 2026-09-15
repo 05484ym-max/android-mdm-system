@@ -31,11 +31,6 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
 
-        // Never trust an "admin_mode" Intent extra - any external caller
-        // (Launcher, adb, another app) can set that regardless of exported.
-        // The only proof accepted here is AdminAccess, which is granted
-        // in-process by CustomerActivity's own PIN check right before this
-        // activity starts, and cannot be forged from outside this process.
         val adminMode = AdminAccess.consume()
 
         if (Config.deviceToken(this) != null && !adminMode) {
@@ -83,7 +78,7 @@ class MainActivity : Activity() {
         })
 
         root.addView(sectionLabel("כתובת השרת"))
-        serverInput = textField(Config.serverUrl(this), "http://192.168.1.10:3000")
+        serverInput = textField(Config.serverUrl(this), "https://android-mdm-system.onrender.com")
         serverInput.inputType = InputType.TYPE_TEXT_VARIATION_URI
         root.addView(serverInput)
 
@@ -123,7 +118,7 @@ class MainActivity : Activity() {
 
         root.addView(quietButton("יציאה מקיוסק (מקומי)") { exitKioskLocally() })
         root.addView(quietButton("שחרור מכשיר מניהול") { releaseDeviceLocally() })
-root.addView(sectionLabel("יומן"))
+        root.addView(sectionLabel("יומן"))
         logView = TextView(this).apply {
             textSize = 11f
             setTextColor(Color.parseColor(DIM))
@@ -191,8 +186,6 @@ root.addView(sectionLabel("יומן"))
         }
         enrollStatusView.setTextColor(Color.parseColor(if (enrolled) OK else BAD))
 
-        // After enrollment, lock the server address so the device token
-        // cannot accidentally be sent to a different server.
         serverInput.isEnabled = !enrolled
         if (enrolled) {
             serverInput.setText(Config.serverUrl(this))
@@ -251,9 +244,6 @@ root.addView(sectionLabel("יומן"))
             return
         }
 
-        // A PIN already exists - changing it requires proving the current
-        // one first, the same way exitKioskLocally()/releaseDeviceLocally()
-        // already require it for their own actions.
         val currentPinInput = EditText(this).apply {
             hint = "קוד מנהל נוכחי"
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
@@ -293,12 +283,9 @@ root.addView(sectionLabel("יומן"))
         Thread {
             try {
                 postLog(PolicySync.run(this@MainActivity))
-                // Manual "sync now" also checks for a newer signed DPC build.
-                // AutoUpdater performs its own version/signature validation and
-                // returns immediately while the update check runs in background.
                 AutoUpdater.check(applicationContext)
                 SyncScheduler.schedule(this@MainActivity)
-                postLog("סנכרון אוטומטי מתוזמן כל 15 דקות")
+                postLog("סנכרון אוטומטי מתוזמן כל ${Config.syncIntervalMinutes(this@MainActivity)} דקות")
                 postLog("--- הושלם ---")
             } catch (e: Exception) {
                 postLog("שגיאה: ${e.javaClass.simpleName}: ${e.message}")
@@ -395,7 +382,6 @@ root.addView(sectionLabel("יומן"))
             }
             .show()
     }
-
 
     private fun postLog(message: String) = mainHandler.post { log(message) }
 

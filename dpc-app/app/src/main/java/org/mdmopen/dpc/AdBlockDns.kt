@@ -11,8 +11,10 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
 import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
@@ -24,9 +26,6 @@ enum class DnsNetworkType { WIFI, CELLULAR, OTHER, NONE }
 
 data class AdBlockDnsStatus(
     val dnsMode: DnsMode,
-    // The host actually configured on the device right now (read live from
-    // DevicePolicyManager) - never confuse with Config.dnsDesiredProviderHost,
-    // which is only what the server last asked for and may not be applied yet.
     val dnsActualProviderHost: String?,
     val dnsFilteringRequested: Boolean,
     val dnsFilteringActual: Boolean,
@@ -46,17 +45,7 @@ data class AdBlockDnsStatus(
  * Owns everything Private-DNS related: applying the server's desired filtering
  * state, and a fully local fail-safe watchdog that rolls PROVIDER_HOSTNAME
  * back to OPPORTUNISTIC if the configured resolver stops working - without
- * depending on the backend being reachable (see runFailSafeCheckCycle). Kept
- * out of PolicyEnforcer.kt on purpose: unrelated concern (app hiding vs. a
- * DNS resolver's own network health).
- *
- * There is no OFF path anywhere here by design: AOSP's DevicePolicyManager
- * exposes no setter that can express PRIVATE_DNS_MODE_OFF (verified directly
- * against the platform source - DevicePolicyManagerService.setGlobalPrivateDns
- * only has cases for OPPORTUNISTIC and PROVIDER_HOSTNAME; anything else,
- * including OFF, hits its own IllegalArgumentException server-side). Every
- * "disable" path here always means OPPORTUNISTIC, and every user-facing
- * string says so plainly rather than implying a real off switch.
+ * depending on the backend being reachable.
  */
 object AdBlockDns {
 
@@ -75,17 +64,9 @@ object AdBlockDns {
     private const val KEY_LAST_DNS_OK = "last_dns_ok"
     private const val KEY_LAST_DOT_OK = "last_dot_ok"
     private const val KEY_ROLLBACK_TIMESTAMPS = "rollback_timestamps_csv"
-    // Every IP the current provider host resolved to while DNS was known to
-    // be healthy (CSV, set right after a successful enable()) - see
-    // checkDotProviderHealth().
     private const val KEY_PROVIDER_RESOLVED_IPS = "provider_resolved_ips_csv"
 
-    // Thresholds from the fail-safe design round - named constants only,
-    // never re-derived elsewhere.
     private const val CONSECUTIVE_FAILURES_TO_ROLLBACK = 4
-    // A strict-DNS outage makes the whole phone look offline even when Wi-Fi
-    // itself is healthy. On an active check, confirm the failure quickly
-    // before waiting for the long periodic streak.
     private const val RAPID_CONFIRM_ATTEMPTS = 3
     private const val RAPID_CONFIRM_DELAY_MS = 3_000L
     private const val CONSECUTIVE_SUCCESSES_TO_RECOVER = 3
@@ -100,11 +81,36 @@ object AdBlockDns {
     private const val SET_MODE_TIMEOUT_MS = 20_000L
     private const val DOT_PORT = 853
 
-    // Every mutating DPM call runs here, never on the caller's thread -
-    // guarantees "set operations only on a background/worker thread"
-    // regardless of what thread PolicySync/CommandExecutor/the customer's
-    // own toggle call in from.
-    private val executor = Executors.newSingleThreadExecutor()
+    @Volatile
+    private var executor: ExecutorService = newMutationExecutor()
+
+    private fun newMutationExecutor(): ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "mdm-dns-dpm").apply { isDaemon = true }
+        }
+
+    /**
+     * Runs one DPM mutation with a hard timeout. A timed-out Binder/OEM call may
+     * ignore interruption; replacing the single-thread executor prevents that
+     * stuck call from poisoning every future DNS operation for the lifetime of
+     * the process.
+     */
+    @Synchronized
+    private fun runDpmMutation(call: Callable<Int>): Int {
+        val activeExecutor = executor
+        val future = activeExecutor.submit(call)
+        return try {
+            future.get(SET_MODE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: TimeoutException) {
+            future.cancel(true)
+            activeExecutor.shutdownNow()
+            if (executor === activeExecutor) executor = newMutationExecutor()
+            throw e
+        } catch (e: Exception) {
+            future.cancel(true)
+            throw e
+        }
+    }
 
     private fun dpm(context: Context) =
         context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -126,10 +132,6 @@ object AdBlockDns {
             ?.let { runCatching { DnsFailSafeState.valueOf(it) }.getOrNull() }
             ?: DnsFailSafeState.NORMAL
 
-    // ---------- reading current real state (cheap Settings reads - main-thread safe) ----------
-
-    /** Always the platform's own live state - never trusts our cached
-     * "requested" value for what mode is actually active. */
     fun currentMode(context: Context): DnsMode = try {
         when (dpm(context).getGlobalPrivateDnsMode(admin(context))) {
             DevicePolicyManager.PRIVATE_DNS_MODE_OFF -> DnsMode.OFF
@@ -147,7 +149,6 @@ object AdBlockDns {
         null
     }
 
-    /** Full snapshot for the sync health payload and the customer's own DNS card. */
     fun currentStatus(context: Context): AdBlockDnsStatus {
         val p = prefs(context)
         val mode = currentMode(context)
@@ -185,20 +186,14 @@ object AdBlockDns {
         DnsNetworkType.NONE
     }
 
-    // ---------- mutating operations - always dispatched to the worker executor ----------
-
-    /** Turns strict filtering on. Blocking (the real DPM call performs its own
-     * live connectivity check to providerHost) - callers must already be off
-     * the UI thread; the actual DPM call is additionally forced onto the
-     * dedicated executor regardless. */
     fun enable(context: Context, providerHost: String): String {
         val previousMode = currentMode(context)
         val previousHost = currentActualProviderHost(context)
 
         val result = try {
-            executor.submit(Callable {
+            runDpmMutation(Callable {
                 dpm(context).setGlobalPrivateDnsModeSpecifiedHost(admin(context), providerHost)
-            }).get(SET_MODE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            })
         } catch (e: Exception) {
             recordFailureReason(context, "enable_failed: ${e.message}")
             return "הפעלת סינון DNS נכשלה: ${e.message}"
@@ -209,10 +204,6 @@ object AdBlockDns {
         return when (result) {
             DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR -> {
                 resetFailSafe(context)
-                // DNS is known-healthy right now (the DPM call above just proved
-                // it live) - the only safe moment to resolve+cache the
-                // provider's IP for checkDotProviderHealth() to reuse later,
-                // once we're no longer sure system DNS resolution even works.
                 resolveAndCacheProviderIp(context, providerHost)
                 Config.setDnsPolicy(
                     context, providerHost, true,
@@ -231,8 +222,6 @@ object AdBlockDns {
         }
     }
 
-    /** Safe rollback. Android has no API path to PRIVATE_DNS_MODE_OFF at all
-     * (see class doc) - this always lands on OPPORTUNISTIC and says so. */
     fun disable(context: Context): String {
         val previousMode = currentMode(context)
         val previousHost = currentActualProviderHost(context)
@@ -246,9 +235,9 @@ object AdBlockDns {
         }
 
         val result = try {
-            executor.submit(Callable {
+            runDpmMutation(Callable {
                 dpm(context).setGlobalPrivateDnsModeOpportunistic(admin(context))
-            }).get(SET_MODE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            })
         } catch (e: Exception) {
             recordFailureReason(context, "disable_failed: ${e.message}")
             return "כיבוי סינון DNS נכשל: ${e.message}"
@@ -268,18 +257,6 @@ object AdBlockDns {
         }
     }
 
-    /**
-     * Reconciles actual mode with the server's last-synced desired state.
-     * Called every sync, same role as PolicyEnforcer.apply() for app hiding.
-     *
-     * requested=false always wins immediately, even mid-incident - there is
-     * nothing left for the fail-safe to protect once filtering is meant to be
-     * off. requested=true is deliberately NOT re-applied while a rollback/
-     * recovery episode is in progress: doing so would force strict mode back
-     * on before runFailSafeCheckCycle()'s own cooldown/recovery checks ever
-     * ran, which would silently defeat the entire fail-safe mechanism on the
-     * very next sync after every rollback.
-     */
     fun reconcile(context: Context): String? {
         val requested = Config.dnsFilteringRequested(context)
         val actual = currentMode(context) == DnsMode.PROVIDER_HOSTNAME
@@ -318,15 +295,6 @@ object AdBlockDns {
             .apply()
     }
 
-    // ---------- local fail-safe watchdog ----------
-
-    /**
-     * One check cycle. Entirely local - never calls the backend, so it keeps
-     * working even if DNS itself is the thing that's broken (requirement:
-     * fail-safe must not depend on backend/FCM reachability). Safe to call
-     * from a background thread on every sync; returns a short status string
-     * for the sync summary, or null if there was nothing to check this cycle.
-     */
     fun runFailSafeCheckCycle(context: Context): String? {
         val p = prefs(context)
         val mode = currentMode(context)
@@ -339,8 +307,6 @@ object AdBlockDns {
             return runRecoveryCheck(context, p, now)
         }
 
-        // NORMAL/DEGRADED only matter while actually in strict mode - nothing
-        // to protect otherwise.
         if (mode != DnsMode.PROVIDER_HOSTNAME) return null
         return runStrictHealthCheck(context, p, now)
     }
@@ -357,8 +323,6 @@ object AdBlockDns {
             .apply()
 
         if (!ipOk) {
-            // No signal either way - a network blip is not evidence for or
-            // against the DoT provider. The streak is left exactly as-is.
             return "בדיקת DNS: אין קליטה בסיסית, המחזור לא נספר"
         }
 
@@ -370,10 +334,6 @@ object AdBlockDns {
             return "בדיקת DNS: תקין"
         }
 
-        // IP connectivity is healthy but strict DNS failed. Confirm rapidly so
-        // a transient Wi-Fi association blip gets a few seconds to settle, while
-        // a genuinely broken DoT provider cannot strand the device for the
-        // 15-minute periodic cadence. Any successful retry cancels rollback.
         var rapidRecovered = false
         for (attempt in 1 until RAPID_CONFIRM_ATTEMPTS) {
             try {
@@ -383,10 +343,6 @@ object AdBlockDns {
                 return "בדיקת DNS: הופסקה"
             }
 
-            // Re-check basic connectivity on every rapid attempt. Network
-            // hand-offs can change underneath us between the first probe and
-            // this retry; if IP connectivity vanished, that is a network-loss
-            // event, not evidence against the DNS provider.
             val retryIpOk = checkIpConnectivity()
             if (!retryIpOk) {
                 p.edit()
@@ -414,9 +370,6 @@ object AdBlockDns {
             return "בדיקת DNS: התאושש לאחר אימות מהיר"
         }
 
-        // One last IP probe immediately before treating the failure as DNS.
-        // This closes the race where connectivity disappears just after the
-        // final rapid retry but before rollback.
         if (!checkIpConnectivity()) {
             return "בדיקת DNS: אין עוד קישוריות בסיסית, rollback בוטל"
         }
@@ -429,10 +382,6 @@ object AdBlockDns {
             .putString(KEY_FAILURE_REASON, reason)
             .apply()
 
-        // A rapidly-confirmed DNS failure with healthy IP is enough to
-        // rollback now: staying in Strict buys no security if the configured
-        // resolver is unreachable, it only removes connectivity. The persisted
-        // streak is still kept for diagnostics and the slower watchdog path.
         if (failures < CONSECUTIVE_FAILURES_TO_ROLLBACK) {
             val disableResult = disable(context)
             recordRollback(context, p, System.currentTimeMillis(), reason)
@@ -440,9 +389,6 @@ object AdBlockDns {
         }
 
         if (!withinRollbackRateLimit(p, now)) {
-            // Rate limiting must never leave the device in broken Strict mode. The
-            // limit only suppresses repeated recovery/re-apply attempts; rollback
-            // itself is still mandatory.
             val disableResult = disable(context)
             p.edit()
                 .putString(KEY_FAIL_SAFE_STATE, DnsFailSafeState.ROLLED_BACK.name)
@@ -464,9 +410,6 @@ object AdBlockDns {
 
         val ipOk = checkIpConnectivity()
         var dotOk = ipOk && checkDotProviderHealth(context, host)
-        // During recovery we are already in Opportunistic mode, so a live DNS
-        // lookup is safe and non-circular. Refresh stale provider IP cache once
-        // before declaring the provider unreachable.
         if (ipOk && !dotOk && currentMode(context) != DnsMode.PROVIDER_HOSTNAME) {
             resolveAndCacheProviderIp(context, host)
             dotOk = checkDotProviderHealth(context, host)
@@ -481,8 +424,6 @@ object AdBlockDns {
             .apply()
 
         if (!ipOk || !dotOk) {
-            // Failed recovery attempt - restart the cooldown from now.
-            // Anti-flapping: never retry immediately after a failed check.
             p.edit()
                 .putInt(KEY_RECOVERY_STREAK, 0)
                 .putString(KEY_FAIL_SAFE_STATE, DnsFailSafeState.ROLLED_BACK.name)
@@ -541,60 +482,14 @@ object AdBlockDns {
         return recent < MAX_ROLLBACKS_PER_WINDOW
     }
 
-    // ---------- the three checks ----------
-    // None of these rely on getActiveNetwork()/NetworkCapabilities alone or a
-    // bare ping - each is a real socket-level probe with its own bound timeout.
-
-    /**
-     * Bare TCP connect to IP literals - deliberately NOT a TLS handshake.
-     * An earlier version of this check used TLS here to make a captive
-     * portal read as "suspect" rather than "connected", but that imports
-     * certificate/SNI-with-an-IP-literal/protocol-negotiation failure modes
-     * that are about the TLS stack, not about whether the device has basic
-     * IP connectivity - exactly the kind of unrelated failure that must not
-     * be able to freeze/miscount a fail-safe cycle. Captive-portal handling
-     * is already covered at the decision-matrix level (a portal that
-     * intercepts everything reads the same as a real outage, an accepted
-     * trade-off from the design round) - this check only needs to answer
-     * "is there a network path to the internet at all".
-     */
     private fun checkIpConnectivity(): Boolean = IP_CHECK_HOSTS.any { canTcpConnect(it, 443) }
 
-    /** Resolves a domain we actually control via the *current* system
-     * resolver - end-to-end proof that DNS genuinely works right now under
-     * whatever mode is active, not just that the provider is reachable. Uses
-     * the backend's own host (already ours, no new infrastructure needed). */
     private fun checkDnsResolution(domain: String): Boolean = try {
         InetAddress.getAllByName(domain).isNotEmpty()
     } catch (_: Exception) {
         false
     }
 
-    /**
-     * Direct TLS handshake to the provider on 853 - the same technique
-     * DevicePolicyManager itself uses internally before ever accepting a
-     * setGlobalPrivateDnsModeSpecifiedHost() call. Connects to a *cached* IP
-     * when one is available (see resolveAndCacheProviderIp(), populated right
-     * after a successful enable() while DNS is known to be healthy) rather
-     * than resolving the hostname directly: while still in
-     * PROVIDER_HOSTNAME/Strict mode with no automatic fallback, resolving the
-     * provider's own hostname through the system resolver would resolve
-     * through the very resolver being tested - if it's down, hostname
-     * resolution fails first and this check would always read "unhealthy"
-     * regardless of whether the provider's TLS service on 853 is actually
-     * fine. An IP literal never triggers a DNS lookup, so connecting via the
-     * cached IP breaks that circularity.
-     *
-     * The real provider hostname is still always sent as SNI (see
-     * canTlsHandshake's separate connect/sni parameters) - connecting by IP
-     * must not mean testing an anonymous endpoint. Multiple IPs are cached
-     * and tried in turn (not just the first one InetAddress.getByName()
-     * happens to return) so one stale/unreachable address among several
-     * anycast/load-balanced IPs doesn't read as "provider down" on its own -
-     * only falls back to a live hostname resolution when there is no cache
-     * at all yet (the one-time, unavoidable circularity risk on the very
-     * first check for a newly configured provider).
-     */
     private fun checkDotProviderHealth(context: Context, host: String?): Boolean {
         if (host.isNullOrBlank()) return false
         val cachedIps = prefs(context).getString(KEY_PROVIDER_RESOLVED_IPS, null)
@@ -605,10 +500,6 @@ object AdBlockDns {
         return canTlsHandshake(connectHost = host, sniHost = host, DOT_PORT)
     }
 
-    /** Called right after a successful enable() - resolution here happens
-     * exactly when DNS is known to be working, not during a later health
-     * check where that's precisely what's in question. Caches every address
-     * the hostname resolves to, not just the first one. */
     private fun resolveAndCacheProviderIp(context: Context, host: String) {
         try {
             val ips = InetAddress.getAllByName(host).mapNotNull { it.hostAddress }.distinct()
@@ -616,9 +507,6 @@ object AdBlockDns {
                 prefs(context).edit().putString(KEY_PROVIDER_RESOLVED_IPS, ips.joinToString(",")).apply()
             }
         } catch (_: Exception) {
-            // Leave any previously cached IPs in place rather than clearing
-            // them - a transient resolution failure right after a successful
-            // enable() is not evidence the old cached IPs are wrong.
         }
     }
 
@@ -629,16 +517,6 @@ object AdBlockDns {
         false
     }
 
-    /** connectHost is what we open the TCP/TLS connection to (may be a cached
-     * IP literal, to avoid a DNS lookup); sniHost is always the real provider
-     * hostname, sent as SNI regardless of how connectHost was reached - a
-     * connection made by IP must still identify itself as the real host, or
-     * SNI-based virtual hosting on the provider's end could select the wrong
-     * certificate/service entirely. Neither this nor canTcpConnect performs
-     * certificate-to-hostname verification (only the default trust-chain
-     * check from startHandshake()) - deliberately: verifying hostname against
-     * a certificate here would risk failing this check on a real, healthy
-     * provider for reasons unrelated to whether it's actually up. */
     private fun canTlsHandshake(connectHost: String, sniHost: String, port: Int): Boolean {
         return try {
             val raw = Socket()
@@ -646,10 +524,6 @@ object AdBlockDns {
             raw.soTimeout = SOCKET_TIMEOUT_MS
             val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
             (factory.createSocket(raw, sniHost, port, true) as SSLSocket).use { ssl ->
-                // createSocket(..., sniHost, ...) preserves the real provider
-                // hostname for SNI even when raw is connected to a cached IP.
-                // Explicit endpoint identification also verifies that the
-                // trusted certificate is actually valid for that hostname.
                 ssl.sslParameters = ssl.sslParameters.apply {
                     endpointIdentificationAlgorithm = "HTTPS"
                 }

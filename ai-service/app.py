@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import io
@@ -51,6 +52,7 @@ _face_detector: Any = None
 _model_load_lock = threading.Lock()
 _face_detector_lock = threading.Lock()
 _inference_gate = threading.BoundedSemaphore(_configured_concurrency())
+_request_gate = asyncio.Semaphore(_configured_concurrency())
 _model_state_lock = threading.Lock()
 _model_state = {"status": "cold", "errorType": None}
 
@@ -153,12 +155,6 @@ def _get_model_state() -> dict:
 
 
 def _warm_models() -> None:
-    """Load and verify every production model without blocking the web server.
-
-    The service binds its port first, but moderation stays fail-closed while
-    warming. This avoids making the first browser image pay multi-model cold
-    start time or exceed the Node caller's timeout.
-    """
     _set_model_state("warming")
     try:
         _load_face_detector()
@@ -319,11 +315,6 @@ def _gender_faces(image: Image.Image) -> list[dict]:
 
 
 def _run_models(body: bytes, image: Image.Image) -> dict:
-    """Run every model and return raw, bounded, normalized signal scores.
-
-    This deliberately makes no ALLOW/BLOCK judgment. It is the Node caller's
-    responsibility to turn these signals into a policy decision.
-    """
     del body
     with _inference_gate:
         nsfw = _nsfw_score(image)
@@ -345,6 +336,25 @@ def _run_models(body: bytes, image: Image.Image) -> dict:
                 if label in SIGLIP_PROMPTS
             },
         }
+
+
+async def _read_bounded_body(request: Request) -> bytes:
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > MAX_BYTES:
+                raise HTTPException(status_code=413, detail="invalid_image_size")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid_content_length")
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_BYTES:
+            raise HTTPException(status_code=413, detail="invalid_image_size")
+    if not body:
+        raise HTTPException(status_code=413, detail="invalid_image_size")
+    return bytes(body)
 
 
 @app.get("/health")
@@ -392,28 +402,27 @@ async def moderate(
             "source": "local_apache_vision_stack",
         }
 
-    body = await request.body()
-    if not body or len(body) > MAX_BYTES:
-        raise HTTPException(status_code=413, detail="invalid_image_size")
+    async with _request_gate:
+        body = await _read_bounded_body(request)
 
-    try:
-        image = _decode_image(body)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid_image") from exc
+        try:
+            image = _decode_image(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid_image") from exc
 
-    try:
-        signals = await run_in_threadpool(_run_models, body, image)
-    except Exception as exc:
+        try:
+            signals = await run_in_threadpool(_run_models, body, image)
+        except Exception as exc:
+            return {
+                "status": "error",
+                "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
+                "source": "local_apache_vision_stack",
+                "errorType": type(exc).__name__,
+            }
+
         return {
-            "status": "error",
+            "status": "ok",
             "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
             "source": "local_apache_vision_stack",
-            "errorType": type(exc).__name__,
+            "signals": signals,
         }
-
-    return {
-        "status": "ok",
-        "signalSchemaVersion": SIGNAL_SCHEMA_VERSION,
-        "source": "local_apache_vision_stack",
-        "signals": signals,
-    }

@@ -19,13 +19,9 @@ data class EnforcementResult(
     val failed: List<String>,
     val systemAppsSkipped: Int,
     val kioskEnabled: Boolean,
-    // DRY-RUN only, see apply() - never suspended/hidden by this build.
     val wouldHideNoLauncher: List<NoLauncherCandidate> = emptyList(),
 )
 
-/** One package apply() found with no launcher entry that isn't essential,
- * a system app, the active keyboard, or already approved - reported so a
- * future policy change closing this gap can be sized before it's enforced. */
 data class NoLauncherCandidate(val packageName: String, val label: String?)
 
 class PolicyEnforcer(private val context: Context) {
@@ -36,39 +32,22 @@ class PolicyEnforcer(private val context: Context) {
 
     fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(context.packageName)
 
-    /**
-     * Suspends every non-system app that is not on the allowlist, blocks further installs,
-     * and turns the kiosk home screen on or off to match the policy.
-     */
     fun apply(policy: Policy): EnforcementResult {
         check(isDeviceOwner()) { "Not device owner - cannot enforce policy" }
         if (policy.fullOpen) return applyFullOpen()
 
         dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
-        // A background sync landing mid-install (PlayStoreGate's window still open)
-        // must not re-clamp this out from under a Play Store install in progress.
-        if (PlayStoreGate.isWindowClosed(context)) {
+        // Do not re-clamp installation while either an approved Play Store window
+        // or a silent managed PackageInstaller session is still in progress.
+        if (PlayStoreGate.isWindowClosed(context) && !ManagedInstallWindow.isOpen(context)) {
             dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         }
-        // The customer can remove any app they can see - our own app is a
-        // Device Owner app, which Android already refuses to let anyone
-        // uninstall through the normal flow regardless of this restriction.
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
-        // Without these, the customer can sidestep every restriction above:
-        // enabling USB debugging lets adb start any exported activity
-        // directly (bypassing in-app PIN checks entirely), and Safe Mode
-        // disables every non-system app - including this one - taking the
-        // whole kiosk/allowlist enforcement down with it.
-        // A normal policy apply intentionally closes an admin-opened debugging
-        // maintenance window. Accessibility setup itself is not a normal apply,
-        // so it may preserve that window long enough to collect a Samsung crash log.
         DebugMaintenanceState.setActive(context, false)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
 
-        // Explicitly permit this DPC's accessibility service. Some Samsung/One UI
-        // builds otherwise surface the service as blocked by the device administrator.
         allowManagedAccessibilityService()
 
         val allowed = policy.allowedApps.toSet() + playStoreTemporaryAllowance()
@@ -79,12 +58,6 @@ class PolicyEnforcer(private val context: Context) {
         val noLauncherCandidates = mutableListOf<NoLauncherCandidate>()
         var systemSkipped = 0
 
-        // Migration cleanup: older DPC builds blocked apps with
-        // setPackagesSuspended(). Newer builds use setApplicationHidden(), but
-        // Android keeps the old suspended bit until it is explicitly cleared.
-        // That leaves recovered apps visible but greyed out. Clear legacy
-        // suspension for every currently-approved and essential package before
-        // applying today's hidden-state policy.
         val legacyRecovered = mutableSetOf<String>()
         val recoveryPackages = (allowed + essential)
             .filter { it != context.packageName }
@@ -98,18 +71,9 @@ class PolicyEnforcer(private val context: Context) {
                 ).toSet()
                 legacyRecovered += recoveryPackages.filter { it !in failedRecovery }
             } catch (_: Exception) {
-                // Hidden-state enforcement below still runs. A package that
-                // cannot be addressed here will simply remain reported by the
-                // normal enforcement result instead of crashing the sync.
             }
         }
 
-        // Recover approved AND essential packages directly from DevicePolicyManager
-        // before relying on PackageManager enumeration. On Samsung, a package hidden
-        // by Device Owner can disappear from getInstalledApplications(). That broke
-        // Accessibility Settings when com.samsung.accessibility had been hidden:
-        // Settings crashed with ActivityNotFoundException before the normal package
-        // loop ever had a chance to recover it.
         val directlyUnhidden = mutableSetOf<String>()
         for (pkg in (allowed + essential)) {
             if (pkg == context.packageName) continue
@@ -120,8 +84,6 @@ class PolicyEnforcer(private val context: Context) {
                     }
                 }
             } catch (_: Exception) {
-                // A package that is not installed (or not addressable on this
-                // OEM build) is simply left for the normal install flow.
             }
         }
 
@@ -129,31 +91,16 @@ class PolicyEnforcer(private val context: Context) {
             if (app.packageName == context.packageName) continue
             if (app.packageName in essential) {
                 systemSkipped++
-                // Explicitly unsuspend rather than just skipping, so an app that got
-                // wrongly suspended before it was added to this list recovers on the
-                // next sync instead of staying suspended forever.
                 toUnsuspend += app.packageName
                 continue
             }
-            // An approved installed app must always be explicitly unhidden first.
-            // Hidden packages can stop resolving a launcher intent on some OEM builds
-            // (notably Samsung), so checking getLaunchIntentForPackage() before the
-            // allowlist can strand an already-installed approved app in the hidden state.
             if (app.packageName in allowed) {
                 toUnsuspend += app.packageName
                 continue
             }
 
-            // Apps with no launcher entry are never visible to the customer either way -
-            // suspending them only risks breaking a background system service for no gain.
             if (context.packageManager.getLaunchIntentForPackage(app.packageName) == null) {
                 systemSkipped++
-                // DRY-RUN only: report what a future policy closing this gap would catch,
-                // without acting on it now. Never added to toSuspend/toUnsuspend below -
-                // enforcement behavior in this build is unchanged. Preinstalled system
-                // components (FLAG_SYSTEM) and the customer's active keyboard are never
-                // reported, since hiding either carries a much bigger blast radius than
-                // this dry-run is meant to size up.
                 val isSystemApp = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
                 if (!isSystemApp && app.packageName != currentImePackage) {
                     noLauncherCandidates += NoLauncherCandidate(app.packageName, labelFor(app))
@@ -164,8 +111,6 @@ class PolicyEnforcer(private val context: Context) {
             toSuspend += app.packageName
         }
 
-        // Hidden (not merely suspended) so unapproved apps disappear from the
-        // launcher entirely instead of showing as a greyed-out icon.
         val failed = mutableListOf<String>()
 
         fun applyHiddenStateIfNeeded(pkg: String, shouldHide: Boolean) {
@@ -188,11 +133,6 @@ class PolicyEnforcer(private val context: Context) {
         val stillTracked = (Config.policyHiddenApps(context) + successfullyHidden) - toUnsuspend.toSet()
         Config.setPolicyHiddenApps(context, stillTracked)
 
-        // Samsung/One UI can keep nested Settings pages effectively blocked if
-        // lock-task/kiosk policy is restored while the Accessibility setup flow
-        // is still in progress. Keep kiosk fully released for the whole persisted
-        // setup window; the service-connect success path or the bounded failsafe
-        // restores it later.
         val setupActive = Config.accessibilitySetupWindowActive(context)
         val effectiveKiosk = policy.kioskEnabled && !setupActive
         if (effectiveKiosk) enableKiosk(allowed) else disableKiosk()
@@ -207,16 +147,6 @@ class PolicyEnforcer(private val context: Context) {
         )
     }
 
-    /**
-     * Restores the package-only accessibility allowlist. While a Samsung setup
-     * window is active (see beginAccessibilitySetupWindow()), a normal call
-     * (force = false) - such as the one background PolicySync/apply() makes -
-     * is a no-op: Samsung's Accessibility Settings page must stay unlocked
-     * until setup actually finishes or the failsafe times out. Callers that
-     * ARE the finish/failsafe path (finishAccessibilitySetupWindow(),
-     * WhatsAppGuardService.onServiceConnected(), AccessibilityRelockWorker)
-     * pass force = true to restore unconditionally.
-     */
     fun allowManagedAccessibilityService(force: Boolean = false) {
         check(isDeviceOwner()) { "Not device owner" }
         val setupActive = Config.accessibilitySetupWindowActive(context)
@@ -224,26 +154,15 @@ class PolicyEnforcer(private val context: Context) {
         try {
             dpm.setPermittedAccessibilityServices(admin, listOf(context.packageName))
         } catch (_: Exception) {
-            // Keep policy sync alive on OEMs that reject this API unexpectedly.
         }
     }
 
     fun beginAccessibilitySetupWindow() {
         check(isDeviceOwner()) { "Not device owner" }
-        // Marked BEFORE the allowlist is cleared below so a concurrent
-        // PolicySync (apply() -> allowManagedAccessibilityService()) that
-        // observes this flag never re-locks the Settings page mid-setup. This
-        // is persisted (not Activity-memory-only) so it survives process death.
         Config.setAccessibilitySetupWindowActive(context, true)
 
-        // Belt-and-suspenders protection: Device Owner is already not removable
-        // through normal Settings, and this explicit block stays in force while
-        // kiosk is temporarily released.
         try { dpm.setUninstallBlocked(admin, context.packageName, true) } catch (_: Exception) {}
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET) } catch (_: Exception) {}
-        // OPEN_DEBUGGING_TEMP is an explicit admin-only diagnostic mode. Do not
-        // tear adb down when Accessibility setup begins; otherwise the Settings
-        // crash we are trying to capture disconnects logcat before it is useful.
         if (!DebugMaintenanceState.isActive(context)) {
             try { dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES) } catch (_: Exception) {}
         } else {
@@ -251,26 +170,11 @@ class PolicyEnforcer(private val context: Context) {
         }
         try { dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT) } catch (_: Exception) {}
 
-        // Release kiosk at the policy layer before launching Samsung Settings.
-        // CustomerActivity also calls stopLockTask(); this makes the invariant
-        // survive any concurrent PolicySync or another direct kiosk call.
         disableKiosk()
-
-        // Some Samsung/One UI builds refuse to construct the Accessibility page
-        // while a non-null permitted-services policy is active. Lift ONLY this
-        // one policy momentarily; the setup-window flag above keeps it lifted
-        // until WhatsAppGuardService connects, finishAccessibilitySetupWindow()
-        // runs, or the relock failsafe times out.
         try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
-        // Activity handler normally finishes setup once the guard service
-        // connects; WorkManager is a separate process/lifecycle failsafe so a
-        // crash cannot leave this relaxed indefinitely.
         SyncScheduler.enqueueAccessibilityRelock(context)
     }
 
-    /** Earliest, most authoritative "setup succeeded" signal: the accessibility
-     *  service actually connected. Ends the setup window immediately so a
-     *  background sync is free to re-lock the allowlist again. */
     fun markAccessibilitySetupComplete() {
         check(isDeviceOwner()) { "Not device owner" }
         Config.setAccessibilitySetupWindowActive(context, false)
@@ -280,11 +184,6 @@ class PolicyEnforcer(private val context: Context) {
 
     fun finishAccessibilitySetupWindow() {
         check(isDeviceOwner()) { "Not device owner" }
-        // CustomerActivity.onResume() can fire for transient Samsung Settings
-        // task/lifecycle transitions before the customer has toggled the service.
-        // Do not treat Activity resume as setup completion. Only a real enabled
-        // accessibility service, markAccessibilitySetupComplete(), or the 5-minute
-        // failsafe is allowed to close this persisted setup window.
         if (Config.accessibilitySetupWindowActive(context) &&
             !WhatsAppGuardProtection.accessibilityEnabled(context)
         ) {
@@ -299,8 +198,6 @@ class PolicyEnforcer(private val context: Context) {
     }
 
     private fun applyFullOpen(): EnforcementResult {
-        // Reversible full-open mode: make the phone behave normally while keeping
-        // Device Owner and anti-escape protections so the admin can re-apply policy remotely.
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
@@ -328,7 +225,6 @@ class PolicyEnforcer(private val context: Context) {
                 recovered += installed.filter { it !in failedSuspended }
                 failed += failedSuspended
             } catch (_: Exception) {
-                // Continue with hidden-state recovery package-by-package.
             }
         }
         for (pkg in installed) {
@@ -351,9 +247,6 @@ class PolicyEnforcer(private val context: Context) {
         )
     }
 
-    /** The package backing the customer's currently active keyboard, or null if it
-     * can't be read - resolved the same way Telephony.Sms.getDefaultSmsPackage
-     * resolves the SMS role above, just for input method instead. */
     private fun currentInputMethodPackage(): String? = try {
         Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
             ?.substringBefore('/')
@@ -362,36 +255,21 @@ class PolicyEnforcer(private val context: Context) {
         null
     }
 
-    /** Best-effort display label for the DRY-RUN report only - never used for
-     * any enforcement decision, so a lookup failure just means no label. */
     private fun labelFor(app: ApplicationInfo): String? = try {
         context.packageManager.getApplicationLabel(app).toString()
     } catch (_: Exception) {
         null
     }
 
-    /**
-     * Packages that must stay usable no matter what's approved: basic phone functions
-     * (settings, dialer, SMS, home) plus everyday device tools (contacts, clock,
-     * calendar, camera, gallery, files, mail) - resolved dynamically by system role
-     * rather than hardcoded OEM package names, since those vary by manufacturer.
-     * Suspending anything else the customer can see (including preinstalled
-     * Google/social apps) is intentional.
-     */
     fun essentialPackages(): Set<String> {
         val essential = mutableSetOf(context.packageName, "com.android.settings")
         val pm = context.packageManager
 
-        // Samsung Settings delegates its Accessibility page to this package. A hidden
-        // copy makes Settings crash with ActivityNotFoundException. MATCH_UNINSTALLED
-        // is intentional: Device Owner-hidden packages can disappear from ordinary
-        // PackageManager enumeration, which is exactly the failure mode recovered here.
         val samsungAccessibilityPackage = "com.samsung.accessibility"
         try {
             pm.getApplicationInfo(samsungAccessibilityPackage, PackageManager.MATCH_UNINSTALLED_PACKAGES)
             essential += samsungAccessibilityPackage
         } catch (_: PackageManager.NameNotFoundException) {
-            // Non-Samsung devices (or Samsung builds without this split package) ignore it.
         }
 
         fun addResolved(intent: Intent) {
@@ -401,11 +279,6 @@ class PolicyEnforcer(private val context: Context) {
 
         addResolved(Intent(Intent.ACTION_DIAL))
 
-        // Every launcher installed, not just whichever currently resolves as
-        // default - during kiosk mode that default is this app itself, which
-        // would otherwise leave the phone's real home screen unprotected and
-        // suspended like any other unapproved app, with no way back once
-        // kiosk mode turns off again.
         val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         pm.queryIntentActivities(homeIntent, PackageManager.MATCH_ALL)
             .forEach { essential += it.activityInfo.packageName }
@@ -420,10 +293,6 @@ class PolicyEnforcer(private val context: Context) {
 
         Telephony.Sms.getDefaultSmsPackage(context)?.let { essential += it }
 
-        // Samsung's own apps often don't answer the standard role intents above
-        // (no default set, or the category isn't declared at all), so the dynamic
-        // resolution above silently misses them. Back it up with known package
-        // names across Samsung/AOSP - harmless if a name isn't installed.
         val knownUtilityApps = listOf(
             "com.sec.android.app.launcher",
             "com.sec.android.app.myfiles",
@@ -452,27 +321,15 @@ class PolicyEnforcer(private val context: Context) {
         return essential
     }
 
-    /**
-     * Play Store is hidden by default like any unapproved app. PlayStoreGate
-     * briefly opens a window (recorded here as an expiry timestamp) while an
-     * admin-approved install is in progress - this is what keeps it unhidden
-     * for that window on every policy pass in the meantime.
-     */
     private fun playStoreTemporaryAllowance(): Set<String> =
         if (!PlayStoreGate.isWindowClosed(context)) setOf("com.android.vending") else emptySet()
 
     private fun enableKiosk(allowed: Set<String>) {
-        // Never let any caller re-enable lock-task while Samsung Accessibility
-        // setup is active. This protects against background sync and future
-        // call sites, not just the current CustomerActivity flow.
         if (Config.accessibilitySetupWindowActive(context)) {
             disableKiosk()
             return
         }
 
-        // Without the essentials, a customer with nothing approved yet (or
-        // whose approved apps aren't installed) gets locked into a kiosk
-        // screen with literally nothing reachable - not even Settings.
         dpm.setLockTaskPackages(admin, (allowed + essentialPackages() + context.packageName).toTypedArray())
         dpm.setLockTaskFeatures(
             admin,
@@ -492,17 +349,8 @@ class PolicyEnforcer(private val context: Context) {
         )
     }
 
-    /**
-     * Temporarily opens Developer options / ADB by clearing only the debugging
-     * restriction. No other policy is changed and Device Owner remains active.
-     *
-     * This is intentionally temporary: apply() always re-adds
-     * DISALLOW_DEBUGGING_FEATURES on the next normal policy sync.
-     */
     fun openDebuggingUntilNextSync() {
         check(isDeviceOwner()) { "Not device owner" }
-        // Persist before clearing the restriction so an Accessibility setup
-        // transition cannot immediately tear adb down again.
         DebugMaintenanceState.setActive(context, true)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
     }
@@ -520,7 +368,6 @@ class PolicyEnforcer(private val context: Context) {
         }
     }
 
-    /** Also used as a local escape hatch from the admin screen. */
     fun disableKiosk() {
         dpm.clearPackagePersistentPreferredActivities(admin, context.packageName)
         dpm.setLockTaskPackages(admin, emptyArray())
@@ -529,21 +376,24 @@ class PolicyEnforcer(private val context: Context) {
 
     fun releaseDeviceOwner() {
         check(isDeviceOwner()) { "Not device owner" }
-        // A permanent release must never strand apps hidden by an older policy.
-        // Reuse the same hardened recovery used by reversible FULL_OPEN first.
         val recovery = applyFullOpen()
         check(recovery.failed.isEmpty()) {
             "Cannot safely release device owner; failed to recover: ${recovery.failed.joinToString(",")}" 
         }
 
-        // Remove managed private-DNS state while Device Owner privileges still exist.
-        // If this fails, abort instead of relinquishing ownership and leaving filtering behind.
-        try {
+        // Device Owner is the last chance to change managed Private DNS. Do not
+        // relinquish ownership unless the live platform state proves filtering is gone.
+        val dnsMessage = try {
             AdBlockDns.disable(context)
         } catch (e: Exception) {
             throw IllegalStateException("Cannot safely disable managed DNS before release", e)
         }
+        val dnsModeAfterDisable = AdBlockDns.currentMode(context)
+        check(dnsModeAfterDisable == DnsMode.OPPORTUNISTIC || dnsModeAfterDisable == DnsMode.OFF) {
+            "Cannot safely release device owner; managed DNS did not clear ($dnsModeAfterDisable): $dnsMessage"
+        }
 
+        ManagedInstallWindow.forceClose(context)
         disableKiosk()
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
@@ -554,10 +404,8 @@ class PolicyEnforcer(private val context: Context) {
         try {
             dpm.setUninstallBlocked(admin, context.packageName, false)
         } catch (_: Exception) {
-            // Device Owner itself is protected by Android until ownership is cleared anyway.
         }
 
-        // Irreversible: after this point remote management cannot be restored without enrollment.
         dpm.clearDeviceOwnerApp(context.packageName)
     }
 }
