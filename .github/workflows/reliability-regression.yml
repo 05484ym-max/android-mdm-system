@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'backend/**'
+      - 'ai-service/**'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/**'
       - '.github/workflows/reliability-regression.yml'
   push:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'ai-service/**'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/**'
       - '.github/workflows/reliability-regression.yml'
 
@@ -32,14 +34,20 @@ jobs:
       - name: Run backend syntax gate
         working-directory: backend
         run: npm test
-      - name: Verify command reliability contracts
+      - name: Verify production reliability contracts
         run: |
           set -euo pipefail
           grep -q 'lease_expires_at' backend/reliabilityBridge.js
           grep -q 'FOR UPDATE SKIP LOCKED' backend/reliabilityBridge.js
-          grep -q 'completed_at = COALESCE' backend/reliabilityBridge.js
-          grep -q 'BEGIN' backend/reliabilityBridge.js
-          grep -q 'ROLLBACK' backend/reliabilityBridge.js
+          grep -q 'AND completed_at IS NULL' backend/reliabilityBridge.js
+          grep -q 'function ensureReady()' backend/reliabilityBridge.js
+          grep -q 'registerDeviceIdempotent' backend/reliabilityBridge.js
+          grep -q 'registerDeviceIdempotent' backend/index.js
+          grep -q 'enrollment_attempts' backend/reliabilityBridge.js
+          grep -q 'IMAGE_CACHE_RETENTION_DAYS' backend/reliabilityBridge.js
+          grep -q 'PUBLIC_RATE_MAP_MAX_ENTRIES = 4096' backend/index.js
+          grep -q 'prunePublicRateMap(browserClassifierRate' backend/index.js
+          grep -q 'prunePublicRateMap(imageProxyRate' backend/index.js
           grep -q 'hasPushToken' backend/reliabilityBridge.js
           grep -q 'token_unregistered' backend/push.js
           grep -q 'installUploadMemoryGuard' backend/universalEntry.js
@@ -48,11 +56,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify durable command and install coordination contracts
+      - name: Verify durable command and scheduler contracts
         run: |
           set -euo pipefail
           SRC=dpc-app/app/src/main/java/org/mdmopen/dpc
           grep -q 'object CommandJournal' "$SRC/CommandJournal.kt"
+          grep -q 'startedAt' "$SRC/CommandJournal.kt"
+          grep -q 'Settings.Global.BOOT_COUNT' "$SRC/PolicySync.kt"
+          grep -q 'PACKAGE_ATTEMPT_TIMEOUT_MS' "$SRC/PolicySync.kt"
+          grep -q 'EXTRA_COMMAND_ATTEMPT_ID' "$SRC/AppInstaller.kt"
+          grep -q 'Ignoring stale package callback' "$SRC/InstallResultReceiver.kt"
+          grep -q 'requestCode(commandId, attemptId' "$SRC/AppInstaller.kt"
           grep -q 'ManagedInstallWindow.open' "$SRC/PlayStoreGate.kt"
           if grep -qE 'clearUserRestriction\(|addUserRestriction\(' "$SRC/PlayStoreGate.kt"; then
             echo 'PlayStoreGate must not mutate install restrictions directly' >&2
@@ -63,4 +77,24 @@ jobs:
           grep -q 'MAX_APK_BYTES' "$SRC/AppInstaller.kt"
           grep -q 'MAX_UPDATE_APK_BYTES' "$SRC/AutoUpdater.kt"
           grep -q 'runGeneration' "$SRC/UpdateCheckJobService.kt"
+          grep -q 'runGeneration' "$SRC/DnsFailSafeJobService.kt"
+          grep -q 'runningTask?.cancel(true)' "$SRC/DnsFailSafeJobService.kt"
           grep -q 'future.cancel(true)' "$SRC/AdBlockDns.kt"
+          grep -q 'registerPushToken' "$SRC/PushRegistration.kt"
+          if grep -q 'pushToken == Config.pushToken' "$SRC/PushRegistration.kt"; then
+            echo 'PushRegistration must reassert the current token after server-side pruning' >&2
+            exit 1
+          fi
+
+  ai-memory-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify bounded AI request admission
+        run: |
+          set -euo pipefail
+          python3 -m py_compile ai-service/app.py ai-service/policy.py
+          grep -q '_request_gate = asyncio.Semaphore' ai-service/app.py
+          grep -q 'async def _read_bounded_body' ai-service/app.py
+          grep -q 'async for chunk in request.stream()' ai-service/app.py
+          grep -q 'async with _request_gate' ai-service/app.py
