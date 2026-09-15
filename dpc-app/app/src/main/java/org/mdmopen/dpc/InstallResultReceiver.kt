@@ -14,6 +14,7 @@ class InstallResultReceiver : BroadcastReceiver() {
         val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         val commandId = intent.getStringExtra(AppInstaller.EXTRA_COMMAND_ID)
+        val attemptId = intent.getStringExtra(AppInstaller.EXTRA_COMMAND_ATTEMPT_ID)
 
         if (intent.getBooleanExtra(AppInstaller.EXTRA_MANAGED_INSTALL_WINDOW, false)) {
             try {
@@ -22,6 +23,16 @@ class InstallResultReceiver : BroadcastReceiver() {
                 Log.e(PolicySync.TAG, "Failed to restore install restriction", e)
             }
         }
+
+        if (commandId == null) return
+
+        val current = CommandJournal.get(context, commandId)
+        val expectedAttempt = attemptId?.let { "package:$it" }
+        if (expectedAttempt == null || current?.metadata != expectedAttempt) {
+            Log.w(PolicySync.TAG, "Ignoring stale package callback for command $commandId")
+            return
+        }
+        if (current.terminal) return
 
         val terminal = when (status) {
             PackageInstaller.STATUS_SUCCESS -> {
@@ -38,11 +49,6 @@ class InstallResultReceiver : BroadcastReceiver() {
             }
         }
 
-        if (commandId == null) return
-
-        // Persist first. If the process/network dies while reporting the result,
-        // a leased redelivery will see this terminal journal entry and re-report
-        // without executing the install/uninstall a second time.
         CommandJournal.markTerminal(context, commandId, terminal.first, terminal.second)
 
         val pending = goAsync()
