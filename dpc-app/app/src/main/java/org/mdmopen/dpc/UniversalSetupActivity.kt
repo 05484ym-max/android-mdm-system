@@ -24,7 +24,9 @@ import android.widget.Toast
 class UniversalSetupActivity : Activity() {
 
     private lateinit var content: LinearLayout
-    private var targetRefreshInFlight = false
+    @Volatile private var targetRefreshInFlight = false
+    @Volatile private var destroyed = false
+    @Volatile private var refreshThread: Thread? = null
 
     private val BG = "#F7F2E8"
     private val CARD = "#FFFDFC"
@@ -43,6 +45,7 @@ class UniversalSetupActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        destroyed = false
 
         if (Config.deviceToken(this) == null) {
             openAndFinish(MainActivity::class.java)
@@ -62,6 +65,14 @@ class UniversalSetupActivity : Activity() {
         if (::content.isInitialized && Config.deviceToken(this) != null) {
             RequestedProtectionStore.read(this)?.let { render(it) }
         }
+    }
+
+    override fun onDestroy() {
+        destroyed = true
+        refreshThread?.interrupt()
+        refreshThread = null
+        targetRefreshInFlight = false
+        super.onDestroy()
     }
 
     private fun buildShell(): View {
@@ -107,26 +118,40 @@ class UniversalSetupActivity : Activity() {
 
     private fun refreshTargetAndRender() {
         RequestedProtectionStore.read(this)?.let { render(it) } ?: renderLoading()
-        if (targetRefreshInFlight) return
+        if (targetRefreshInFlight || destroyed) return
 
         val token = Config.deviceToken(this) ?: return
         val serverUrl = Config.serverUrl(this)
         val deviceId = Config.deviceId(this)
         targetRefreshInFlight = true
 
-        Thread {
+        val worker = Thread({
             try {
                 val target = ApiClient(serverUrl, token).fetchProtectionTarget(deviceId)
+                if (Thread.currentThread().isInterrupted || destroyed) return@Thread
                 RequestedProtectionStore.save(applicationContext, target)
-                runOnUiThread { render(target) }
-            } catch (_: Exception) {
                 runOnUiThread {
-                    if (RequestedProtectionStore.read(this) == null) renderUnavailable()
+                    if (!destroyed && !isFinishing && !isDestroyed) render(target)
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (_: Exception) {
+                if (!destroyed) {
+                    runOnUiThread {
+                        if (!destroyed && !isFinishing && !isDestroyed &&
+                            RequestedProtectionStore.read(applicationContext) == null
+                        ) {
+                            renderUnavailable()
+                        }
+                    }
                 }
             } finally {
                 targetRefreshInFlight = false
+                if (refreshThread === Thread.currentThread()) refreshThread = null
             }
-        }.start()
+        }, "universal-target-refresh")
+        refreshThread = worker
+        worker.start()
     }
 
     private fun renderLoading() {
@@ -146,6 +171,7 @@ class UniversalSetupActivity : Activity() {
     }
 
     private fun render(target: RequestedProtectionTarget) {
+        if (destroyed) return
         val profile = DeviceCapabilityDetector.detect(this)
         val adapter = DeviceAdapterResolver.resolve(profile)
         val plan = TargetedNonDoSetupPlanner.build(profile, adapter.adapterId, target.requestedProfile)
