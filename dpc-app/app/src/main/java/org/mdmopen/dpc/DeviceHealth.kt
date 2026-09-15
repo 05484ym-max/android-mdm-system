@@ -46,13 +46,23 @@ object DeviceHealth {
     /** Builds the JSON body reported on every sync. */
     fun collect(context: Context, isDeviceOwner: Boolean): JSONObject {
         val guard = WhatsAppGuardConfig.load(context)
+        val guardAccessibility = WhatsAppGuardProtection.accessibilityEnabled(context)
+        val guardState = WhatsAppGuardProtection.decide(
+            guard.enabled,
+            guardAccessibility,
+            WhatsAppGuardConfig.wasProtected(context),
+        )
         val json = JSONObject()
             .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
             .put("manufacturer", Build.MANUFACTURER)
             .put("androidVersion", Build.VERSION.RELEASE)
             .put("isDeviceOwner", isDeviceOwner)
             .put("whatsappGuardRequested", guard.enabled)
-            .put("whatsappGuardAccessibilityEnabled", WhatsAppGuardProtection.accessibilityEnabled(context))
+            .put("whatsappGuardBlockStatuses", guard.blockStatuses)
+            .put("whatsappGuardBlockChannels", guard.blockChannels)
+            .put("whatsappGuardHideProfilePhotos", guard.hideProfilePhotos)
+            .put("whatsappGuardAccessibilityEnabled", guardAccessibility)
+            .put("whatsappGuardProtectionState", guardState.name)
 
         // Capability reporting is observational only. It must never block the
         // existing Device Owner sync path if an OEM probe fails unexpectedly.

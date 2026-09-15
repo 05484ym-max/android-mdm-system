@@ -344,13 +344,10 @@ class CustomerActivity : Activity() {
 
         contentArea.addView(personalDetailsCard(rows))
 
-        val guardPolicy = WhatsAppGuardConfig.load(this)
-        if (guardPolicy.enabled) {
-            contentArea.addView(whatsAppFeaturedCard(), LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(14) })
-        }
+        contentArea.addView(whatsAppFeaturedCard(), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(14) })
 
         // Keep DNS functionality intact, below the approved hero content so the first screen
         // remains visually identical to the mockup while advanced controls remain available.
@@ -491,7 +488,10 @@ class CustomerActivity : Activity() {
     }
 
     private fun whatsAppFeaturedCard(): LinearLayout {
-        val enabled = WhatsAppGuardProtection.accessibilityEnabled(this)
+        val policy = WhatsAppGuardConfig.load(this)
+        val accessibilityEnabled = WhatsAppGuardProtection.accessibilityEnabled(this)
+        val blockLabel = whatsAppBlockLabel(policy)
+        val blockingEnabled = policy.enabled
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = featuredCardBackground()
@@ -505,7 +505,7 @@ class CustomerActivity : Activity() {
                     setImageResource(R.drawable.ic_row_chat)
                     scaleType = ImageView.ScaleType.CENTER_INSIDE
                     setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
-                    background = circle(if (enabled) OK else ACCENT_DARK)
+                    background = circle(if (blockingEnabled) OK else ACCENT_DARK)
                     val pad = dp(15)
                     setPadding(pad, pad, pad, pad)
                 }, LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(13) })
@@ -521,11 +521,7 @@ class CustomerActivity : Activity() {
                         gravity = Gravity.RIGHT
                     })
                     addView(TextView(this@CustomerActivity).apply {
-                        text = if (enabled) {
-                            "ההגנה פעילה. חסימת סטטוסים וערוצים מנוהלת מהפאנל בלבד."
-                        } else {
-                            "נדרשת הפעלה חד-פעמית של הנגישות על ידי מתקין עם קוד מנהל. WhatsApp נשאר זמין גם אם השירות אינו פעיל."
-                        }
+                        text = "מצב חסימת WhatsApp: $blockLabel"
                         textSize = 12.5f
                         typeface = mediumFont
                         setTextColor(Color.parseColor(MUTED))
@@ -537,15 +533,15 @@ class CustomerActivity : Activity() {
             })
 
             addView(TextView(this@CustomerActivity).apply {
-                text = if (enabled) "✓ נגישות פעילה ומוגנת" else "⚠ נגישות אינה פעילה"
+                text = blockLabel
                 textSize = 12f
                 typeface = heavyFont
-                setTextColor(Color.parseColor(if (enabled) OK else "#B52F24"))
+                setTextColor(Color.parseColor(if (blockingEnabled) OK else MUTED))
                 gravity = Gravity.RIGHT
                 setPadding(0, dp(12), 0, 0)
             })
 
-            if (!enabled) {
+            if (!accessibilityEnabled) {
                 addView(Button(this@CustomerActivity).apply {
                     text = "הגדרת מתקין — הפעל נגישות"
                     textSize = 14.5f
@@ -585,6 +581,18 @@ class CustomerActivity : Activity() {
                 gravity = Gravity.RIGHT
                 setPadding(0, dp(8), 0, 0)
             })
+        }
+    }
+
+    private fun whatsAppBlockLabel(policy: WhatsAppGuardPolicy): String {
+        val parts = mutableListOf<String>()
+        if (policy.hideProfilePhotos) parts += "תמונות פרופיל"
+        if (policy.blockStatuses) parts += "סטטוסים"
+        if (policy.blockChannels) parts += "ערוצים"
+        return when {
+            parts.isEmpty() -> "פתוח"
+            policy.blockChannels && !policy.blockStatuses && !policy.hideProfilePhotos -> "חסום: ערוצים בלבד"
+            else -> "חסום: ${parts.joinToString(", ")}"
         }
     }
 

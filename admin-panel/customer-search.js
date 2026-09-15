@@ -21,6 +21,27 @@
       : { text: 'מנוי לא פעיל', cls: 'status-expired' };
   }
 
+  function waModeLabel(wa) {
+    const parts = [];
+    if (wa && wa.hideProfilePhotos) parts.push('תמונות פרופיל');
+    if (wa && wa.blockStatuses) parts.push('סטטוסים');
+    if (wa && wa.blockChannels) parts.push('ערוצים');
+    if (!parts.length) return 'פתוח';
+    if (wa.blockChannels && !wa.blockStatuses && !wa.hideProfilePhotos) return 'חסום: ערוצים בלבד';
+    return 'חסום: ' + parts.join(', ');
+  }
+
+  function reportedWa(deviceStatus) {
+    const hasReported = ['whatsappGuardBlockStatuses','whatsappGuardBlockChannels','whatsappGuardHideProfilePhotos']
+      .every(k => typeof deviceStatus[k] === 'boolean');
+    if (!hasReported) return null;
+    return {
+      blockStatuses: deviceStatus.whatsappGuardBlockStatuses,
+      blockChannels: deviceStatus.whatsappGuardBlockChannels,
+      hideProfilePhotos: deviceStatus.whatsappGuardHideProfilePhotos,
+    };
+  }
+
   function ensurePanel() {
     let panel = document.getElementById('unifiedCustomerProfile');
     if (panel) return panel;
@@ -52,13 +73,11 @@
     const history = Array.isArray(d.commandHistory) ? d.commandHistory : [];
     const deviceStatus = d.status || {};
     const wa = p.whatsappGuard || { blockStatuses: false, blockChannels: false, hideProfilePhotos: false };
-    const waRequested = Boolean(wa.blockStatuses || wa.blockChannels || wa.hideProfilePhotos);
+    const waActual = reportedWa(deviceStatus);
+    const waRequestedLabel = waModeLabel(wa);
+    const waActualLabel = waActual ? waModeLabel(waActual) : 'טרם דווח';
     const waAccessibility = deviceStatus.whatsappGuardAccessibilityEnabled === true;
-    const waRuntime = !waRequested
-      ? { text: 'ההגנה כבויה', cls: 'wa-runtime-off' }
-      : waAccessibility
-        ? { text: '✓ פעיל ומוגן', cls: 'wa-runtime-ok' }
-        : { text: '⚠ שירות הנגישות אינו פעיל — WhatsApp נשאר זמין, אך הסינון אינו נאכף כרגע', cls: 'wa-runtime-warn' };
+    const waAccessibilityKnown = typeof deviceStatus.whatsappGuardAccessibilityEnabled === 'boolean';
     const lastCommands = history.slice(-5).reverse();
 
     panel.innerHTML = `
@@ -83,12 +102,14 @@
 
       <div class="unified-profile-section whatsapp-guard-admin">
         <h3>🟢 הגנת WhatsApp</h3>
-        <div class="wa-runtime ${esc(waRuntime.cls)}">${esc(waRuntime.text)}</div>
-        <div class="unified-command-summary">כל חסימה נשלטת בנפרד ומסתנכרנת למכשיר.</div>
+        <div class="wa-runtime ${waActualLabel === 'פתוח' ? 'wa-runtime-off' : 'wa-runtime-ok'}">מצב חסימת WhatsApp במכשיר: ${esc(waActualLabel)}</div>
+        <div class="wa-runtime ${waAccessibility ? 'wa-runtime-ok' : 'wa-runtime-warn'}">מצב נגישות: ${waAccessibilityKnown ? (waAccessibility ? 'פעילה' : 'כבויה') : 'טרם דווח'}</div>
+        <div class="unified-command-summary">הגדרה בפאנל: <strong>${esc(waRequestedLabel)}</strong>. כל חסימה נשלטת בנפרד ומסתנכרנת למכשיר.</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
           <button type="button" class="toggle-btn ${wa.blockStatuses ? 'wa-on' : ''}" data-wa-key="blockStatuses">סטטוסים: ${wa.blockStatuses ? 'חסום' : 'פתוח'}</button>
           <button type="button" class="toggle-btn ${wa.blockChannels ? 'wa-on' : ''}" data-wa-key="blockChannels">ערוצים: ${wa.blockChannels ? 'חסום' : 'פתוח'}</button>
           <button type="button" class="toggle-btn ${wa.hideProfilePhotos ? 'wa-on' : ''}" data-wa-key="hideProfilePhotos">תמונות פרופיל: ${wa.hideProfilePhotos ? 'מוסתר' : 'גלוי'}</button>
+          <button type="button" class="toggle-btn" data-wa-channels-only>ערוצים בלבד</button>
         </div>
       </div>
 
@@ -135,6 +156,25 @@
         panel.querySelectorAll('[data-wa-key]').forEach(x => x.disabled = false);
       }
     }));
+
+    panel.querySelector('[data-wa-channels-only]')?.addEventListener('click', async () => {
+      panel.querySelectorAll('[data-wa-key], [data-wa-channels-only]').forEach(x => x.disabled = true);
+      try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(d.deviceId)}/policy/whatsapp-guard`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ blockStatuses: false, blockChannels: true, hideProfilePhotos: false }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        const idx = devices.findIndex(x => x && x.deviceId === d.deviceId);
+        if (idx >= 0) devices[idx] = body;
+        render(d.deviceId);
+      } catch (err) {
+        alert('שמירת חסימת ערוצים בלבד נכשלה: ' + (err && err.message ? err.message : err));
+        panel.querySelectorAll('[data-wa-key], [data-wa-channels-only]').forEach(x => x.disabled = false);
+      }
+    });
 
     panel.querySelector('[data-unified-close]')?.addEventListener('click', () => {
       panel.style.display = 'none';
@@ -222,15 +262,15 @@
   function detailWaState(d) {
     const p = d && d.policy ? d.policy : {};
     const wa = p.whatsappGuard || { blockStatuses: false, blockChannels: false, hideProfilePhotos: false };
-    const requested = Boolean(wa.blockStatuses || wa.blockChannels || wa.hideProfilePhotos);
-    const accessibility = Boolean(d && d.status && d.status.whatsappGuardAccessibilityEnabled === true);
+    const status = d && d.status ? d.status : {};
+    const actual = reportedWa(status);
     return {
       wa,
-      runtime: !requested
-        ? { text: 'ההגנה כבויה', cls: 'wa-runtime-off' }
-        : accessibility
-          ? { text: '✓ פעיל ומוגן', cls: 'wa-runtime-ok' }
-          : { text: '⚠ שירות הנגישות אינו פעיל — WhatsApp נשאר זמין, אך הסינון אינו נאכף כרגע', cls: 'wa-runtime-warn' },
+      requestedLabel: waModeLabel(wa),
+      actualLabel: actual ? waModeLabel(actual) : 'טרם דווח',
+      accessibility: typeof status.whatsappGuardAccessibilityEnabled === 'boolean'
+        ? status.whatsappGuardAccessibilityEnabled
+        : null,
     };
   }
 
@@ -240,14 +280,15 @@
     const content = document.getElementById('detailContent');
     if (!d || !content || content.querySelector('[data-detail-wa-section]')) return;
 
-    const { wa, runtime } = detailWaState(d);
+    const { wa, requestedLabel, actualLabel, accessibility } = detailWaState(d);
     const section = document.createElement('div');
     section.className = 'detail-section whatsapp-guard-admin';
     section.setAttribute('data-detail-wa-section', 'true');
     section.innerHTML = `
       <h3>🟢 הגנת WhatsApp</h3>
-      <div class="wa-runtime ${runtime.cls}">${runtime.text}</div>
-      <div class="unified-command-summary">כל חסימה נשלטת בנפרד ומסתנכרנת למכשיר.</div>
+      <div class="wa-runtime ${actualLabel === 'פתוח' ? 'wa-runtime-off' : 'wa-runtime-ok'}">מצב חסימת WhatsApp במכשיר: ${actualLabel}</div>
+      <div class="wa-runtime ${accessibility === true ? 'wa-runtime-ok' : 'wa-runtime-warn'}">מצב נגישות: ${accessibility === null ? 'טרם דווח' : (accessibility ? 'פעילה' : 'כבויה')}</div>
+      <div class="unified-command-summary">הגדרה בפאנל: <strong>${requestedLabel}</strong>. כל חסימה נשלטת בנפרד ומסתנכרנת למכשיר.</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
         <button type="button" class="toggle-btn ${wa.blockStatuses ? 'wa-on' : ''}" data-detail-wa-key="blockStatuses">סטטוסים: ${wa.blockStatuses ? 'חסום' : 'פתוח'}</button>
         <button type="button" class="toggle-btn ${wa.blockChannels ? 'wa-on' : ''}" data-detail-wa-key="blockChannels">ערוצים: ${wa.blockChannels ? 'חסום' : 'פתוח'}</button>
