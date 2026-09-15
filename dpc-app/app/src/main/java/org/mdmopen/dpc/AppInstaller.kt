@@ -11,18 +11,16 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/**
- * Installs and removes apps through PackageInstaller. A Device Owner may do this
- * silently, so every remote APK is downloaded first and its SHA-256 is verified
- * before PackageInstaller receives it.
- */
 class AppInstaller(private val context: Context) {
 
-    fun installFromUrl(apkUrl: String, expectedSha256: String, commandId: String? = null): String {
+    fun installFromUrl(
+        apkUrl: String,
+        expectedSha256: String,
+        commandId: String? = null,
+        attemptId: String? = null,
+    ): String {
         val url = URL(apkUrl)
-        require(url.protocol == "https") {
-            "רק כתובות HTTPS מותרות להתקנת אפליקציה"
-        }
+        require(url.protocol == "https") { "רק כתובות HTTPS מותרות להתקנת אפליקציה" }
 
         val tempFile = File(context.cacheDir, "install-${commandId ?: System.currentTimeMillis()}.apk")
         var sessionId = -1
@@ -30,19 +28,14 @@ class AppInstaller(private val context: Context) {
 
         try {
             downloadToFile(url, tempFile)
-
             val actualSha256 = sha256OfFile(tempFile)
             if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
                 throw IllegalStateException("אימות checksum של ה-APK נכשל")
             }
 
             val installer = context.packageManager.packageInstaller
-            val params = PackageInstaller.SessionParams(
-                PackageInstaller.SessionParams.MODE_FULL_INSTALL
-            )
+            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
 
-            // DISALLOW_INSTALL_APPS is checked by createSession(), not only by
-            // commit(), so the managed window must be opened first.
             ManagedInstallWindow.open(context)
             windowOpened = true
 
@@ -54,19 +47,21 @@ class AppInstaller(private val context: Context) {
                         session.fsync(output)
                     }
                 }
-                session.commit(statusSender(sessionId, commandId, managedInstallWindow = true))
+                session.commit(
+                    statusSender(
+                        sessionId,
+                        commandId,
+                        attemptId,
+                        managedInstallWindow = true,
+                    )
+                )
             }
 
-            // The callback closes the window. A persisted timeout worker and boot
-            // recovery cover lost callbacks/process death.
             windowOpened = false
             return "התקנה הופעלה מ-$apkUrl"
         } catch (e: Exception) {
             if (sessionId >= 0) {
-                try {
-                    context.packageManager.packageInstaller.abandonSession(sessionId)
-                } catch (_: Exception) {
-                }
+                try { context.packageManager.packageInstaller.abandonSession(sessionId) } catch (_: Exception) {}
             }
             if (windowOpened) {
                 try { ManagedInstallWindow.close(context) } catch (_: Exception) {}
@@ -77,9 +72,13 @@ class AppInstaller(private val context: Context) {
         }
     }
 
-    fun uninstall(packageName: String, commandId: String? = null): String {
+    fun uninstall(
+        packageName: String,
+        commandId: String? = null,
+        attemptId: String? = null,
+    ): String {
         context.packageManager.packageInstaller
-            .uninstall(packageName, statusSender(packageName.hashCode(), commandId))
+            .uninstall(packageName, statusSender(packageName.hashCode(), commandId, attemptId))
         return "הסרה הופעלה עבור $packageName"
     }
 
@@ -133,10 +132,12 @@ class AppInstaller(private val context: Context) {
     private fun statusSender(
         requestCode: Int,
         commandId: String? = null,
+        attemptId: String? = null,
         managedInstallWindow: Boolean = false,
     ): IntentSender {
         val intent = Intent(context, InstallResultReceiver::class.java).apply {
             commandId?.let { putExtra(EXTRA_COMMAND_ID, it) }
+            attemptId?.let { putExtra(EXTRA_COMMAND_ATTEMPT_ID, it) }
             putExtra(EXTRA_MANAGED_INSTALL_WINDOW, managedInstallWindow)
         }
         var flags = PendingIntent.FLAG_UPDATE_CURRENT
@@ -147,10 +148,9 @@ class AppInstaller(private val context: Context) {
     }
 
     companion object {
-        // Backend upload limit is 150 MiB. Keep a little protocol/headroom while
-        // still preventing a changed/malicious URL from exhausting device storage.
         private const val MAX_APK_BYTES = 160L * 1024L * 1024L
         const val EXTRA_COMMAND_ID = "commandId"
+        const val EXTRA_COMMAND_ATTEMPT_ID = "commandAttemptId"
         const val EXTRA_MANAGED_INSTALL_WINDOW = "managedInstallWindow"
     }
 }
