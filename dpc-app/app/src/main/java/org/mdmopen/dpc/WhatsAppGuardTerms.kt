@@ -6,6 +6,7 @@ package org.mdmopen.dpc
  * These rules intentionally avoid broad substring matching. A channel name or
  * status caption may contain words such as "status" or "channel" as ordinary
  * text; that must never be enough to eject the user from WhatsApp.
+ * View-id fallback uses exact structural idTokens, never substring matching.
  */
 object WhatsAppGuardTerms {
     private val statusWords = setOf("סטטוס", "status", "statuses")
