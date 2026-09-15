@@ -5,6 +5,7 @@ on:
       - feat/customer-profile-app-catalog-polish
     paths:
       - scripts/patch_customer_profile.py
+      - scripts/run_customer_profile_patch.trigger
 permissions:
   contents: write
 jobs:
@@ -36,7 +37,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/run-customer-profile-patch.yml scripts/patch_customer_profile.py
+          git rm .github/workflows/run-customer-profile-patch.yml scripts/patch_customer_profile.py scripts/run_customer_profile_patch.trigger
           git add admin-panel backend dpc-app
           git diff --cached --check
           git commit -m "Polish customer profile and expand Play search"
