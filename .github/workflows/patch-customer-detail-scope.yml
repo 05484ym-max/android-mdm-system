@@ -1,0 +1,43 @@
+name: Patch Customer Detail Scope
+
+on:
+  push:
+    branches:
+      - fix/customer-detail-panel-scope
+    paths:
+      - .github/workflows/patch-customer-detail-scope.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/customer-detail-panel-scope
+          fetch-depth: 0
+      - name: Patch customer detail scope
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('admin-panel/customer-search.js')
+          s = p.read_text()
+          needle = "// Mirror WhatsApp Guard controls into the legacy full-management screen.\n(function () {\n  'use strict';\n\n  let detailHookInstalled = false;"
+          replacement = """// Mirror WhatsApp Guard controls into the legacy full-management screen.\n(function () {\n  'use strict';\n\n  function waModeLabel(wa) {\n    const parts = [];\n    if (wa && wa.hideProfilePhotos) parts.push('תמונות פרופיל');\n    if (wa && wa.blockStatuses) parts.push('סטטוסים');\n    if (wa && wa.blockChannels) parts.push('ערוצים');\n    if (!parts.length) return 'פתוח';\n    if (wa.blockChannels && !wa.blockStatuses && !wa.hideProfilePhotos) return 'חסום: ערוצים בלבד';\n    return 'חסום: ' + parts.join(', ');\n  }\n\n  function reportedWa(deviceStatus) {\n    const hasReported = ['whatsappGuardBlockStatuses','whatsappGuardBlockChannels','whatsappGuardHideProfilePhotos']\n      .every(k => typeof deviceStatus[k] === 'boolean');\n    if (!hasReported) return null;\n    return {\n      blockStatuses: deviceStatus.whatsappGuardBlockStatuses,\n      blockChannels: deviceStatus.whatsappGuardBlockChannels,\n      hideProfilePhotos: deviceStatus.whatsappGuardHideProfilePhotos,\n    };\n  }\n\n  let detailHookInstalled = false;"""
+          if s.count(needle) != 1:
+              raise SystemExit(f'Expected exactly one scope anchor, found {s.count(needle)}')
+          p.write_text(s.replace(needle, replacement, 1))
+          PY
+          node --check admin-panel/customer-search.js
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add admin-panel/customer-search.js
+          git diff --cached --check
+          git commit -m "Fix customer detail WhatsApp helper scope"
+          git push origin HEAD:fix/customer-detail-panel-scope
