@@ -29,13 +29,8 @@
 
         <activity
             android:name=".WhatsAppMaskCalibrationLauncherActivity"
-            android:exported="true"
-            android:label="כיול WhatsApp">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false"
+            android:label="כיול WhatsApp" />
 
         <activity
             android:name=".WhatsAppMaskCalibrationActivity"
