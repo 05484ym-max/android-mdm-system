@@ -70,7 +70,7 @@
 
     const registeredAt = device.registeredAt ? new Date(device.registeredAt).getTime() : 0;
     const oldEnough = registeredAt && Date.now() - registeredAt > 10 * 60 * 1000;
-    if (oldEnough && device.pushToken == null && status && Object.keys(status).length) {
+    if (oldEnough && device.hasPushToken === false && status && Object.keys(status).length) {
       out.push({
         code: 'PUSH_TOKEN_MISSING',
         severity: 'warning',
