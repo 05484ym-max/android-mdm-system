@@ -55,6 +55,11 @@ object PolicySync {
         Config.setDnsPendingCustomerRequest(context, null)
         Config.setSubscriptionAccess(context, result.subscriptionAccess)
 
+        // Record the server-authoritative post-lease state before policy/apply or
+        // any async installer callback can run. Every temporary install path now
+        // returns to this desired state instead of blindly re-blocking installs.
+        ManagedInstallWindow.setDesiredInstallBlocked(context, !result.policy.fullOpen)
+
         val dnsReconcileResult = AdBlockDns.reconcile(context)
         val dnsFailSafeResult = AdBlockDns.runFailSafeCheckCycle(context)
 
