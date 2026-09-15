@@ -1,0 +1,57 @@
+/* Focused admin-panel polish. Reuses the existing palette only. */
+.customer-profile-edit {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.customer-profile-edit .field-wide { grid-column: 1 / -1; }
+.customer-edit-field { display: flex; flex-direction: column; gap: 6px; }
+.customer-edit-field label { color: var(--text-dim); font-size: .76rem; font-weight: 700; }
+.customer-edit-input {
+  width: 100%; min-width: 0; padding: 11px 12px;
+  border: 1px solid var(--card-border); border-radius: 12px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.customer-edit-input:focus { outline: 2px solid var(--accent-tint); border-color: var(--accent); }
+.customer-save-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.customer-save-status { color: var(--text-dim); font-size: .78rem; }
+.customer-save-status.ok { color: var(--ok); }
+.customer-save-status.error { color: var(--danger); }
+.customer-summary-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 9px;
+}
+.customer-summary-card {
+  background: var(--bg); border: 1px solid var(--card-border); border-radius: 14px;
+  padding: 11px 12px; min-width: 0;
+}
+.customer-summary-card span { display:block; color:var(--text-dim); font-size:.73rem; margin-bottom:4px; }
+.customer-summary-card strong { display:block; color:var(--text); font-size:.9rem; overflow-wrap:anywhere; }
+.customer-section-title { margin: 0 0 12px; font-size: 1rem; color: var(--text); }
+.devices-section.no-heading { padding-top: 10px; }
+
+/* Catalog: cleaner vertical rhythm and buttons that do not fight for width. */
+[data-tab-content="catalog"] .enroll-card { padding: 16px; }
+[data-tab-content="catalog"] .catalog-grid { gap: 10px; }
+[data-tab-content="catalog"] .catalog-tile { padding: 13px 10px; min-width: 0; }
+[data-tab-content="catalog"] .catalog-tile-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+[data-tab-content="catalog"] .catalog-tile-actions button { width: 100%; min-width: 0; white-space: normal; }
+
+/* Google Play search is intentionally its own scrollable results surface. */
+#playSearchModal { overflow: hidden; }
+#playSearchModal > * { max-height: 92vh; }
+#playSearchResults {
+  max-height: 62vh; overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch; padding: 4px 2px 14px;
+}
+.play-search-count { color: var(--text-dim); font-size: .8rem; padding: 4px 2px 10px; }
+.play-search-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+}
+.play-search-grid .catalog-tile { background: var(--card-bg); }
+.play-search-grid .catalog-tile-actions { width:100%; }
+.play-search-grid .add-app-btn { width:100%; white-space:normal; }
+
+@media (max-width: 520px) {
+  .customer-profile-edit, .customer-summary-grid { grid-template-columns: 1fr; }
+  .customer-profile-edit .field-wide { grid-column: auto; }
+}
