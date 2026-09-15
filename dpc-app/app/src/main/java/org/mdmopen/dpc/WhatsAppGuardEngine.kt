@@ -26,6 +26,12 @@ class WhatsAppGuardEngine(
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
             val signals = clickSignals(event)
 
+            // The bottom navigation Updates tab sits geometrically below the Channels
+            // heading. Never feed that navigation click into section geometry: otherwise
+            // a channels-only policy mistakes the Updates tab itself for a channel card
+            // and immediately ejects the user after entering Updates.
+            if (signals.any { (text, id) -> WhatsAppGuardTerms.isUpdates(text, id) }) return false
+
             val statusTarget = policy.blockStatuses && signals.any { (text, id) ->
                 !WhatsAppGuardTerms.isUpdates(text, id) &&
                     (WhatsAppGuardTerms.isStatus(text, id) || WhatsAppGuardTerms.isStatusContext(text))
