@@ -13,8 +13,7 @@ class CommandExecutor(private val context: Context) {
     private val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
     private val installer = AppInstaller(context)
 
-    /** Runs one queued command and returns a short description of the outcome. */
-    fun execute(queued: QueuedCommand): String = when (queued.command) {
+    fun execute(queued: QueuedCommand, packageAttemptId: String? = null): String = when (queued.command) {
         "LOCK" -> {
             dpm.lockNow()
             "נעילה בוצעה"
@@ -31,11 +30,12 @@ class CommandExecutor(private val context: Context) {
         "INSTALL_APP" -> {
             val apkUrl = queued.params.getString("apkUrl")
             val expectedSha256 = queued.params.getString("expectedSha256")
-            installer.installFromUrl(apkUrl, expectedSha256, queued.id)
+            installer.installFromUrl(apkUrl, expectedSha256, queued.id, packageAttemptId)
         }
         "UNINSTALL_APP" -> installer.uninstall(
             queued.params.getString("packageName"),
             queued.id,
+            packageAttemptId,
         )
         "OPEN_PLAY_STORE_INSTALL" -> {
             val packageName = queued.params.getString("packageName")
@@ -44,15 +44,10 @@ class CommandExecutor(private val context: Context) {
         }
         "OPEN_PLAY_STORE_SYSTEM_COMPONENT" -> {
             val packageName = queued.params.getString("packageName")
-            // displayName is always server-set for this command (see
-            // backend/index.js's SYSTEM_COMPONENT_DISPLAY_NAMES) - falling
-            // back to the raw package name only if it's ever missing.
             val displayName = queued.params.optString("displayName", packageName)
             PlayStoreGate.openForInstall(context, packageName, displayName)
             "נפתח Play Store עבור $displayName"
         }
-        // Admin-only maintenance window: clears only the debugging restriction.
-        // The next normal policy sync closes the window automatically.
         "OPEN_DEBUGGING_TEMP" -> {
             PolicyEnforcer(context).openDebuggingUntilNextSync()
             "ניפוי באגים נפתח זמנית עד הסנכרון הבא"
@@ -65,18 +60,11 @@ class CommandExecutor(private val context: Context) {
                 "ניהול המכשיר הוסר; לא ניתן היה לפתוח אוטומטית את מסך מחיקת אפליקציית הניהול"
             }
         }
-        "ENABLE_DNS_FILTERING" -> {
-            // providerHost is always server-set (see backend/index.js) - never
-            // trusts arbitrary client-controlled params for this. enable()
-            // itself records the new desired state locally on success - no
-            // need to pre-set it here too (the server's own desired_state
-            // columns are already updated the moment the command was queued,
-            // regardless of whether applying it here succeeds or not).
-            AdBlockDns.enable(context, queued.params.getString("providerHost"))
-        }
-        "DISABLE_DNS_FILTERING" -> {
-            AdBlockDns.disable(context)
-        }
+        "ENABLE_DNS_FILTERING" -> AdBlockDns.enable(
+            context,
+            queued.params.getString("providerHost"),
+        )
+        "DISABLE_DNS_FILTERING" -> AdBlockDns.disable(context)
         else -> throw IllegalArgumentException("פקודה לא מוכרת: ${queued.command}")
     }
 
