@@ -1,6 +1,7 @@
 package org.mdmopen.dpc
 
 import android.content.Context
+import android.provider.Settings
 import android.util.Log
 
 object PolicySync {
@@ -9,7 +10,6 @@ object PolicySync {
     private val syncLock = Any()
     private val commandLock = Any()
     private val asyncPackageCommands = setOf("INSTALL_APP", "UNINSTALL_APP")
-    private val irreversibleCommands = setOf("REBOOT", "WIPE", "RELEASE_DEVICE_OWNER")
 
     private data class PreparedSync(
         val api: ApiClient,
@@ -18,13 +18,6 @@ object PolicySync {
         val summary: String,
     )
 
-    /**
-     * Policy/config application is serialized independently from command side
-     * effects. A large APK download can therefore no longer block a newer FCM,
-     * manual or periodic policy sync for minutes. Commands themselves remain
-     * serialized by commandLock, and server leases + CommandJournal make a
-     * re-delivered command idempotent.
-     */
     fun run(context: Context): String {
         val prepared = synchronized(syncLock) {
             val serverUrl = Config.serverUrl(context)
@@ -42,8 +35,6 @@ object PolicySync {
                 DeviceHealth.collect(context, enforcer.isDeviceOwner()),
             )
 
-            // Universal target lookup is additive and guidance-only. A temporary
-            // failure here must never break the established Device Owner sync path.
             runCatching {
                 api.fetchProtectionTarget(deviceId)
             }.onSuccess { target ->
@@ -67,9 +58,6 @@ object PolicySync {
             Config.setDnsPendingCustomerRequest(context, null)
             Config.setSubscriptionAccess(context, result.subscriptionAccess)
 
-            // Record the server-authoritative post-lease state before policy/apply or
-            // any async installer callback can run. Every temporary install path now
-            // returns to this desired state instead of blindly re-blocking installs.
             ManagedInstallWindow.setDesiredInstallBlocked(context, !result.policy.fullOpen)
 
             val dnsReconcileResult = AdBlockDns.reconcile(context)
@@ -132,30 +120,50 @@ object PolicySync {
         }
 
         if (previous?.status == "STARTED") {
-            // Never repeat a potentially destructive/non-idempotent side effect
-            // merely because its acknowledgement was lost.
-            if (queued.command in irreversibleCommands) {
-                val message = "הפקודה התקבלה והופעלה לפני אתחול/הפסקת התהליך"
-                CommandJournal.markTerminal(context, queued.id, "SUCCESS", message)
-                safeReport(api, deviceId, queued.id, "SUCCESS", message)
-                return "$message (${queued.command})"
+            when (queued.command) {
+                "REBOOT" -> {
+                    val beforeBoot = previous.metadata
+                        ?.takeIf { it.startsWith("boot:") }
+                        ?.removePrefix("boot:")
+                        ?.toIntOrNull()
+                    val nowBoot = bootCount(context)
+                    if (beforeBoot != null && nowBoot > beforeBoot) {
+                        val message = "אתחול המכשיר אומת לאחר הפקודה"
+                        CommandJournal.markTerminal(context, queued.id, "SUCCESS", message)
+                        safeReport(api, deviceId, queued.id, "SUCCESS", message)
+                        return message
+                    }
+                    // Same boot means the previous process died before Android
+                    // actually rebooted. Retry instead of claiming false success.
+                }
+                "WIPE" -> {
+                    // If this app and its journal still exist, wipe did not finish.
+                    // Retrying is safer than reporting a destructive action that
+                    // never happened. A completed wipe removes this local state.
+                }
+                "RELEASE_DEVICE_OWNER" -> {
+                    if (!PolicyEnforcer(context).isDeviceOwner()) {
+                        val message = "הסרת Device Owner אומתה לאחר הפקודה"
+                        CommandJournal.markTerminal(context, queued.id, "SUCCESS", message)
+                        safeReport(api, deviceId, queued.id, "SUCCESS", message)
+                        return message
+                    }
+                    // Still owner: retry the release instead of false SUCCESS.
+                }
+                else -> if (queued.command in asyncPackageCommands) {
+                    val message = "לא התקבל callback סופי מהפעלת החבילה הקודמת; לא בוצעה הפעלה כפולה"
+                    CommandJournal.markTerminal(context, queued.id, "FAILED", message)
+                    safeReport(api, deviceId, queued.id, "FAILED", message)
+                    return "פקודה ${queued.command} נעצרה ללא תוצאה סופית"
+                }
             }
-            if (queued.command in asyncPackageCommands) {
-                val message = "לא התקבל callback סופי מהפעלת החבילה הקודמת; לא בוצעה הפעלה כפולה"
-                CommandJournal.markTerminal(context, queued.id, "FAILED", message)
-                safeReport(api, deviceId, queued.id, "FAILED", message)
-                return "פקודה ${queued.command} נעצרה ללא תוצאה סופית"
-            }
-            // The remaining commands are idempotent policy/state operations and
-            // may safely be retried after an interrupted process.
         }
 
-        CommandJournal.markStarted(context, queued.id)
+        val startMetadata = if (queued.command == "REBOOT") "boot:${bootCount(context)}" else null
+        CommandJournal.markStarted(context, queued.id, startMetadata)
         return try {
             val message = executor.execute(queued)
             if (queued.command in asyncPackageCommands) {
-                // PackageInstaller owns the terminal result. Its receiver writes
-                // the journal and reports SUCCESS/FAILED when Android finishes.
                 message
             } else {
                 CommandJournal.markTerminal(context, queued.id, "SUCCESS", message)
@@ -169,6 +177,11 @@ object PolicySync {
             "פקודה ${queued.command} נכשלה: $message"
         }
     }
+
+    private fun bootCount(context: Context): Int =
+        runCatching {
+            Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT)
+        }.getOrDefault(-1)
 
     private fun safeReport(
         api: ApiClient,
