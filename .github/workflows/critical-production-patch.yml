@@ -17,34 +17,29 @@ jobs:
         with:
           ref: fix/comprehensive-mdm-hardening
           fetch-depth: 0
-      - name: Apply exact guarded replacements
+      - name: Apply guarded production replacements
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('backend/index.js')
           text = path.read_text()
 
-          old_register = '''  // The server assigns the ID (a short number, not a UUID) so the admin has
-          // something they can read off the device and type into the panel.
-          const deviceId = await db.generateUniqueDeviceId();
-          const consumed = await db.consumeEnrollment(
-            sha256(enrollmentToken.trim().toUpperCase()),
-            deviceId,
-          );
-          if (!consumed) {
-            return res.status(401).json({ error: 'invalid or expired enrollment token' });
-          }
-
-          const deviceToken = crypto.randomBytes(32).toString('hex');
-          await db.createDevice(deviceId, sha256(deviceToken));
-          res.json({ status: 'enrolled', deviceId, deviceToken });'''
-
-          new_register = '''  // One-time enrollment is also the idempotency key. If the DB commit
-          // succeeded but the HTTP response was lost, retrying the same enrollment
-          // secret returns the same device identity/credential instead of burning
-          // the code and stranding the device.
-          const tokenHash = sha256(enrollmentToken.trim().toUpperCase());
+          register_pattern = re.compile(
+              r"(?ms)^  const deviceId = await db\.generateUniqueDeviceId\(\);\n"
+              r"  const consumed = await db\.consumeEnrollment\(\n"
+              r"    sha256\(enrollmentToken\.trim\(\)\.toUpperCase\(\)\),\n"
+              r"    deviceId,\n"
+              r"  \);\n"
+              r"  if \(!consumed\) \{\n"
+              r"    return res\.status\(401\)\.json\(\{ error: 'invalid or expired enrollment token' \}\);\n"
+              r"  \}\n\n"
+              r"  const deviceToken = crypto\.randomBytes\(32\)\.toString\('hex'\);\n"
+              r"  await db\.createDevice\(deviceId, sha256\(deviceToken\)\);\n"
+              r"  res\.json\(\{ status: 'enrolled', deviceId, deviceToken \}\);"
+          )
+          new_register = '''  const tokenHash = sha256(enrollmentToken.trim().toUpperCase());
           const candidateDeviceId = await db.generateUniqueDeviceId();
           const enrolled = await db.registerDeviceIdempotent(tokenHash, candidateDeviceId);
           if (!enrolled) {
@@ -57,23 +52,23 @@ jobs:
             deviceToken: enrolled.deviceToken,
           });'''
 
-          old_classifier = '''const browserClassifierRate = new Map();
-          const BROWSER_CLASSIFIER_WINDOW_MS = 60 * 1000;
-          const BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW = 30;
-
-          function browserClassifierRateAllowed(ip) {
-            const now = Date.now();
-            const key = String(ip || 'unknown').slice(0, 100);
-            const state = browserClassifierRate.get(key);
-            if (!state || now - state.startedAt >= BROWSER_CLASSIFIER_WINDOW_MS) {
-              browserClassifierRate.set(key, { startedAt: now, misses: 1 });
-              return true;
-            }
-            if (state.misses >= BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW) return false;
-            state.misses += 1;
-            return true;
-          }'''
-
+          classifier_pattern = re.compile(
+              r"(?ms)^const browserClassifierRate = new Map\(\);\n"
+              r"const BROWSER_CLASSIFIER_WINDOW_MS = 60 \* 1000;\n"
+              r"const BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW = 30;\n\n"
+              r"function browserClassifierRateAllowed\(ip\) \{\n"
+              r"  const now = Date\.now\(\);\n"
+              r"  const key = String\(ip \|\| 'unknown'\)\.slice\(0, 100\);\n"
+              r"  const state = browserClassifierRate\.get\(key\);\n"
+              r"  if \(!state \|\| now - state\.startedAt >= BROWSER_CLASSIFIER_WINDOW_MS\) \{\n"
+              r"    browserClassifierRate\.set\(key, \{ startedAt: now, misses: 1 \}\);\n"
+              r"    return true;\n"
+              r"  \}\n"
+              r"  if \(state\.misses >= BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW\) return false;\n"
+              r"  state\.misses \+= 1;\n"
+              r"  return true;\n"
+              r"\}"
+          )
           new_classifier = '''const browserClassifierRate = new Map();
           const BROWSER_CLASSIFIER_WINDOW_MS = 60 * 1000;
           const BROWSER_CLASSIFIER_MAX_MISSES_PER_WINDOW = 30;
@@ -104,19 +99,20 @@ jobs:
             return true;
           }'''
 
-          old_image = '''function imageProxyRateAllowed(ip) {
-            const now = Date.now();
-            const key = String(ip || 'unknown').slice(0, 100);
-            const state = imageProxyRate.get(key);
-            if (!state || now - state.startedAt >= IMAGE_PROXY_WINDOW_MS) {
-              imageProxyRate.set(key, { startedAt: now, count: 1 });
-              return true;
-            }
-            if (state.count >= IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW) return false;
-            state.count += 1;
-            return true;
-          }'''
-
+          image_pattern = re.compile(
+              r"(?ms)^function imageProxyRateAllowed\(ip\) \{\n"
+              r"  const now = Date\.now\(\);\n"
+              r"  const key = String\(ip \|\| 'unknown'\)\.slice\(0, 100\);\n"
+              r"  const state = imageProxyRate\.get\(key\);\n"
+              r"  if \(!state \|\| now - state\.startedAt >= IMAGE_PROXY_WINDOW_MS\) \{\n"
+              r"    imageProxyRate\.set\(key, \{ startedAt: now, count: 1 \}\);\n"
+              r"    return true;\n"
+              r"  \}\n"
+              r"  if \(state\.count >= IMAGE_PROXY_MAX_REQUESTS_PER_WINDOW\) return false;\n"
+              r"  state\.count \+= 1;\n"
+              r"  return true;\n"
+              r"\}"
+          )
           new_image = '''function imageProxyRateAllowed(ip) {
             const now = Date.now();
             const key = String(ip || 'unknown').slice(0, 100);
@@ -132,15 +128,14 @@ jobs:
           }'''
 
           replacements = [
-              ('registration', old_register, new_register),
-              ('classifier map', old_classifier, new_classifier),
-              ('image map', old_image, new_image),
+              ('registration', register_pattern, new_register),
+              ('classifier map', classifier_pattern, new_classifier),
+              ('image map', image_pattern, new_image),
           ]
-          for name, old, new in replacements:
-              count = text.count(old)
+          for name, pattern, replacement in replacements:
+              text, count = pattern.subn(replacement, text, count=1)
               if count != 1:
                   raise SystemExit(f'{name}: expected exactly one source block, found {count}')
-              text = text.replace(old, new, 1)
 
           path.write_text(text)
           PY
