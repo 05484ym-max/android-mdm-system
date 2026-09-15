@@ -25,5 +25,10 @@ pos = s.find(tail, s.find("repn('backend/db.js'"))
 if pos < 0:
     raise SystemExit('db mapping call tail missing')
 s = s[:pos] + "'customer profile mappings', 2)" + s[pos + len(tail):]
+old_rx = 'out, n = re.subn(pattern, repl, s, count=1, flags=flags)'
+new_rx = 'out, n = re.subn(pattern, lambda _m: repl, s, count=1, flags=flags)'
+if s.count(old_rx) != 1:
+    raise SystemExit(f'rx replacement marker count={s.count(old_rx)}')
+s = s.replace(old_rx, new_rx, 1)
 p.write_text(s)
 print('prepare_customer_profile_patch.py: OK')
