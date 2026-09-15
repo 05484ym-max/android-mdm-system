@@ -65,7 +65,11 @@ jobs:
               'blocked screen returns to WhatsApp': 'getLaunchIntentForPackage(WHATSAPP_PACKAGE)' in blocked and 'חזרה ל-WhatsApp' in blocked,
               'blocked screen remains fail-open after back': 'catch (_: Exception)' in service and 'startActivity(intent)' in service,
               'click matching stays local': 'private fun clickSignals(event: AccessibilityEvent)' in engine and 'addDescendants(source, 2)' in engine,
-              'internal status/channel matcher does not confuse Updates': '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isStatus' in engine and '!WhatsAppGuardTerms.isUpdates(text, id) && WhatsAppGuardTerms.isChannel' in engine,
+              'internal status/channel matcher does not confuse Updates': all(x in engine for x in [
+                  '!WhatsAppGuardTerms.isUpdates(text, id)',
+                  'WhatsAppGuardTerms.isStatus(text, id)',
+                  'WhatsAppGuardTerms.isChannel(text, id)',
+              ]),
               'no whole-updates screen classifier eject': 'screen == WhatsAppScreen.UPDATES) {' not in engine,
               'avatar masking uses saved calibration': 'WhatsAppMaskCalibrationStore.targetFor(screen)' in engine and 'WhatsAppMaskCalibrationStore.get(service, target)' in engine,
               'no automatic row/image fallback': 'maskAvatarAreasPerChatRow' not in engine and 'imageCandidates' not in engine,
