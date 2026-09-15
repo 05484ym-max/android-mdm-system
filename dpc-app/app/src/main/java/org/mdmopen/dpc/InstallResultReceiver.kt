@@ -14,11 +14,12 @@ class InstallResultReceiver : BroadcastReceiver() {
         val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
 
-        // Restore app-install blocking after every install/uninstall result.
-        try {
-            AppInstaller(context).restoreInstallBlock()
-        } catch (e: Exception) {
-            Log.e(PolicySync.TAG, "Failed to restore install restriction", e)
+        if (intent.getBooleanExtra(AppInstaller.EXTRA_MANAGED_INSTALL_WINDOW, false)) {
+            try {
+                ManagedInstallWindow.close(context)
+            } catch (e: Exception) {
+                Log.e(PolicySync.TAG, "Failed to restore install restriction", e)
+            }
         }
 
         when (status) {
