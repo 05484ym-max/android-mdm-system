@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS devices (
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS push_token TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_name TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_number TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_first_name TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_last_name TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_email TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_phone TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS customer_address TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS subscription_unblock_until TIMESTAMPTZ;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS subscription_unblock_permanent BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS full_open_mode BOOLEAN NOT NULL DEFAULT false;
@@ -328,6 +333,11 @@ function toDevice(row, pendingCommands = [], commandHistory = []) {
     pushToken: row.push_token,
     customerName: row.customer_name,
     customerNumber: row.customer_number,
+    customerFirstName: row.customer_first_name,
+    customerLastName: row.customer_last_name,
+    customerEmail: row.customer_email,
+    customerPhone: row.customer_phone,
+    customerAddress: row.customer_address,
     subscriptionUnblockUntil: row.subscription_unblock_until ? row.subscription_unblock_until.toISOString() : null,
     subscriptionUnblockPermanent: row.subscription_unblock_permanent === true,
     fullOpenMode: row.full_open_mode === true,
@@ -444,11 +454,19 @@ const setPushToken = (deviceId, value) =>
 const setStatus = (deviceId, value) =>
   updateDeviceField(deviceId, 'status', value);
 
-async function setCustomerInfo(deviceId, name, number) {
+async function setCustomerInfo(deviceId, profile) {
   const { rows } = await pool.query(
-    `UPDATE devices SET customer_name = $2, customer_number = $3
-      WHERE device_id = $1 RETURNING *`,
-    [deviceId, name || null, number || null],
+    `UPDATE devices SET
+       customer_name = $2,
+       customer_number = $3,
+       customer_first_name = $4,
+       customer_last_name = $5,
+       customer_email = $6,
+       customer_phone = $7,
+       customer_address = $8
+     WHERE device_id = $1 RETURNING *`,
+    [deviceId, profile.name || null, profile.number || null, profile.firstName || null,
+     profile.lastName || null, profile.email || null, profile.phone || null, profile.address || null],
   );
   return rows[0] ? toDevice(rows[0]) : null;
 }
@@ -577,6 +595,11 @@ function mapHealthRow(row) {
     registeredAt: row.registered_at.toISOString(),
     customerName: row.customer_name,
     customerNumber: row.customer_number,
+    customerFirstName: row.customer_first_name,
+    customerLastName: row.customer_last_name,
+    customerEmail: row.customer_email,
+    customerPhone: row.customer_phone,
+    customerAddress: row.customer_address,
     model: status.model || null,
     androidVersion: status.androidVersion || null,
     manufacturer: row.manufacturer,

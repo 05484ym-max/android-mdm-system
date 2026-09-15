@@ -5,7 +5,8 @@ const { categoryFromPlayGenreId } = require('./appCategories');
 const PLAY_HOST = 'play.google.com';
 const MAX_SEARCH_BYTES = 2 * 1024 * 1024;
 const MAX_DETAILS_BYTES = 2 * 1024 * 1024;
-const MAX_RESULTS = 8;
+const MAX_RESULTS = 80;
+const FALLBACK_RESULTS = 24;
 const PACKAGE_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 
 function decodeHtml(value) {
@@ -22,11 +23,7 @@ function decodeHtml(value) {
 
 function validatePlayUrl(raw) {
   let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error('invalid Google Play URL');
-  }
+  try { parsed = new URL(raw); } catch { throw new Error('invalid Google Play URL'); }
   if (parsed.protocol !== 'https:' || parsed.hostname !== PLAY_HOST) {
     throw new Error('unexpected Google Play redirect');
   }
@@ -72,7 +69,7 @@ function fetchPlayHtml(rawUrl, maxBytes, redirectsLeft = 3) {
   });
 }
 
-function extractPackages(html) {
+function extractPackages(html, limit = FALLBACK_RESULTS) {
   const packages = [];
   const seen = new Set();
   const patterns = [
@@ -83,14 +80,14 @@ function extractPackages(html) {
   ];
   for (const pattern of patterns) {
     let match;
-    while ((match = pattern.exec(html)) && packages.length < MAX_RESULTS) {
+    while ((match = pattern.exec(html)) && packages.length < limit) {
       const packageName = match[1];
       if (PACKAGE_NAME_REGEX.test(packageName) && !seen.has(packageName)) {
         seen.add(packageName);
         packages.push(packageName);
       }
     }
-    if (packages.length >= MAX_RESULTS) break;
+    if (packages.length >= limit) break;
   }
   return packages;
 }
@@ -105,9 +102,7 @@ function metaContent(html, property) {
 
 function cleanPlayTitle(title, packageName) {
   if (!title) return packageName;
-  return title
-    .replace(/\s*[-–]\s*(?:Apps on Google Play|אפליקציות ב-Google Play).*$/i, '')
-    .trim() || packageName;
+  return title.replace(/\s*[-–]\s*(?:Apps on Google Play|אפליקציות ב-Google Play).*$/i, '').trim() || packageName;
 }
 
 async function getPlayStoreApp(packageName) {
@@ -119,11 +114,7 @@ async function getPlayStoreApp(packageName) {
 
   let playMetadata = null;
   try {
-    playMetadata = await googlePlayScraper.app({
-      appId: packageName,
-      lang: 'he',
-      country: 'il'
-    });
+    playMetadata = await googlePlayScraper.app({ appId: packageName, lang: 'he', country: 'il' });
   } catch (e) {
     console.warn(`[play-metadata] ${packageName}: ${e.message}`);
   }
@@ -134,12 +125,21 @@ async function getPlayStoreApp(packageName) {
     iconUrl: iconUrl || null,
     version: playMetadata?.version || null,
     updated: Number.isFinite(playMetadata?.updated) ? playMetadata.updated : null,
-    // Best-effort initial category suggestion from Play's own genreId - null
-    // when playMetadata itself failed to load (see the try/catch above) or
-    // when its genre has no confident mapping (see appCategories.js). The
-    // caller (db.addAppToCatalog) treats null as "no suggestion" and falls
-    // back to the default category, never invents one here.
     category: categoryFromPlayGenreId(playMetadata?.genreId),
+    playUrl: `https://${PLAY_HOST}/store/apps/details?id=${encodeURIComponent(packageName)}`,
+  };
+}
+
+function lightweightSearchResult(item) {
+  const packageName = item && item.appId;
+  if (!PACKAGE_NAME_REGEX.test(String(packageName || ''))) return null;
+  return {
+    packageName,
+    name: String(item.title || packageName).slice(0, 100),
+    iconUrl: item.icon || null,
+    developer: item.developer || null,
+    score: Number.isFinite(item.score) ? item.score : null,
+    free: item.free !== false,
     playUrl: `https://${PLAY_HOST}/store/apps/details?id=${encodeURIComponent(packageName)}`,
   };
 }
@@ -147,16 +147,38 @@ async function getPlayStoreApp(packageName) {
 async function searchPlayStore(query) {
   const q = String(query || '').trim();
   if (q.length < 2 || q.length > 80) throw new Error('query must be 2-80 characters');
+
+  // The scraper search endpoint gives a broad ranked result set in one request.
+  // Keep results lightweight here; full metadata is loaded only after the admin
+  // chooses an app through /api/apps/from-play.
+  try {
+    const found = await googlePlayScraper.search({
+      term: q,
+      num: MAX_RESULTS,
+      lang: 'he',
+      country: 'il',
+    });
+    const seen = new Set();
+    const results = [];
+    for (const raw of found || []) {
+      const item = lightweightSearchResult(raw);
+      if (!item || seen.has(item.packageName)) continue;
+      seen.add(item.packageName);
+      results.push(item);
+      if (results.length >= MAX_RESULTS) break;
+    }
+    if (results.length) return results;
+  } catch (e) {
+    console.warn(`[play-search] scraper fallback for "${q}": ${e.message}`);
+  }
+
+  // Conservative fallback for temporary scraper breakage.
   const url = `https://${PLAY_HOST}/store/search?q=${encodeURIComponent(q)}&c=apps&hl=he&gl=IL`;
   const html = await fetchPlayHtml(url, MAX_SEARCH_BYTES);
-  const packages = extractPackages(html);
+  const packages = extractPackages(html, FALLBACK_RESULTS);
   if (!packages.length) return [];
-
   const settled = await Promise.allSettled(packages.map(getPlayStoreApp));
-  return settled
-    .filter(item => item.status === 'fulfilled')
-    .map(item => item.value)
-    .slice(0, MAX_RESULTS);
+  return settled.filter(item => item.status === 'fulfilled').map(item => item.value).slice(0, FALLBACK_RESULTS);
 }
 
 module.exports = { searchPlayStore, getPlayStoreApp };

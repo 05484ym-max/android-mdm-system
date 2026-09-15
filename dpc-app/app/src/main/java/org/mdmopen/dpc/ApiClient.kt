@@ -17,6 +17,11 @@ data class Policy(
     val whatsappGuard: WhatsAppGuardPolicy = WhatsAppGuardPolicy(),
     val customerName: String? = null,
     val customerNumber: String? = null,
+    val customerFirstName: String? = null,
+    val customerLastName: String? = null,
+    val customerEmail: String? = null,
+    val customerPhone: String? = null,
+    val customerAddress: String? = null,
 )
 
 /** Server-authoritative DNS policy - see Config.setDnsPolicy(). desiredProviderHost
@@ -62,6 +67,8 @@ data class SubscriptionAccess(
     val overridePermanent: Boolean,
     val overrideUntil: String?,
     val subscriptionExpiryDate: String?,
+    val subscriptionStartDate: String?,
+    val subscriptionPrice: Double?,
 )
 
 data class SyncResult(
@@ -155,6 +162,11 @@ class ApiClient(
             ),
             customerName = if (policyJson.isNull("customerName")) null else policyJson.optString("customerName", null),
             customerNumber = if (policyJson.isNull("customerNumber")) null else policyJson.optString("customerNumber", null),
+            customerFirstName = if (policyJson.isNull("customerFirstName")) null else policyJson.optString("customerFirstName", null),
+            customerLastName = if (policyJson.isNull("customerLastName")) null else policyJson.optString("customerLastName", null),
+            customerEmail = if (policyJson.isNull("customerEmail")) null else policyJson.optString("customerEmail", null),
+            customerPhone = if (policyJson.isNull("customerPhone")) null else policyJson.optString("customerPhone", null),
+            customerAddress = if (policyJson.isNull("customerAddress")) null else policyJson.optString("customerAddress", null),
         )
 
         val queued = json.optJSONArray("commands") ?: JSONArray()
@@ -208,6 +220,8 @@ class ApiClient(
             overridePermanent = accessJson?.optBoolean("overridePermanent", false) ?: false,
             overrideUntil = accessJson?.let { if (it.isNull("overrideUntil")) null else it.optString("overrideUntil", null) },
             subscriptionExpiryDate = accessJson?.let { if (it.isNull("subscriptionExpiryDate")) null else it.optString("subscriptionExpiryDate", null) },
+            subscriptionStartDate = accessJson?.let { if (it.isNull("subscriptionStartDate")) null else it.optString("subscriptionStartDate", null) },
+            subscriptionPrice = accessJson?.let { if (it.isNull("subscriptionPrice")) null else it.optDouble("subscriptionPrice") },
         )
 
         return SyncResult(policy, catalog, commands, dns, subscriptionAccess)

@@ -15,7 +15,8 @@
   }
   function render(items) {
     if (!items.length) { results.innerHTML = '<div class="empty-state">לא נמצאו אפליקציות</div>'; return; }
-    results.innerHTML = `<div class="catalog-grid">${items.map(app => `<div class="catalog-tile">${iconHtml(app)}<div class="catalog-name">${escapeHtml(app.name)}</div><div class="catalog-package">${escapeHtml(app.packageName)}</div><div class="catalog-tile-actions"><button class="add-app-btn" data-add-play="${escapeHtml(app.packageName)}">הוסף לחנות</button></div></div>`).join('')}</div>`;
+    results.innerHTML = `<div class="play-search-count">נמצאו ${items.length} תוצאות · גלול למטה כדי לראות עוד</div><div class="play-search-grid">${items.map(app => `<div class="catalog-tile">${iconHtml(app)}<div class="catalog-name">${escapeHtml(app.name)}</div>${app.developer ? `<div class="catalog-package" style="direction:rtl">${escapeHtml(app.developer)}</div>` : ''}<div class="catalog-package">${escapeHtml(app.packageName)}</div><div class="catalog-tile-actions"><button class="add-app-btn" data-add-play="${escapeHtml(app.packageName)}">הוסף לחנות</button></div></div>`).join('')}</div>`;
+    results.scrollTop = 0;
     results.querySelectorAll('[data-add-play]').forEach(btn => {
       btn.addEventListener('click', async () => {
         const packageName = btn.dataset.addPlay; const original = btn.textContent; btn.disabled = true; btn.textContent = 'מוסיף...';
@@ -40,7 +41,7 @@
       if (res.status === 401) { requireLogin(); return; }
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { results.innerHTML = `<div class="empty-state">${escapeHtml(body.error || 'החיפוש נכשל')}</div>`; return; }
-      render(body);
+      render(Array.isArray(body) ? body : []);
     } catch (_) { results.innerHTML = '<div class="empty-state">שגיאת תקשורת</div>'; }
     finally { searchBtn.disabled = false; searchBtn.textContent = 'חפש'; }
   }

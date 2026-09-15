@@ -329,16 +329,13 @@ class CustomerActivity : Activity() {
 
         contentArea.addView(personalWelcomeCard())
 
-        // "מצב מנוי" moved into the status pill on the welcome card above, so it
-        // is not repeated as a row here. A "תאריך הצטרפות" (join date) row isn't
-        // included either - no such field exists on the device record.
         val rows = mutableListOf<Triple<Int, String, String>>()
-        Config.customerNumber(this)?.takeIf { it.isNotBlank() }?.let {
-            rows += Triple(R.drawable.ic_row_phone, "טלפון", it)
-        }
-        Config.subscriptionExpiryDate(this)?.takeIf { it.isNotBlank() }?.let {
-            rows += Triple(R.drawable.ic_row_calendar, "תוקף מנוי", compactSubscriptionDate(it))
-        }
+        (Config.customerPhone(this) ?: Config.customerNumber(this))?.takeIf { it.isNotBlank() }?.let { rows += Triple(R.drawable.ic_row_phone, "טלפון", it) }
+        Config.customerEmail(this)?.takeIf { it.isNotBlank() }?.let { rows += Triple(R.drawable.ic_row_chat, "אימייל", it) }
+        Config.customerAddress(this)?.takeIf { it.isNotBlank() }?.let { rows += Triple(R.drawable.ic_row_device, "כתובת", it) }
+        Config.subscriptionStartDate(this)?.takeIf { it.isNotBlank() }?.let { rows += Triple(R.drawable.ic_row_calendar, "תחילת מנוי", compactSubscriptionDate(it)) }
+        Config.subscriptionExpiryDate(this)?.takeIf { it.isNotBlank() }?.let { rows += Triple(R.drawable.ic_row_calendar, "תוקף מנוי", compactSubscriptionDate(it)) }
+        Config.subscriptionPrice(this)?.let { rows += Triple(R.drawable.ic_row_shield, "מחיר מנוי", "${it.toInt()} ₪") }
         rows += Triple(R.drawable.ic_row_device, "מזהה מכשיר", Config.deviceId(this))
         rows += Triple(R.drawable.ic_row_clock, "עדכון אחרון", lastSyncLabelCompact())
 

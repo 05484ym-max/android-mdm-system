@@ -100,17 +100,30 @@
         <button type="button" class="toggle-btn" data-unified-close>סגור</button>
       </div>
 
-      <div class="unified-profile-grid">
-        <div class="unified-info-card"><span>מזהה מכשיר</span><strong dir="ltr">${esc(d.deviceId)}</strong></div>
-        <div class="unified-info-card"><span>מצב מנוי</span><strong class="${esc(status.cls || '')}">${esc(status.text || '—')}</strong></div>
-        <div class="unified-info-card"><span>תוקף מנוי</span><strong>${esc(fmtDate(subscription.expiryDate))}</strong></div>
-        <div class="unified-info-card"><span>מחיר מנוי</span><strong>${subscription.price != null ? esc(subscription.price) + ' ₪' : '—'}</strong></div>
-        <div class="unified-info-card"><span>נרשם</span><strong>${esc(fmtDate(d.registeredAt))}</strong></div>
-        <div class="unified-info-card"><span>דגם</span><strong>${esc(deviceStatus.model || '—')}</strong></div>
-        <div class="unified-info-card"><span>Android</span><strong>${esc(deviceStatus.androidVersion || '—')}</strong></div>
-        <div class="unified-info-card"><span>נראה לאחרונה</span><strong>${esc(fmtDate(deviceStatus.lastSeen))}</strong></div>
-        <div class="unified-info-card"><span>סנכרון מדיניות</span><strong>${esc(p.syncIntervalMinutes || 60)} דקות</strong></div>
-        <div class="unified-info-card"><span>מצב קיוסק</span><strong>${p.kioskEnabled ? 'פעיל' : 'כבוי'}</strong></div>
+      <div class="unified-profile-section">
+        <h3 class="customer-section-title">פרטי לקוח</h3>
+        <div class="customer-profile-edit">
+          <div class="customer-edit-field"><label>שם פרטי</label><input class="customer-edit-input" data-customer-field="firstName" value="${esc(d.customerFirstName || '')}" autocomplete="given-name"></div>
+          <div class="customer-edit-field"><label>שם משפחה</label><input class="customer-edit-input" data-customer-field="lastName" value="${esc(d.customerLastName || '')}" autocomplete="family-name"></div>
+          <div class="customer-edit-field"><label>טלפון</label><input class="customer-edit-input" data-customer-field="phone" value="${esc(d.customerPhone || d.customerNumber || '')}" inputmode="tel"></div>
+          <div class="customer-edit-field"><label>מספר לקוח</label><input class="customer-edit-input" data-customer-field="number" value="${esc(d.customerNumber || '')}"></div>
+          <div class="customer-edit-field field-wide"><label>אימייל</label><input class="customer-edit-input" data-customer-field="email" value="${esc(d.customerEmail || '')}" inputmode="email" autocomplete="email"></div>
+          <div class="customer-edit-field field-wide"><label>כתובת</label><input class="customer-edit-input" data-customer-field="address" value="${esc(d.customerAddress || '')}" autocomplete="street-address"></div>
+        </div>
+        <div class="customer-save-row"><button type="button" class="add-app-btn" data-customer-save>שמור פרטים</button><span class="customer-save-status" data-customer-save-status></span></div>
+      </div>
+      <div class="unified-profile-section">
+        <h3 class="customer-section-title">מנוי ומכשיר</h3>
+        <div class="customer-summary-grid">
+          <div class="customer-summary-card"><span>מצב מנוי</span><strong class="${esc(status.cls || '')}">${esc(status.text || '—')}</strong></div>
+          <div class="customer-summary-card"><span>תחילת מנוי</span><strong>${esc(fmtDate(subscription.startDate))}</strong></div>
+          <div class="customer-summary-card"><span>תוקף מנוי</span><strong>${esc(fmtDate(subscription.expiryDate))}</strong></div>
+          <div class="customer-summary-card"><span>מחיר</span><strong>${subscription.price != null ? esc(subscription.price) + ' ₪' : '—'}</strong></div>
+          <div class="customer-summary-card"><span>מזהה מכשיר</span><strong dir="ltr">${esc(d.deviceId)}</strong></div>
+          <div class="customer-summary-card"><span>דגם / Android</span><strong>${esc(deviceStatus.model || '—')} · ${esc(deviceStatus.androidVersion || '—')}</strong></div>
+          <div class="customer-summary-card"><span>נראה לאחרונה</span><strong>${esc(fmtDate(d.lastSeenAt || deviceStatus.lastSeen))}</strong></div>
+          <div class="customer-summary-card"><span>נרשם במערכת</span><strong>${esc(fmtDate(d.registeredAt))}</strong></div>
+        </div>
       </div>
 
       <div class="unified-profile-section whatsapp-guard-admin">
@@ -163,6 +176,27 @@
     };
     loadInlineDiagnostics();
     panel.querySelector('[data-inline-diagnostics-refresh]')?.addEventListener('click', loadInlineDiagnostics);
+
+    panel.querySelector('[data-customer-save]')?.addEventListener('click', async e => {
+      const saveBtn = e.currentTarget;
+      const statusEl = panel.querySelector('[data-customer-save-status]');
+      const value = key => panel.querySelector(`[data-customer-field="${key}"]`)?.value.trim() || '';
+      const payload = { firstName:value('firstName'), lastName:value('lastName'), phone:value('phone'), number:value('number'), email:value('email'), address:value('address') };
+      saveBtn.disabled = true;
+      if (statusEl) { statusEl.textContent = 'שומר...'; statusEl.className = 'customer-save-status'; }
+      try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(d.deviceId)}/customer`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+        if (response.status === 401) { document.getElementById('loginScreen').style.display = 'flex'; return; }
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || 'שמירת פרטי הלקוח נכשלה');
+        const idx = devices.findIndex(x => x && x.deviceId === d.deviceId);
+        if (idx >= 0) devices[idx] = body;
+        if (statusEl) { statusEl.textContent = '✓ נשמר וסנכרון נשלח למכשיר'; statusEl.className = 'customer-save-status ok'; }
+        setTimeout(() => render(d.deviceId), 650);
+      } catch (err) {
+        if (statusEl) { statusEl.textContent = err && err.message ? err.message : 'שגיאת תקשורת'; statusEl.className = 'customer-save-status error'; }
+      } finally { saveBtn.disabled = false; }
+    });
 
     panel.querySelectorAll('[data-wa-key]').forEach(btn => btn.addEventListener('click', async e => {
       const key = e.currentTarget.getAttribute('data-wa-key');
@@ -227,10 +261,14 @@
     const digits = q.replace(/\D/g, '');
     return (Array.isArray(window.__allDevices) ? window.__allDevices : []).filter(d => {
       const name = String(d.customerName || '').toLowerCase();
+      const first = String(d.customerFirstName || '').toLowerCase();
+      const last = String(d.customerLastName || '').toLowerCase();
       const number = String(d.customerNumber || '').toLowerCase();
+      const phone = String(d.customerPhone || '').toLowerCase();
+      const email = String(d.customerEmail || '').toLowerCase();
       const id = String(d.deviceId || '').toLowerCase();
-      const numberDigits = number.replace(/\D/g, '');
-      return name.includes(q) || number.includes(q) || id.includes(q) || (digits.length >= 3 && numberDigits.includes(digits));
+      const numberDigits = (number + phone).replace(/\D/g, '');
+      return name.includes(q) || first.includes(q) || last.includes(q) || number.includes(q) || phone.includes(q) || email.includes(q) || id.includes(q) || (digits.length >= 3 && numberDigits.includes(digits));
     });
   }
 

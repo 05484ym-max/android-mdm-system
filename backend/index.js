@@ -315,6 +315,12 @@ function subscriptionAccess(device, now = new Date()) {
     subscriptionExpiryDate: device.subscription && device.subscription.expiryDate
       ? device.subscription.expiryDate
       : null,
+    subscriptionStartDate: device.subscription && device.subscription.startDate
+      ? device.subscription.startDate
+      : null,
+    subscriptionPrice: device.subscription && Number.isFinite(Number(device.subscription.price))
+      ? Number(device.subscription.price)
+      : null,
     source: subscriptionActive ? 'SUBSCRIPTION' : permanent ? 'PERMANENT' : temporary ? 'TEMPORARY' : 'NONE',
   };
 }
@@ -1014,22 +1020,36 @@ app.post('/api/devices/:deviceId/full-open', fullOpenPreAuthLimiter, requireAdmi
 }));
 
 app.post('/api/devices/:deviceId/customer', requireAdmin, wrap(async (req, res) => {
-  const { name, number } = req.body;
-  if (name != null && typeof name !== 'string') {
-    return res.status(400).json({ error: 'name must be a string' });
-  }
-  if (number != null && typeof number !== 'string') {
-    return res.status(400).json({ error: 'number must be a string' });
+  const { name, number, firstName, lastName, email, phone, address } = req.body || {};
+  const fields = { name, number, firstName, lastName, email, phone, address };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value != null && typeof value !== 'string') {
+      return res.status(400).json({ error: `${key} must be a string` });
+    }
   }
   const device = await db.getDevice(req.params.deviceId);
-  if (!device) {
-    return res.status(404).json({ error: 'device not found' });
+  if (!device) return res.status(404).json({ error: 'device not found' });
+
+  const clean = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
+  const cleanFirst = clean(firstName, 60);
+  const cleanLast = clean(lastName, 60);
+  const legacyName = clean(name, 120);
+  const displayName = legacyName || [cleanFirst, cleanLast].filter(Boolean).join(' ');
+  const cleanEmail = clean(email, 160);
+  if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return res.status(400).json({ error: 'invalid email' });
   }
-  const updated = await db.setCustomerInfo(
-    req.params.deviceId,
-    name ? name.slice(0, 100) : null,
-    number ? number.slice(0, 50) : null,
-  );
+
+  const updated = await db.setCustomerInfo(req.params.deviceId, {
+    name: displayName,
+    number: clean(number, 50),
+    firstName: cleanFirst,
+    lastName: cleanLast,
+    email: cleanEmail,
+    phone: clean(phone, 50),
+    address: clean(address, 240),
+  });
+  await push.wake(device.pushToken);
   res.json(publicDevice(updated));
 }));
 
@@ -2025,6 +2045,11 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
   policy.fullOpen = fullOpen;
   policy.customerName = req.device.customerName || null;
   policy.customerNumber = req.device.customerNumber || null;
+  policy.customerFirstName = req.device.customerFirstName || null;
+  policy.customerLastName = req.device.customerLastName || null;
+  policy.customerEmail = req.device.customerEmail || null;
+  policy.customerPhone = req.device.customerPhone || req.device.customerNumber || null;
+  policy.customerAddress = req.device.customerAddress || null;
   const allowed = new Set(policy.allowedApps);
 
   // Opportunistic only and globally throttled. Device sync never waits for

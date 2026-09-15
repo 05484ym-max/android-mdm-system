@@ -21,6 +21,7 @@ const subscriptionUi = read('admin-panel/subscription-unblock.js');
 const releaseUi = read('admin-panel/permanent-release.js');
 const appImportUi = read('admin-panel/app-import.js');
 const apkUploadUi = read('admin-panel/apk-upload.js');
+const playStoreSearch = read('backend/playStoreSearch.js');
 
 function includes(source, text, label) {
   assert(source.includes(text), `missing ${label}: ${text}`);
@@ -59,6 +60,11 @@ includes(customerSearch, 'מצב נגישות:', 'separate accessibility status'
 includes(customerSearch, 'data-wa-channels-only', 'channels-only WhatsApp preset');
 includes(customerSearch, 'data-inline-diagnostics-content', 'inline customer diagnostics');
 includes(customerSearch, 'setCustomerFocus(true)', 'focused customer workspace');
+includes(customerSearch, 'data-customer-field="firstName"', 'editable customer first name');
+includes(customerSearch, 'data-customer-field="email"', 'editable customer email');
+includes(customerSearch, 'data-customer-field="address"', 'editable customer address');
+includes(index, 'customerFirstName', 'customer profile sync first name');
+includes(index, 'subscriptionStartDate', 'subscription start sync');
 includes(diagnosticsUi, 'loadDeviceDiagnosticsInline', 'reusable inline diagnostics loader');
 includes(panelHtml, 'data-tab-content="customers"', 'customers workspace');
 includes(panelHtml, 'חיפוש לקוח — שם, מספר לקוח או מזהה מכשיר', 'customer-only search label');
@@ -139,6 +145,9 @@ includes(diagnosticsUi, '/actions/', 'diagnostic repair call');
 includes(diagnosticsUi, 'ENABLE_DNS_FILTERING', 'DNS enable repair action');
 includes(diagnosticsUi, 'DISABLE_DNS_FILTERING', 'DNS disable repair action');
 includes(appImportUi, '/api/apps/play-search', 'Play search UI call');
+includes(appImportUi, 'play-search-grid', 'scrollable Play search result grid');
+includes(playStoreSearch, 'MAX_RESULTS = 80', 'expanded Play result limit');
+includes(playStoreSearch, 'googlePlayScraper.search', 'broad Play scraper search');
 includes(apkUploadUi, '/api/apps/upload-apk', 'APK upload UI call');
 
 console.log('Admin panel functional audit: OK');
