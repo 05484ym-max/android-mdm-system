@@ -9,43 +9,34 @@ import android.util.Log
 class UpdateInstallReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-
         if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            AutoUpdater.restoreInstallBlock(context)
-            // Re-establish the normal staggered cadence after an MDM upgrade.
-            // Do not immediately hammer version.json again right after install.
+            ManagedInstallWindow.forceClose(context)
             UpdateCheckScheduler.scheduleIfNeeded(context)
             return
         }
 
         if (intent.action != ACTION_UPDATE_RESULT) return
 
-        val status =
-            intent.getIntExtra(
-                PackageInstaller.EXTRA_STATUS,
-                PackageInstaller.STATUS_FAILURE
-            )
-
-        val message =
-            intent.getStringExtra(
-                PackageInstaller.EXTRA_STATUS_MESSAGE
-            )
-
+        val status = intent.getIntExtra(
+            PackageInstaller.EXTRA_STATUS,
+            PackageInstaller.STATUS_FAILURE
+        )
+        val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         val versionCode = intent.getLongExtra(EXTRA_VERSION_CODE, -1L).takeIf { it >= 0 }
 
-        AutoUpdater.restoreInstallBlock(context)
+        try {
+            ManagedInstallWindow.close(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore install restriction", e)
+        }
 
         when (status) {
             PackageInstaller.STATUS_SUCCESS -> {
                 Log.i(TAG, "MDM updated successfully")
                 DeviceHealth.recordUpdateResult(context, "SUCCESS", versionCode, null)
             }
-
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                Log.w(
-                    TAG,
-                    "Unexpected user action required"
-                )
+                Log.w(TAG, "Unexpected user action required")
                 DeviceHealth.recordUpdateResult(
                     context,
                     "FAILED",
@@ -53,23 +44,16 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                     "Update unexpectedly requires user action"
                 )
             }
-
             else -> {
-                Log.e(
-                    TAG,
-                    "MDM update failed: $status $message"
-                )
+                Log.e(TAG, "MDM update failed: $status $message")
                 DeviceHealth.recordUpdateResult(context, "FAILED", versionCode, message)
             }
         }
     }
 
     companion object {
-        const val ACTION_UPDATE_RESULT =
-            "org.mdmopen.dpc.UPDATE_RESULT"
-        const val EXTRA_VERSION_CODE =
-            "org.mdmopen.dpc.EXTRA_VERSION_CODE"
-
+        const val ACTION_UPDATE_RESULT = "org.mdmopen.dpc.UPDATE_RESULT"
+        const val EXTRA_VERSION_CODE = "org.mdmopen.dpc.EXTRA_VERSION_CODE"
         private const val TAG = "MdmAutoUpdater"
     }
 }
