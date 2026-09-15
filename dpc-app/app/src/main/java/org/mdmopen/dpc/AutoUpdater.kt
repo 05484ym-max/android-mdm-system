@@ -18,6 +18,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 object AutoUpdater {
 
     private const val TAG = "MdmAutoUpdater"
+    private const val MAX_UPDATE_APK_BYTES = 160L * 1024L * 1024L
+    private const val MAX_METADATA_BYTES = 256L * 1024L
     private val running = AtomicBoolean(false)
 
     fun check(context: Context) {
@@ -60,6 +62,7 @@ object AutoUpdater {
         }
 
         val apkUrl = metadata.optString("apkUrl", "$baseUrl/downloads/mdm.apk")
+        require(URL(apkUrl).protocol == "https") { "Update APK must use HTTPS" }
         Log.i(TAG, "New version: $remoteVersion")
 
         val apk = File(context.cacheDir, "mdm-update-$remoteVersion.apk")
@@ -82,7 +85,22 @@ object AutoUpdater {
             connection.readTimeout = 15000
             connection.requestMethod = "GET"
             if (connection.responseCode !in 200..299) error("HTTP ${connection.responseCode}")
-            return connection.inputStream.bufferedReader().use { it.readText() }
+            val declaredLength = connection.contentLengthLong
+            if (declaredLength > MAX_METADATA_BYTES) error("Update metadata is too large")
+            val bytes = connection.inputStream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var total = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_METADATA_BYTES) error("Update metadata is too large")
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            }
+            return bytes.toString(Charsets.UTF_8)
         } finally {
             connection.disconnect()
         }
@@ -94,9 +112,22 @@ object AutoUpdater {
             connection.connectTimeout = 20000
             connection.readTimeout = 60000
             connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = true
             if (connection.responseCode !in 200..299) error("APK HTTP ${connection.responseCode}")
+            val declaredLength = connection.contentLengthLong
+            if (declaredLength > MAX_UPDATE_APK_BYTES) error("Update APK exceeds the size limit")
             connection.inputStream.use { input ->
-                file.outputStream().use { output -> input.copyTo(output) }
+                file.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_UPDATE_APK_BYTES) error("Update APK exceeds the size limit")
+                        output.write(buffer, 0, read)
+                    }
+                }
             }
         } finally {
             connection.disconnect()
