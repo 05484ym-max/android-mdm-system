@@ -82,7 +82,7 @@ jobs:
               'status and channels remain panel-only on device UI': 'חסימת סטטוסים וערוצים אינה ניתנת לשינוי במכשיר' in customer,
               'managed accessibility settings eject exists': 'shouldEjectManagedAccessibilitySettings' in service and 'ejectManagedAccessibilitySettings' in service and 'SETTINGS_EJECT_DEBOUNCE_MS' in service,
               'installer setup window bypasses settings eject': 'Config.accessibilitySetupWindowActive(this)' in service,
-              'settings eject does not block WhatsApp fail-open path': 'if (!policy.enabled) return false' in service and 'WhatsApp נשאר זמין' in customer,
+              'settings eject does not block WhatsApp fail-open path': 'if (!policy.enabled) return false' in service and 'ACCESSIBILITY_LOST_OPEN' in policy and 'setGuardSuspended(context, dpm, admin, false)' in policy,
               'global back ejection used for status/channel': 'performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)' in engine,
               'no status/channel overlay fallback': 'Status/Channels intentionally have no overlay fallback' in engine,
               'eject debounce exists': 'EJECT_DEBOUNCE_MS' in engine and 'UPDATES_EJECT_DEBOUNCE_MS' in service,
