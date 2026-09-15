@@ -22,6 +22,8 @@ object SyncScheduler {
     private const val UNIQUE_PUSH_TOKEN_WORK = "push-token-registration"
     private const val UNIQUE_ACCESSIBILITY_RELOCK_WORK = "accessibility-policy-relock"
     private const val MIN_INTERVAL_MINUTES = 15L
+    private const val SCHEDULER_PREFS = "sync_scheduler_state"
+    private const val KEY_SCHEDULED_INTERVAL = "scheduled_interval_minutes"
 
     private fun networkConstraints() = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -30,17 +32,21 @@ object SyncScheduler {
     /**
      * Keeps exactly one periodic policy sync. WorkManager survives reboot and
      * retries transient failures with backoff instead of relying on a raw thread.
+     *
+     * PolicySync calls this after every successful sync. Avoid updating the
+     * WorkManager request when the interval did not change: replacing metadata
+     * every cycle is unnecessary scheduler/database work and can disturb batching.
      */
     fun schedule(context: Context) {
         val appContext = context.applicationContext
-
-        // Clean up the old persisted JobScheduler entry after upgrading from the
-        // legacy SyncJobService implementation.
         appContext.getSystemService(JobScheduler::class.java)?.cancel(LEGACY_JOB_ID)
 
         val minutes = Config.syncIntervalMinutes(appContext)
             .coerceAtLeast(MIN_INTERVAL_MINUTES.toInt())
             .toLong()
+
+        val prefs = appContext.getSharedPreferences(SCHEDULER_PREFS, Context.MODE_PRIVATE)
+        if (prefs.getLong(KEY_SCHEDULED_INTERVAL, -1L) == minutes) return
 
         val request = PeriodicWorkRequestBuilder<PolicySyncWorker>(
             minutes,
@@ -55,6 +61,7 @@ object SyncScheduler {
             ExistingPeriodicWorkPolicy.UPDATE,
             request,
         )
+        prefs.edit().putLong(KEY_SCHEDULED_INTERVAL, minutes).apply()
     }
 
     /** Coalesces bursts of FCM pushes while preserving an explicit retry-update. */
@@ -73,16 +80,6 @@ object SyncScheduler {
         )
     }
 
-    /**
-     * Independent Samsung accessibility setup failsafe. There is deliberately no
-     * network constraint: its only job is to restore the local Device Owner
-     * accessibility allowlist if the setup Activity/process dies or never finishes.
-     *
-     * Do not launch Settings from WorkManager here. CustomerActivity owns the one
-     * user-initiated Settings launch. A second background launch shortly afterwards
-     * can destabilize Samsung/One UI Settings and cause the system Settings app to
-     * repeatedly stop while Accessibility is opening.
-     */
     fun enqueueAccessibilityRelock(context: Context) {
         val appContext = context.applicationContext
         val relock = OneTimeWorkRequestBuilder<AccessibilityRelockWorker>()
