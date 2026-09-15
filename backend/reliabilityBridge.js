@@ -2,10 +2,6 @@
 
 const { Pool } = require('pg');
 
-// Long enough for the largest allowed APK to download and reach
-// PackageInstaller on a slow mobile connection. Lost HTTP responses are still
-// retried automatically after the lease expires; the device-side journal makes
-// that redelivery idempotent.
 const COMMAND_LEASE_MS = 10 * 60 * 1000;
 const ENROLL_PENDING_TTL_MS = 2 * 60 * 1000;
 
@@ -17,14 +13,6 @@ function createPool() {
   });
 }
 
-/**
- * Additive reliability layer loaded before legacy index.js.
- *
- * Keeping these changes in a bridge avoids a risky rewrite of the large legacy
- * entrypoint/db module while still replacing the exported operations index.js
- * calls. Once the old files are split into smaller modules this bridge can be
- * folded into the normal persistence layer.
- */
 function installReliabilityBridge(db, push) {
   const pool = createPool();
   const pendingEnrollments = new Map();
@@ -33,9 +21,6 @@ function installReliabilityBridge(db, push) {
     ALTER TABLE commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
     ALTER TABLE commands ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
 
-    -- Commands delivered by an older build had no lease semantics. Do not
-    -- suddenly replay those potentially destructive historical commands on
-    -- deployment. Only commands leased by this build receive a finite lease.
     UPDATE commands
        SET lease_expires_at = 'infinity'::timestamptz
      WHERE delivered_at IS NOT NULL
@@ -63,8 +48,6 @@ function installReliabilityBridge(db, push) {
     if (!Object.prototype.hasOwnProperty.call(device, 'pushToken')) return device;
     const token = device.pushToken;
     delete device.pushToken;
-    // Internal server code can still read device.pushToken, but object spread,
-    // JSON.stringify and publicDevice() cannot serialize this credential.
     Object.defineProperty(device, 'pushToken', {
       value: token,
       enumerable: false,
@@ -74,9 +57,6 @@ function installReliabilityBridge(db, push) {
     return device;
   }
 
-  // Protect every common DB operation that returns a device object. This
-  // closes response paths that call publicDevice(updated) after a mutation,
-  // not only the main device-list endpoint.
   [
     'getDevice',
     'createDevice',
@@ -95,9 +75,6 @@ function installReliabilityBridge(db, push) {
     db[name] = async (...args) => protectPushCredential(await original(...args));
   });
 
-  // Lease instead of permanently consuming before the HTTP response reaches
-  // the device. If sync/HTTP dies, the same command becomes eligible again;
-  // the DPC's durable CommandJournal makes that redelivery idempotent.
   db.takePendingCommands = async function takeLeasedCommands(deviceId) {
     await ready;
     const { rows } = await pool.query(
@@ -123,29 +100,25 @@ function installReliabilityBridge(db, push) {
     return rows.map(toCommand);
   };
 
-  // A terminal result closes the lease permanently. Repeated reports are
-  // intentionally idempotent so a device can safely retry an ACK.
+  // Terminal command state is monotonic: once a command is completed, a late
+  // callback from an older device attempt may not overwrite its result.
   db.completeCommand = async function completeLeasedCommand(deviceId, commandId, status, message) {
     await ready;
     const { rowCount } = await pool.query(
       `UPDATE commands
           SET result_status = $3,
               result_message = $4,
-              completed_at = COALESCE(completed_at, now()),
+              completed_at = now(),
               lease_expires_at = NULL
         WHERE id = $1
           AND device_id = $2
-          AND delivered_at IS NOT NULL`,
+          AND delivered_at IS NOT NULL
+          AND completed_at IS NULL`,
       [commandId, deviceId, status, message || null],
     );
     return rowCount > 0;
   };
 
-  // Existing index.js calls consumeEnrollment() and createDevice() separately.
-  // Convert that pair into one DB transaction without rewriting the entrypoint:
-  // consumeEnrollment validates/reserves only in this process; createDevice
-  // atomically consumes the token and inserts the device. A crash between the
-  // two calls therefore leaves the enrollment token usable instead of burned.
   const originalCreateDevice = db.createDevice.bind(db);
 
   db.consumeEnrollment = async function validateEnrollment(tokenHash, deviceId) {
@@ -205,8 +178,6 @@ function installReliabilityBridge(db, push) {
     }
   };
 
-  // Never expose the FCM credential itself to the admin UI. Expose only a
-  // boolean capability used by diagnostics.
   const originalListDevices = db.listDevices.bind(db);
   db.listDevices = async function listDevicesWithPushState() {
     await ready;
@@ -238,9 +209,6 @@ function installReliabilityBridge(db, push) {
     };
   }
 
-  // Firebase can explicitly tell us a registration token is permanently dead.
-  // Clear it by value so future admin actions stop wasting push attempts; normal
-  // polling remains the fallback and a new FCM token will register itself.
   if (push && typeof push.wake === 'function') {
     const originalWake = push.wake.bind(push);
     push.wake = async function wakeAndPrune(pushToken, data) {
