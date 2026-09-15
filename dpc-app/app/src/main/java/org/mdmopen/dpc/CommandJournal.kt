@@ -37,13 +37,15 @@ object CommandJournal {
     fun markStarted(context: Context, commandId: String, metadata: String? = null) {
         val existing = get(context, commandId)
         if (existing?.terminal == true) return
+        val effectiveMetadata = metadata ?: existing?.metadata
+        val isNewAttempt = metadata != null && metadata != existing?.metadata
         put(
             context,
             commandId,
             "STARTED",
             null,
-            metadata ?: existing?.metadata,
-            existing?.startedAt ?: System.currentTimeMillis(),
+            effectiveMetadata,
+            if (isNewAttempt) System.currentTimeMillis() else existing?.startedAt ?: System.currentTimeMillis(),
         )
     }
 
@@ -65,6 +67,7 @@ object CommandJournal {
     fun markTerminal(context: Context, commandId: String, status: String, message: String?) {
         require(status == "SUCCESS" || status == "FAILED")
         val existing = get(context, commandId)
+        if (existing?.terminal == true) return
         put(
             context,
             commandId,
