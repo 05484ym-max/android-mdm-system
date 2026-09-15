@@ -14,12 +14,10 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Single source of truth for temporarily lifting DISALLOW_INSTALL_APPS.
- *
  * PackageInstaller checks the restriction when createSession() is called, so callers
- * must open this window before session creation. A small persisted reference count
- * keeps overlapping managed installs from closing the window under each other, and
- * a WorkManager failsafe restores the restriction if a callback is lost or the
- * process is killed after opening the window.
+ * must open this window before session creation. Persisted reference counting protects
+ * overlapping installs; a bounded WorkManager failsafe restores the restriction if a
+ * callback is lost or the process dies after opening the window.
  */
 object ManagedInstallWindow {
     private const val TAG = "ManagedInstallWindow"
@@ -45,8 +43,13 @@ object ManagedInstallWindow {
         if (current == 0) {
             dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
         }
-        check(prefs.edit().putInt(KEY_ACTIVE, current + 1).commit()) {
-            "Could not persist managed-install window"
+
+        val persisted = prefs.edit().putInt(KEY_ACTIVE, current + 1).commit()
+        if (!persisted) {
+            if (current == 0) {
+                dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
+            }
+            error("Could not persist managed-install window")
         }
         scheduleFailsafe(appContext)
     }
@@ -65,15 +68,13 @@ object ManagedInstallWindow {
         }
     }
 
-    /** Security recovery used after boot/package replacement and by the timeout worker. */
     @Synchronized
     fun forceClose(context: Context) {
         val appContext = context.applicationContext
         appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putInt(KEY_ACTIVE, 0).commit()
 
-        // Migrate stale flags left by older builds so upgrading cannot strand the
-        // device with installs allowed indefinitely.
+        // Clean legacy state from the two pre-centralization implementations.
         appContext.getSharedPreferences("dpc_updater", Context.MODE_PRIVATE)
             .edit().putBoolean("install_in_progress", false).apply()
         appContext.getSharedPreferences("dpc_installer", Context.MODE_PRIVATE)
