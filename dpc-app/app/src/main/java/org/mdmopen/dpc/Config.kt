@@ -54,6 +54,13 @@ object Config {
     private const val KEY_ACCESSIBILITY_SETUP_ACTIVE = "accessibility_setup_window_active"
     private const val KEY_CUSTOMER_NAME = "customer_name"
     private const val KEY_CUSTOMER_NUMBER = "customer_number"
+    private const val KEY_CUSTOMER_FIRST_NAME = "customer_first_name"
+    private const val KEY_CUSTOMER_LAST_NAME = "customer_last_name"
+    private const val KEY_CUSTOMER_EMAIL = "customer_email"
+    private const val KEY_CUSTOMER_PHONE = "customer_phone"
+    private const val KEY_CUSTOMER_ADDRESS = "customer_address"
+    private const val KEY_SUBSCRIPTION_START_DATE = "subscription_start_date"
+    private const val KEY_SUBSCRIPTION_PRICE = "subscription_price"
 
     const val DEFAULT_SYNC_MINUTES = 60
 
@@ -238,11 +245,21 @@ object Config {
     fun subscriptionExpiryDate(context: Context): String? =
         prefs(context).getString(KEY_SUBSCRIPTION_EXPIRY_DATE, null)
 
+    fun subscriptionStartDate(context: Context): String? = prefs(context).getString(KEY_SUBSCRIPTION_START_DATE, null)
+
+    fun subscriptionPrice(context: Context): Double? {
+        val p = prefs(context)
+        return if (p.contains(KEY_SUBSCRIPTION_PRICE)) java.lang.Double.longBitsToDouble(p.getLong(KEY_SUBSCRIPTION_PRICE, 0L)) else null
+    }
+
     fun setSubscriptionAccess(context: Context, access: SubscriptionAccess) {
-        prefs(context).edit()
+        val edit = prefs(context).edit()
             .putBoolean(KEY_STORE_ACCESS_ALLOWED, access.allowed)
             .putString(KEY_SUBSCRIPTION_EXPIRY_DATE, access.subscriptionExpiryDate)
-            .apply()
+            .putString(KEY_SUBSCRIPTION_START_DATE, access.subscriptionStartDate)
+        if (access.subscriptionPrice != null) edit.putLong(KEY_SUBSCRIPTION_PRICE, java.lang.Double.doubleToRawLongBits(access.subscriptionPrice))
+        else edit.remove(KEY_SUBSCRIPTION_PRICE)
+        edit.apply()
     }
 
     fun kioskEnabled(context: Context): Boolean =
@@ -289,6 +306,24 @@ object Config {
 
     fun setCustomerNumber(context: Context, number: String?) {
         prefs(context).edit().putString(KEY_CUSTOMER_NUMBER, number).apply()
+    }
+
+    fun customerFirstName(context: Context): String? = prefs(context).getString(KEY_CUSTOMER_FIRST_NAME, null)
+    fun customerLastName(context: Context): String? = prefs(context).getString(KEY_CUSTOMER_LAST_NAME, null)
+    fun customerEmail(context: Context): String? = prefs(context).getString(KEY_CUSTOMER_EMAIL, null)
+    fun customerPhone(context: Context): String? = prefs(context).getString(KEY_CUSTOMER_PHONE, null)
+    fun customerAddress(context: Context): String? = prefs(context).getString(KEY_CUSTOMER_ADDRESS, null)
+
+    fun setCustomerProfile(context: Context, policy: Policy) {
+        prefs(context).edit()
+            .putString(KEY_CUSTOMER_NAME, policy.customerName)
+            .putString(KEY_CUSTOMER_NUMBER, policy.customerNumber)
+            .putString(KEY_CUSTOMER_FIRST_NAME, policy.customerFirstName)
+            .putString(KEY_CUSTOMER_LAST_NAME, policy.customerLastName)
+            .putString(KEY_CUSTOMER_EMAIL, policy.customerEmail)
+            .putString(KEY_CUSTOMER_PHONE, policy.customerPhone)
+            .putString(KEY_CUSTOMER_ADDRESS, policy.customerAddress)
+            .apply()
     }
 
     /** Epoch millis of the last successful sync, for the "last updated" label. */
