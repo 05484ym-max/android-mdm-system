@@ -101,6 +101,9 @@ class WhatsAppGuardEngine(
             }
         }
 
+        // Status/Channels intentionally have no overlay fallback. They are enforced by
+        // click ejection only, so a classification miss fails open instead of covering
+        // unrelated WhatsApp content with a stale mask.
         overlays.endFrame()
     }
 
