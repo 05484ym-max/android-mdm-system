@@ -39,9 +39,7 @@ class WhatsAppGuardService : AccessibilityService() {
 
         val policy = WhatsAppGuardConfig.load(this)
 
-        // Block the Updates tab at the navigation click itself. We deliberately inspect
-        // only the clicked source/event payload here, not the whole active window, so
-        // unrelated WhatsApp clicks cannot be mistaken for Updates.
+        // Navigation blocking remains immediate; render throttling below never delays it.
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && shouldBlockUpdatesClick(event, policy)) {
             blockUpdatesNavigation()
             return
@@ -130,8 +128,11 @@ class WhatsAppGuardService : AccessibilityService() {
 
     companion object {
         const val WHATSAPP_PACKAGE = "com.whatsapp"
-        private const val COALESCE_DELAY_MS = 50L
-        private const val MIN_RENDER_INTERVAL_MS = 24L
+        // Accessibility can emit dozens of content-change events per second while
+        // lists animate/scroll. 80 ms keeps masks visually responsive (~12.5 fps)
+        // while avoiding repeated full accessibility-tree scans at ~40 fps.
+        private const val COALESCE_DELAY_MS = 80L
+        private const val MIN_RENDER_INTERVAL_MS = 80L
         private const val UPDATES_EJECT_DEBOUNCE_MS = 650L
         private const val BLOCKED_SCREEN_DELAY_MS = 90L
         private val RENDER_TOKEN = Any()
