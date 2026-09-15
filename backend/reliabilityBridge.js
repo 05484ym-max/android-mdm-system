@@ -1,9 +1,13 @@
 'use strict';
 
+const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const COMMAND_LEASE_MS = 10 * 60 * 1000;
 const ENROLL_PENDING_TTL_MS = 2 * 60 * 1000;
+const ENROLL_RETRY_TTL_MS = 60 * 60 * 1000;
+const IMAGE_CACHE_RETENTION_DAYS = 90;
+const IMAGE_CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 function createPool() {
   return new Pool({
@@ -13,9 +17,26 @@ function createPool() {
   });
 }
 
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function enrollmentSecret() {
+  return process.env.ENROLLMENT_IDEMPOTENCY_SECRET || process.env.JWT_SECRET || null;
+}
+
+function deriveEnrollmentToken(tokenHash) {
+  const secret = enrollmentSecret();
+  if (!secret) throw new Error('enrollment idempotency secret is not configured');
+  return crypto.createHmac('sha256', secret)
+    .update(`device-enrollment:${tokenHash}`)
+    .digest('hex');
+}
+
 function installReliabilityBridge(db, push) {
   const pool = createPool();
   const pendingEnrollments = new Map();
+  let lastImageCacheCleanupAt = 0;
 
   const ready = pool.query(`
     ALTER TABLE commands ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
@@ -30,6 +51,12 @@ function installReliabilityBridge(db, push) {
     CREATE INDEX IF NOT EXISTS commands_lease_due_idx
       ON commands (device_id, queued_at)
       WHERE completed_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS enrollment_attempts (
+      token_hash TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
 
   function toCommand(row) {
@@ -100,8 +127,6 @@ function installReliabilityBridge(db, push) {
     return rows.map(toCommand);
   };
 
-  // Terminal command state is monotonic: once a command is completed, a late
-  // callback from an older device attempt may not overwrite its result.
   db.completeCommand = async function completeLeasedCommand(deviceId, commandId, status, message) {
     await ready;
     const { rowCount } = await pool.query(
@@ -119,8 +144,84 @@ function installReliabilityBridge(db, push) {
     return rowCount > 0;
   };
 
-  const originalCreateDevice = db.createDevice.bind(db);
+  /**
+   * Atomic and response-loss-safe enrollment. The one-time enrollment token
+   * itself is the idempotency key. For one hour after a successful commit, a
+   * retry of that same secret receives the same device identity and the same
+   * deterministic auth token. After that window a consumed code cannot be used
+   * to recover/rotate credentials; the normal recovery-code flow remains the
+   * only recovery mechanism.
+   */
+  db.registerDeviceIdempotent = async function registerDeviceIdempotent(tokenHash, candidateDeviceId) {
+    await ready;
+    const deviceToken = deriveEnrollmentToken(tokenHash);
+    const authTokenHash = sha256(deviceToken);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
+      const prior = await client.query(
+        `SELECT device_id, created_at
+           FROM enrollment_attempts
+          WHERE token_hash = $1
+          FOR UPDATE`,
+        [tokenHash],
+      );
+      if (prior.rowCount) {
+        const row = prior.rows[0];
+        if (Date.now() - new Date(row.created_at).getTime() > ENROLL_RETRY_TTL_MS) {
+          await client.query('ROLLBACK');
+          return null;
+        }
+        const device = await client.query(
+          'SELECT 1 FROM devices WHERE device_id = $1 AND auth_token_hash = $2',
+          [row.device_id, authTokenHash],
+        );
+        if (!device.rowCount) {
+          throw new Error('enrollment retry state no longer matches device credential');
+        }
+        await client.query('COMMIT');
+        return { deviceId: row.device_id, deviceToken, replayed: true };
+      }
+
+      const consumed = await client.query(
+        `UPDATE enrollments
+            SET used_at = now(), device_id = $2
+          WHERE token_hash = $1
+            AND purpose = 'ENROLL'
+            AND used_at IS NULL
+            AND expires_at > now()
+        RETURNING id`,
+        [tokenHash, candidateDeviceId],
+      );
+      if (!consumed.rowCount) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+
+      await client.query(
+        `INSERT INTO devices (device_id, auth_token_hash)
+         VALUES ($1, $2)`,
+        [candidateDeviceId, authTokenHash],
+      );
+      await client.query(
+        `INSERT INTO enrollment_attempts (token_hash, device_id)
+         VALUES ($1, $2)`,
+        [tokenHash, candidateDeviceId],
+      );
+      await client.query('COMMIT');
+      return { deviceId: candidateDeviceId, deviceToken, replayed: false };
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  // Compatibility for legacy code paths that still call consume/create
+  // separately. New /register uses registerDeviceIdempotent directly.
+  const originalCreateDevice = db.createDevice.bind(db);
   db.consumeEnrollment = async function validateEnrollment(tokenHash, deviceId) {
     await ready;
     const { rowCount } = await pool.query(
@@ -206,6 +307,26 @@ function installReliabilityBridge(db, push) {
         ...device,
         hasPushToken: pushState.get(device.deviceId) === true,
       }));
+    };
+  }
+
+  // Bound the persistent public-image moderation cache. Cleanup is at most once
+  // per hour and piggybacks on real writes, so there is no wakeup/timer when the
+  // service is idle.
+  if (typeof db.saveBrowserImageModeration === 'function') {
+    const originalSaveBrowserImageModeration = db.saveBrowserImageModeration.bind(db);
+    db.saveBrowserImageModeration = async function saveModerationWithRetention(...args) {
+      const now = Date.now();
+      if (now - lastImageCacheCleanupAt >= IMAGE_CACHE_CLEANUP_INTERVAL_MS) {
+        lastImageCacheCleanupAt = now;
+        await ready;
+        await pool.query(
+          `DELETE FROM browser_image_moderation_cache
+            WHERE checked_at < now() - ($1 * interval '1 day')`,
+          [IMAGE_CACHE_RETENTION_DAYS],
+        );
+      }
+      return originalSaveBrowserImageModeration(...args);
     };
   }
 
