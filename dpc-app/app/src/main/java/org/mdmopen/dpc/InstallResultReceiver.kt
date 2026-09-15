@@ -13,6 +13,7 @@ class InstallResultReceiver : BroadcastReceiver() {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, Int.MIN_VALUE)
         val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+        val commandId = intent.getStringExtra(AppInstaller.EXTRA_COMMAND_ID)
 
         if (intent.getBooleanExtra(AppInstaller.EXTRA_MANAGED_INSTALL_WINDOW, false)) {
             try {
@@ -22,13 +23,42 @@ class InstallResultReceiver : BroadcastReceiver() {
             }
         }
 
-        when (status) {
-            PackageInstaller.STATUS_SUCCESS ->
+        val terminal = when (status) {
+            PackageInstaller.STATUS_SUCCESS -> {
                 Log.i(PolicySync.TAG, "Package operation succeeded: $packageName")
-            PackageInstaller.STATUS_PENDING_USER_ACTION ->
+                "SUCCESS" to "Package operation succeeded: ${packageName ?: "unknown"}"
+            }
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 Log.w(PolicySync.TAG, "Package operation needs user action - not device owner?")
-            else ->
+                "FAILED" to "Package operation unexpectedly requires user action"
+            }
+            else -> {
                 Log.w(PolicySync.TAG, "Package operation failed ($status): $message")
+                "FAILED" to (message ?: "Package operation failed with status $status")
+            }
         }
+
+        if (commandId == null) return
+
+        // Persist first. If the process/network dies while reporting the result,
+        // a leased redelivery will see this terminal journal entry and re-report
+        // without executing the install/uninstall a second time.
+        CommandJournal.markTerminal(context, commandId, terminal.first, terminal.second)
+
+        val pending = goAsync()
+        Thread({
+            try {
+                val token = Config.deviceToken(context) ?: return@Thread
+                val serverUrl = Config.serverUrl(context)
+                if (serverUrl.isBlank()) return@Thread
+                ApiClient(serverUrl, token).reportCommandResult(
+                    Config.deviceId(context), commandId, terminal.first, terminal.second,
+                )
+            } catch (e: Exception) {
+                Log.w(PolicySync.TAG, "Could not report package command result; sync will retry", e)
+            } finally {
+                pending.finish()
+            }
+        }, "mdm-package-result").start()
     }
 }
