@@ -54,8 +54,8 @@ jobs:
           SRC=dpc-app/app/src/main/java/org/mdmopen/dpc
           grep -q 'object CommandJournal' "$SRC/CommandJournal.kt"
           grep -q 'ManagedInstallWindow.open' "$SRC/PlayStoreGate.kt"
-          if grep -q 'DISALLOW_INSTALL_APPS' "$SRC/PlayStoreGate.kt"; then
-            echo 'PlayStoreGate must not own DISALLOW_INSTALL_APPS directly' >&2
+          if grep -qE 'clearUserRestriction\(|addUserRestriction\(' "$SRC/PlayStoreGate.kt"; then
+            echo 'PlayStoreGate must not mutate install restrictions directly' >&2
             exit 1
           fi
           grep -q 'setDesiredInstallBlocked' "$SRC/PolicySync.kt"
