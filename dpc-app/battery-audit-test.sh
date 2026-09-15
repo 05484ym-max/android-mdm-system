@@ -11,9 +11,12 @@ wa="$SRC/WhatsAppGuardWatchdog.kt"
 service="$SRC/WhatsAppGuardService.kt"
 policy="$SRC/PolicySync.kt"
 
-# Network work must remain constrained and push bursts coalesced.
+# Network work must remain constrained. A push that arrives while another push
+# sync is already running must queue exactly one serialized follow-up instead of
+# being dropped by KEEP; APPEND_OR_REPLACE preserves WorkManager serialization
+# while guaranteeing the newer server state is observed.
 grep -q 'NetworkType.CONNECTED' "$sync"
-grep -q 'ExistingWorkPolicy.KEEP' "$sync"
+grep -q 'ExistingWorkPolicy.APPEND_OR_REPLACE' "$sync"
 grep -q 'KEY_SCHEDULED_INTERVAL' "$sync"
 
 # DNS immediate job and updater must never share a JobScheduler ID.
