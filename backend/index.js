@@ -1091,8 +1091,32 @@ app.post('/api/apps', requireAdmin, wrap(async (req, res) => {
   res.json(await db.listAppsCatalog());
 }));
 
+async function isKnownAppCategory(key) {
+  return appCategories.isValidCategoryKey(key) || await db.customAppCategoryExists(key);
+}
+
 app.get('/api/apps/categories', requireAdmin, wrap(async (req, res) => {
-  res.json(appCategories.CATEGORIES);
+  const custom = await db.listCustomAppCategories();
+  res.json([...appCategories.CATEGORIES, ...custom]);
+}));
+
+app.post('/api/apps/categories', requireAdmin, wrap(async (req, res) => {
+  const label = typeof req.body?.label === 'string' ? req.body.label.trim() : '';
+  if (!label || label.length > 40) {
+    return res.status(400).json({ error: 'category label must be 1-40 characters' });
+  }
+  const fixedDuplicate = appCategories.CATEGORIES.find(c => c.label.toLocaleLowerCase('he') === label.toLocaleLowerCase('he'));
+  if (fixedDuplicate) return res.json(fixedDuplicate);
+  const key = 'custom_' + sha256(label.toLocaleLowerCase('he')).slice(0, 16);
+  try {
+    res.json(await db.createCustomAppCategory(key, label));
+  } catch (e) {
+    if (e && e.code === '23505') {
+      const existing = (await db.listCustomAppCategories()).find(c => c.label.toLocaleLowerCase('he') === label.toLocaleLowerCase('he'));
+      if (existing) return res.json(existing);
+    }
+    throw e;
+  }
 }));
 
 const MAX_SORT_ORDER = 100000;
@@ -1113,7 +1137,7 @@ app.post('/api/apps/:packageName/catalog-meta', requireAdmin, wrap(async (req, r
   }
   const patch = {};
   if (req.body.category !== undefined) {
-    if (!appCategories.isValidCategoryKey(req.body.category)) {
+    if (!(await isKnownAppCategory(req.body.category))) {
       return res.status(400).json({ error: 'invalid category' });
     }
     patch.category = req.body.category;
@@ -1208,7 +1232,7 @@ app.post('/api/apps/upload-apk', requireAdmin, (req, res, next) => {
 
   let category = null;
   if (req.body.category !== undefined && req.body.category !== '') {
-    if (!appCategories.isValidCategoryKey(req.body.category)) {
+    if (!(await isKnownAppCategory(req.body.category))) {
       return res.status(400).json({ error: 'invalid category' });
     }
     category = req.body.category;

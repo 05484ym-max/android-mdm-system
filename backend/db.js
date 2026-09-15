@@ -58,6 +58,14 @@ ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS category_source TEXT NOT NULL 
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS is_recommended BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
 
+CREATE TABLE IF NOT EXISTS app_custom_categories (
+  category_key TEXT PRIMARY KEY,
+  label        TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS app_custom_categories_label_unique
+  ON app_custom_categories (lower(label));
+
 -- Persistent APK upload. Additive defaults preserve every existing Play row.
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_url TEXT;
 ALTER TABLE apps_catalog ADD COLUMN IF NOT EXISTS apk_sha256 TEXT;
@@ -1723,8 +1731,36 @@ async function saveBrowserImageModeration({
   };
 }
 
+async function listCustomAppCategories() {
+  const { rows } = await pool.query(
+    `SELECT category_key, label FROM app_custom_categories ORDER BY lower(label), category_key`
+  );
+  return rows.map(row => ({ key: row.category_key, label: row.label }));
+}
+
+async function customAppCategoryExists(key) {
+  if (typeof key !== 'string' || !key) return false;
+  const { rowCount } = await pool.query(
+    'SELECT 1 FROM app_custom_categories WHERE category_key = $1 LIMIT 1', [key]
+  );
+  return rowCount > 0;
+}
+
+async function createCustomAppCategory(key, label) {
+  const { rows } = await pool.query(
+    `INSERT INTO app_custom_categories (category_key, label) VALUES ($1, $2)
+     ON CONFLICT (category_key) DO UPDATE SET label = EXCLUDED.label
+     RETURNING category_key, label`,
+    [key, label]
+  );
+  return { key: rows[0].category_key, label: rows[0].label };
+}
+
 module.exports = {
   init,
+  listCustomAppCategories,
+  customAppCategoryExists,
+  createCustomAppCategory,
   getDevice,
   listDevices,
   deleteDevice,
