@@ -2,7 +2,11 @@
 
 const { Pool } = require('pg');
 
-const COMMAND_LEASE_MS = 2 * 60 * 1000;
+// Long enough for the largest allowed APK to download and reach
+// PackageInstaller on a slow mobile connection. Lost HTTP responses are still
+// retried automatically after the lease expires; the device-side journal makes
+// that redelivery idempotent.
+const COMMAND_LEASE_MS = 10 * 60 * 1000;
 const ENROLL_PENDING_TTL_MS = 2 * 60 * 1000;
 
 function createPool() {
