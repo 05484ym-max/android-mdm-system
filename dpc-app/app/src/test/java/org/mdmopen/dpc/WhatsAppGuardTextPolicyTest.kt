@@ -75,8 +75,7 @@ class WhatsAppGuardTextPolicyTest {
     fun updates_tab_is_not_mistaken_for_a_status_target() {
         val id = "com.whatsapp:id/status_tab"
         assertTrue(WhatsAppGuardTerms.isUpdates(null, id))
-        assertTrue(WhatsAppGuardTerms.isStatus(null, id))
-        // Engine must always exclude isUpdates(...) before treating this as Status.
+        assertFalse(WhatsAppGuardTerms.isStatus(null, id))
     }
 
     @Test
