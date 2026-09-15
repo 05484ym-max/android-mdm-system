@@ -1,0 +1,43 @@
+name: Run Customer Profile Patch
+on:
+  push:
+    branches:
+      - feat/customer-profile-app-catalog-polish
+    paths:
+      - scripts/patch_customer_profile.py
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/customer-profile-app-catalog-polish
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply patch
+        run: python3 scripts/patch_customer_profile.py
+      - name: Verify JavaScript and admin contracts
+        run: |
+          node --check backend/index.js
+          node --check backend/db.js
+          node --check backend/playStoreSearch.js
+          for f in admin-panel/*.js; do node --check "$f"; done
+          cd backend
+          node test-admin-panel-functional-audit.js
+      - name: Verify Android
+        working-directory: dpc-app
+        run: gradle testDebugUnitTest --no-daemon
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/run-customer-profile-patch.yml scripts/patch_customer_profile.py
+          git add admin-panel backend dpc-app
+          git diff --cached --check
+          git commit -m "Polish customer profile and expand Play search"
+          git push origin HEAD:feat/customer-profile-app-catalog-polish
