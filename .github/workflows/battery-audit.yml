@@ -1,0 +1,24 @@
+name: DPC Battery Audit
+
+on:
+  pull_request:
+    paths:
+      - 'dpc-app/**'
+      - '.github/workflows/battery-audit.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'dpc-app/**'
+      - '.github/workflows/battery-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  battery-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify battery-friendly scheduling invariants
+        run: bash dpc-app/battery-audit-test.sh
+      - name: Compile DPC
+        working-directory: dpc-app
+        run: ./gradlew :app:compileDebugKotlin --no-daemon
