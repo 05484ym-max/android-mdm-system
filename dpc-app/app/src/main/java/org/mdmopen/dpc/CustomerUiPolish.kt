@@ -139,19 +139,27 @@ class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
 
     private fun equaliseStoreCards(activity: Activity, view: View) {
         if (view is LinearLayout && looksLikeStoreTile(view)) {
+            // Every app tile gets the exact same outer height, regardless of
+            // app-name length or whether its status is Install/Installed/Update.
             val cardHeight = dp(activity, 242)
             val lp = view.layoutParams
             if (lp != null && lp.height != cardHeight) {
                 lp.height = cardHeight
                 view.layoutParams = lp
             }
+            view.minimumHeight = cardHeight
 
             (view.getChildAt(1) as? TextView)?.let { name ->
                 name.minHeight = dp(activity, 46)
+                name.minLines = 2
+                name.maxLines = 2
+                name.ellipsize = android.text.TextUtils.TruncateAt.END
                 name.gravity = android.view.Gravity.CENTER
             }
             (view.getChildAt(2) as? TextView)?.let { category ->
                 category.minHeight = dp(activity, 31)
+                category.maxLines = 1
+                category.ellipsize = android.text.TextUtils.TruncateAt.END
                 category.gravity = android.view.Gravity.CENTER
             }
         }
@@ -168,7 +176,9 @@ class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
         val status = view.getChildAt(3) as? TextView ?: return false
         if (name.text.isNullOrBlank() || category.text.isNullOrBlank()) return false
         val statusText = status.text?.toString().orEmpty()
-        return statusText.contains("מותקן") || statusText == "התקנה" || statusText == "עדכן"
+        return statusText == "התקנה" ||
+            statusText.contains("מותקן") ||
+            statusText.contains("עדכון")
     }
 
     private fun dp(activity: Activity, value: Int): Int =
