@@ -2,199 +2,27 @@ name: Patch Play Update Watcher
 
 on:
   push:
-    branches: [ feat/play-update-watcher ]
+    branches:
+      - feat/play-update-watcher
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feat/play-update-watcher
-      - name: Patch backend and Android client
+      - name: Apply implementation patch
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
-          s = p.read_text()
-          old = '''    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
-        if (!installed) return false
-        return false
-    }
-'''
-          new = '''    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
-        if (!installed || app.appSource != "PLAY") return false
-        val remoteVersion = app.playVersion
-            ?.trim()
-            ?.takeIf { version ->
-                version.isNotEmpty() &&
-                    !version.equals("Varies with device", ignoreCase = true) &&
-                    !version.contains("משתנה", ignoreCase = true)
-            }
-            ?: return false
-
-        @Suppress("DEPRECATION")
-        val installedVersion = try {
-            packageManager.getPackageInfo(app.packageName, 0).versionName?.trim()
-        } catch (_: PackageManager.NameNotFoundException) {
-            null
-        }
-        return !installedVersion.isNullOrBlank() && installedVersion != remoteVersion
-    }
-'''
-          if old not in s:
-              raise SystemExit('CustomerActivity isUpdateAvailable block not found')
-          p.write_text(s.replace(old, new, 1))
-
-          p = Path('backend/db.js')
-          s = p.read_text()
-          marker = '''async function listDevices() {
-'''
-          helper = '''async function listPushTokensForApp(packageName) {
-  const { rows } = await pool.query(
-    `SELECT DISTINCT push_token
-       FROM devices
-      WHERE push_token IS NOT NULL
-        AND push_token <> ''
-        AND (
-          full_open_mode = true
-          OR COALESCE(policy->'allowedApps', '[]'::jsonb) ? $1
-        )`,
-    [packageName],
-  );
-  return rows.map(row => row.push_token).filter(Boolean);
-}
-
-'''
-          if marker not in s:
-              raise SystemExit('db listDevices marker not found')
-          s = s.replace(marker, helper + marker, 1)
-          export_marker = '''  listDevices,
-'''
-          if export_marker not in s:
-              raise SystemExit('db export marker not found')
-          s = s.replace(export_marker, '''  listDevices,
-  listPushTokensForApp,
-''', 1)
-          p.write_text(s)
-
-          p = Path('backend/index.js')
-          s = p.read_text()
-          old_constants = '''const PLAY_METADATA_FRESH_MS = 30 * 60 * 1000;
-const AUTO_PLAY_REFRESH_BATCH_SIZE = 3;
-const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
-const AUTO_PLAY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-'''
-          new_constants = '''const PLAY_METADATA_FRESH_MS = 10 * 60 * 1000;
-const AUTO_PLAY_REFRESH_BATCH_SIZE = 10;
-const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
-const AUTO_PLAY_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
-'''
-          if old_constants not in s:
-              raise SystemExit('Play refresh constants block not found')
-          s = s.replace(old_constants, new_constants, 1)
-
-          function_marker = '''async function refreshOnePlayPackage(packageName) {
-'''
-          helpers = '''function usablePlayVersion(value) {
-  const version = typeof value === 'string' ? value.trim() : '';
-  if (!version) return null;
-  if (/varies with device/i.test(version) || /משתנה/i.test(version)) return null;
-  return version;
-}
-
-function playVersionChanged(previous, appInfo) {
-  if (!previous) return false;
-  const before = usablePlayVersion(previous.playVersion);
-  const after = usablePlayVersion(appInfo && appInfo.version);
-  return Boolean(before && after && before !== after);
-}
-
-async function wakeDevicesForPlayUpdate(packageName) {
-  const tokens = await db.listPushTokensForApp(packageName);
-  if (!tokens.length) return 0;
-  const results = await Promise.allSettled(tokens.map(token => push.wake(token, {
-    action: 'sync',
-    reason: 'app_update',
-    packageName,
-  })));
-  return results.filter(item => item.status === 'fulfilled' && item.value && item.value.sent).length;
-}
-
-'''
-          if function_marker not in s:
-              raise SystemExit('refreshOnePlayPackage marker not found')
-          s = s.replace(function_marker, helpers + function_marker, 1)
-
-          old_refresh = '''async function refreshOnePlayPackage(packageName) {
-  try {
-    const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
-    await db.addAppToCatalog(
-      appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
-      appInfo.category,
-    );
-    await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
-    return true;
-  } catch (e) {
-'''
-          new_refresh = '''async function refreshOnePlayPackage(packageName) {
-  try {
-    const previous = (await db.listAppsCatalog()).find(app => app.packageName === packageName) || null;
-    const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
-    const changed = playVersionChanged(previous, appInfo);
-    await db.addAppToCatalog(
-      appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
-      appInfo.category,
-    );
-    await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
-    if (changed) {
-      const woken = await wakeDevicesForPlayUpdate(appInfo.packageName);
-      console.log(`[auto-play-metadata] update detected for ${appInfo.packageName}: ${previous.playVersion} -> ${appInfo.version}; push wake sent to ${woken} device(s)`);
-    }
-    return true;
-  } catch (e) {
-'''
-          if old_refresh not in s:
-              raise SystemExit('refreshOnePlayPackage exact block not found')
-          s = s.replace(old_refresh, new_refresh, 1)
-          p.write_text(s)
-
-          Path('backend/test-play-update-watcher-static.js').write_text(r'''const fs = require('fs');
-const assert = require('assert');
-const index = fs.readFileSync(__dirname + '/index.js', 'utf8');
-const db = fs.readFileSync(__dirname + '/db.js', 'utf8');
-const customer = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt', 'utf8');
-assert.match(index, /PLAY_METADATA_FRESH_MS = 10 \* 60 \* 1000/);
-assert.match(index, /AUTO_PLAY_REFRESH_INTERVAL_MS = 2 \* 60 \* 1000/);
-assert.match(index, /function playVersionChanged\(/);
-assert.match(index, /reason: 'app_update'/);
-assert.match(index, /wakeDevicesForPlayUpdate\(appInfo\.packageName\)/);
-assert.match(db, /async function listPushTokensForApp\(packageName\)/);
-assert.match(db, /full_open_mode = true/);
-assert.match(db, /policy->'allowedApps'/);
-assert.match(customer, /private fun isUpdateAvailable\(app: CatalogApp, installed: Boolean\): Boolean/);
-assert.match(customer, /installedVersion != remoteVersion/);
-console.log('Play update watcher static checks passed');
-''')
-
-          p = Path('backend/package.json')
-          s = p.read_text()
-          old = 'node test-news-bubble-width-static.js'
-          new = 'node test-news-bubble-width-static.js && node test-play-update-watcher-static.js'
-          if old not in s:
-              raise SystemExit('package test script marker not found')
-          p.write_text(s.replace(old, new, 1))
-          PY
-
-      - name: Remove temporary patch workflow
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwID0gUGF0aCgnZHBjLWFwcC9hcHAvc3JjL21haW4vamF2YS9vcmcvbWRtb3Blbi9kcGMvQ3VzdG9tZXJBY3Rpdml0eS5rdCcpCnMgPSBwLnJlYWRfdGV4dCgpCm9sZCA9ICIiIiAgICBwcml2YXRlIGZ1biBpc1VwZGF0ZUF2YWlsYWJsZShhcHA6IENhdGFsb2dBcHAsIGluc3RhbGxlZDogQm9vbGVhbik6IEJvb2xlYW4gewogICAgICAgIGlmICghaW5zdGFsbGVkKSByZXR1cm4gZmFsc2UKICAgICAgICByZXR1cm4gZmFsc2UKICAgIH0KIiIiCm5ldyA9ICIiIiAgICBwcml2YXRlIGZ1biBpc1VwZGF0ZUF2YWlsYWJsZShhcHA6IENhdGFsb2dBcHAsIGluc3RhbGxlZDogQm9vbGVhbik6IEJvb2xlYW4gewogICAgICAgIGlmICghaW5zdGFsbGVkIHx8IGFwcC5hcHBTb3VyY2UgIT0gIlBMQVkiKSByZXR1cm4gZmFsc2UKICAgICAgICB2YWwgcmVtb3RlVmVyc2lvbiA9IGFwcC5wbGF5VmVyc2lvbgogICAgICAgICAgICA/LnRyaW0oKQogICAgICAgICAgICA/LnRha2VJZiB7IHZlcnNpb24gLT4KICAgICAgICAgICAgICAgIHZlcnNpb24uaXNOb3RFbXB0eSgpICYmCiAgICAgICAgICAgICAgICAgICAgIXZlcnNpb24uZXF1YWxzKCJWYXJpZXMgd2l0aCBkZXZpY2UiLCBpZ25vcmVDYXNlID0gdHJ1ZSkgJiYKICAgICAgICAgICAgICAgICAgICAhdmVyc2lvbi5jb250YWlucygi157Xqdeq16DXlCIsIGlnbm9yZUNhc2UgPSB0cnVlKQogICAgICAgICAgICB9CiAgICAgICAgICAgID86IHJldHVybiBmYWxzZQoKICAgICAgICBAU3VwcHJlc3MoIkRFUFJFQ0FUSU9OIikKICAgICAgICB2YWwgaW5zdGFsbGVkVmVyc2lvbiA9IHRyeSB7CiAgICAgICAgICAgIHBhY2thZ2VNYW5hZ2VyLmdldFBhY2thZ2VJbmZvKGFwcC5wYWNrYWdlTmFtZSwgMCkudmVyc2lvbk5hbWU/LnRyaW0oKQogICAgICAgIH0gY2F0Y2ggKF86IFBhY2thZ2VNYW5hZ2VyLk5hbWVOb3RGb3VuZEV4Y2VwdGlvbikgewogICAgICAgICAgICBudWxsCiAgICAgICAgfQogICAgICAgIHJldHVybiAhaW5zdGFsbGVkVmVyc2lvbi5pc051bGxPckJsYW5rKCkgJiYgaW5zdGFsbGVkVmVyc2lvbiAhPSByZW1vdGVWZXJzaW9uCiAgICB9CiIiIgppZiBvbGQgbm90IGluIHM6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCdDdXN0b21lckFjdGl2aXR5IGlzVXBkYXRlQXZhaWxhYmxlIGJsb2NrIG5vdCBmb3VuZCcpCnAud3JpdGVfdGV4dChzLnJlcGxhY2Uob2xkLCBuZXcsIDEpKQoKcCA9IFBhdGgoJ2JhY2tlbmQvZGIuanMnKQpzID0gcC5yZWFkX3RleHQoKQptYXJrZXIgPSAiYXN5bmMgZnVuY3Rpb24gbGlzdERldmljZXMoKSB7XG4iCmhlbHBlciA9ICIiImFzeW5jIGZ1bmN0aW9uIGxpc3RQdXNoVG9rZW5zRm9yQXBwKHBhY2thZ2VOYW1lKSB7CiAgY29uc3QgeyByb3dzIH0gPSBhd2FpdCBwb29sLnF1ZXJ5KAogICAgYFNFTEVDVCBESVNUSU5DVCBwdXNoX3Rva2VuCiAgICAgICBGUk9NIGRldmljZXMKICAgICAgV0hFUkUgcHVzaF90b2tlbiBJUyBOT1QgTlVMTAogICAgICAgIEFORCBwdXNoX3Rva2VuIDw+ICcnCiAgICAgICAgQU5EICgKICAgICAgICAgIGZ1bGxfb3Blbl9tb2RlID0gdHJ1ZQogICAgICAgICAgT1IgQ09BTEVTQ0UocG9saWN5LT4nYWxsb3dlZEFwcHMnLCAnW10nOjpqc29uYikgPyAkMQogICAgICAgIClgLAogICAgW3BhY2thZ2VOYW1lXSwKICApOwogIHJldHVybiByb3dzLm1hcChyb3cgPT4gcm93LnB1c2hfdG9rZW4pLmZpbHRlcihCb29sZWFuKTsKfQoKIiIiCmlmIG1hcmtlciBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ2RiIGxpc3REZXZpY2VzIG1hcmtlciBub3QgZm91bmQnKQpzID0gcy5yZXBsYWNlKG1hcmtlciwgaGVscGVyICsgbWFya2VyLCAxKQpleHBvcnRfbWFya2VyID0gIiAgbGlzdERldmljZXMsXG4iCmlmIGV4cG9ydF9tYXJrZXIgbm90IGluIHM6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCdkYiBleHBvcnQgbWFya2VyIG5vdCBmb3VuZCcpCnMgPSBzLnJlcGxhY2UoZXhwb3J0X21hcmtlciwgIiAgbGlzdERldmljZXMsXG4gIGxpc3RQdXNoVG9rZW5zRm9yQXBwLFxuIiwgMSkKcC53cml0ZV90ZXh0KHMpCgpwID0gUGF0aCgnYmFja2VuZC9pbmRleC5qcycpCnMgPSBwLnJlYWRfdGV4dCgpCm9sZF9jb25zdGFudHMgPSAiIiJjb25zdCBQTEFZX01FVEFEQVRBX0ZSRVNIX01TID0gMzAgKiA2MCAqIDEwMDA7CmNvbnN0IEFVVE9fUExBWV9SRUZSRVNIX0JBVENIX1NJWkUgPSAzOwpjb25zdCBBVVRPX1BMQVlfUkVGUkVTSF9NSU5fS0lDS19NUyA9IDYwICogMTAwMDsKY29uc3QgQVVUT19QTEFZX1JFRlJFU0hfSU5URVJWQUxfTVMgPSA1ICogNjAgKiAxMDAwOwoiIiIKbmV3X2NvbnN0YW50cyA9ICIiImNvbnN0IFBMQVlfTUVUQURBVEFfRlJFU0hfTVMgPSAxMCAqIDYwICogMTAwMDsKY29uc3QgQVVUT19QTEFZX1JFRlJFU0hfQkFUQ0hfU0laRSA9IDEwOwpjb25zdCBBVVRPX1BMQVlfUkVGUkVTSF9NSU5fS0lDS19NUyA9IDYwICogMTAwMDsKY29uc3QgQVVUT19QTEFZX1JFRlJFU0hfSU5URVJWQUxfTVMgPSAyICogNjAgKiAxMDAwOwoiIiIKaWYgb2xkX2NvbnN0YW50cyBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ1BsYXkgcmVmcmVzaCBjb25zdGFudHMgYmxvY2sgbm90IGZvdW5kJykKcyA9IHMucmVwbGFjZShvbGRfY29uc3RhbnRzLCBuZXdfY29uc3RhbnRzLCAxKQoKZnVuY3Rpb25fbWFya2VyID0gImFzeW5jIGZ1bmN0aW9uIHJlZnJlc2hPbmVQbGF5UGFja2FnZShwYWNrYWdlTmFtZSkge1xuIgpoZWxwZXJzID0gIiIiZnVuY3Rpb24gdXNhYmxlUGxheVZlcnNpb24odmFsdWUpIHsKICBjb25zdCB2ZXJzaW9uID0gdHlwZW9mIHZhbHVlID09PSAnc3RyaW5nJyA/IHZhbHVlLnRyaW0oKSA6ICcnOwogIGlmICghdmVyc2lvbikgcmV0dXJuIG51bGw7CiAgaWYgKC92YXJpZXMgd2l0aCBkZXZpY2UvaS50ZXN0KHZlcnNpb24pIHx8IC/Xntep16rXoNeUL2kudGVzdCh2ZXJzaW9uKSkgcmV0dXJuIG51bGw7CiAgcmV0dXJuIHZlcnNpb247Cn0KCmZ1bmN0aW9uIHBsYXlWZXJzaW9uQ2hhbmdlZChwcmV2aW91cywgYXBwSW5mbykgewogIGlmICghcHJldmlvdXMpIHJldHVybiBmYWxzZTsKICBjb25zdCBiZWZvcmUgPSB1c2FibGVQbGF5VmVyc2lvbihwcmV2aW91cy5wbGF5VmVyc2lvbik7CiAgY29uc3QgYWZ0ZXIgPSB1c2FibGVQbGF5VmVyc2lvbihhcHBJbmZvICYmIGFwcEluZm8udmVyc2lvbik7CiAgcmV0dXJuIEJvb2xlYW4oYmVmb3JlICYmIGFmdGVyICYmIGJlZm9yZSAhPT0gYWZ0ZXIpOwp9Cgphc3luYyBmdW5jdGlvbiB3YWtlRGV2aWNlc0ZvclBsYXlVcGRhdGUocGFja2FnZU5hbWUpIHsKICBjb25zdCB0b2tlbnMgPSBhd2FpdCBkYi5saXN0UHVzaFRva2Vuc0ZvckFwcChwYWNrYWdlTmFtZSk7CiAgaWYgKCF0b2tlbnMubGVuZ3RoKSByZXR1cm4gMDsKICBjb25zdCByZXN1bHRzID0gYXdhaXQgUHJvbWlzZS5hbGxTZXR0bGVkKHRva2Vucy5tYXAodG9rZW4gPT4gcHVzaC53YWtlKHRva2VuLCB7CiAgICBhY3Rpb246ICdzeW5jJywKICAgIHJlYXNvbjogJ2FwcF91cGRhdGUnLAogICAgcGFja2FnZU5hbWUsCiAgfSkpKTsKICByZXR1cm4gcmVzdWx0cy5maWx0ZXIoaXRlbSA9PiBpdGVtLnN0YXR1cyA9PT0gJ2Z1bGZpbGxlZCcgJiYgaXRlbS52YWx1ZSAmJiBpdGVtLnZhbHVlLnNlbnQpLmxlbmd0aDsKfQoKIiIiCmlmIGZ1bmN0aW9uX21hcmtlciBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ3JlZnJlc2hPbmVQbGF5UGFja2FnZSBtYXJrZXIgbm90IGZvdW5kJykKcyA9IHMucmVwbGFjZShmdW5jdGlvbl9tYXJrZXIsIGhlbHBlcnMgKyBmdW5jdGlvbl9tYXJrZXIsIDEpCgpvbGRfcmVmcmVzaCA9ICIiImFzeW5jIGZ1bmN0aW9uIHJlZnJlc2hPbmVQbGF5UGFja2FnZShwYWNrYWdlTmFtZSkgewogIHRyeSB7CiAgICBjb25zdCBhcHBJbmZvID0gYXdhaXQgcGxheVN0b3JlU2VhcmNoLmdldFBsYXlTdG9yZUFwcChwYWNrYWdlTmFtZSk7CiAgICBhd2FpdCBkYi5hZGRBcHBUb0NhdGFsb2coCiAgICAgIGFwcEluZm8ucGFja2FnZU5hbWUsIGFwcEluZm8ubmFtZSwgYXBwSW5mby5pY29uVXJsLCBhcHBJbmZvLnZlcnNpb24sIGFwcEluZm8udXBkYXRlZCwKICAgICAgYXBwSW5mby5jYXRlZ29yeSwKICAgICk7CiAgICBhd2FpdCBkYi5yZWNvcmRQbGF5TWV0YWRhdGFDaGVja1N1Y2Nlc3MoYXBwSW5mby5wYWNrYWdlTmFtZSk7CiAgICByZXR1cm4gdHJ1ZTsKICB9IGNhdGNoIChlKSB7CiIiIgpuZXdfcmVmcmVzaCA9ICIiImFzeW5jIGZ1bmN0aW9uIHJlZnJlc2hPbmVQbGF5UGFja2FnZShwYWNrYWdlTmFtZSkgewogIHRyeSB7CiAgICBjb25zdCBwcmV2aW91cyA9IChhd2FpdCBkYi5saXN0QXBwc0NhdGFsb2coKSkuZmluZChhcHAgPT4gYXBwLnBhY2thZ2VOYW1lID09PSBwYWNrYWdlTmFtZSkgfHwgbnVsbDsKICAgIGNvbnN0IGFwcEluZm8gPSBhd2FpdCBwbGF5U3RvcmVTZWFyY2guZ2V0UGxheVN0b3JlQXBwKHBhY2thZ2VOYW1lKTsKICAgIGNvbnN0IGNoYW5nZWQgPSBwbGF5VmVyc2lvbkNoYW5nZWQocHJldmlvdXMsIGFwcEluZm8pOwogICAgYXdhaXQgZGIuYWRkQXBwVG9DYXRhbG9nKAogICAgICBhcHBJbmZvLnBhY2thZ2VOYW1lLCBhcHBJbmZvLm5hbWUsIGFwcEluZm8uaWNvblVybCwgYXBwSW5mby52ZXJzaW9uLCBhcHBJbmZvLnVwZGF0ZWQsCiAgICAgIGFwcEluZm8uY2F0ZWdvcnksCiAgICApOwogICAgYXdhaXQgZGIucmVjb3JkUGxheU1ldGFkYXRhQ2hlY2tTdWNjZXNzKGFwcEluZm8ucGFja2FnZU5hbWUpOwogICAgaWYgKGNoYW5nZWQpIHsKICAgICAgY29uc3Qgd29rZW4gPSBhd2FpdCB3YWtlRGV2aWNlc0ZvclBsYXlVcGRhdGUoYXBwSW5mby5wYWNrYWdlTmFtZSk7CiAgICAgIGNvbnNvbGUubG9nKGBbYXV0by1wbGF5LW1ldGFkYXRhXSB1cGRhdGUgZGV0ZWN0ZWQgZm9yICR7YXBwSW5mby5wYWNrYWdlTmFtZX06ICR7cHJldmlvdXMucGxheVZlcnNpb259IC0+ICR7YXBwSW5mby52ZXJzaW9ufTsgcHVzaCB3YWtlIHNlbnQgdG8gJHt3b2tlbn0gZGV2aWNlKHMpYCk7CiAgICB9CiAgICByZXR1cm4gdHJ1ZTsKICB9IGNhdGNoIChlKSB7CiIiIgppZiBvbGRfcmVmcmVzaCBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ3JlZnJlc2hPbmVQbGF5UGFja2FnZSBleGFjdCBibG9jayBub3QgZm91bmQnKQpzID0gcy5yZXBsYWNlKG9sZF9yZWZyZXNoLCBuZXdfcmVmcmVzaCwgMSkKcC53cml0ZV90ZXh0KHMpCgpQYXRoKCdiYWNrZW5kL3Rlc3QtcGxheS11cGRhdGUtd2F0Y2hlci1zdGF0aWMuanMnKS53cml0ZV90ZXh0KHIiIiJjb25zdCBmcyA9IHJlcXVpcmUoJ2ZzJyk7CmNvbnN0IGFzc2VydCA9IHJlcXVpcmUoJ2Fzc2VydCcpOwpjb25zdCBpbmRleCA9IGZzLnJlYWRGaWxlU3luYyhfX2Rpcm5hbWUgKyAnL2luZGV4LmpzJywgJ3V0ZjgnKTsKY29uc3QgZGIgPSBmcy5yZWFkRmlsZVN5bmMoX19kaXJuYW1lICsgJy9kYi5qcycsICd1dGY4Jyk7CmNvbnN0IGN1c3RvbWVyID0gZnMucmVhZEZpbGVTeW5jKF9fZGlybmFtZSArICcvLi4vZHBjLWFwcC9hcHAvc3JjL21haW4vamF2YS9vcmcvbWRtb3Blbi9kcGMvQ3VzdG9tZXJBY3Rpdml0eS5rdCcsICd1dGY4Jyk7CmFzc2VydC5tYXRjaChpbmRleCwgL1BMQVlfTUVUQURBVEFfRlJFU0hfTVMgPSAxMCBcKiA2MCBcKiAxMDAwLyk7CmFzc2VydC5tYXRjaChpbmRleCwgL0FVVE9fUExBWV9SRUZSRVNIX0lOVEVSVkFMX01TID0gMiBcKiA2MCBcKiAxMDAwLyk7CmFzc2VydC5tYXRjaChpbmRleCwgL2Z1bmN0aW9uIHBsYXlWZXJzaW9uQ2hhbmdlZFwoLyk7CmFzc2VydC5tYXRjaChpbmRleCwgL3JlYXNvbjogJ2FwcF91cGRhdGUnLyk7CmFzc2VydC5tYXRjaChpbmRleCwgL3dha2VEZXZpY2VzRm9yUGxheVVwZGF0ZVwoYXBwSW5mb1wucGFja2FnZU5hbWVcKS8pOwphc3NlcnQubWF0Y2goZGIsIC9hc3luYyBmdW5jdGlvbiBsaXN0UHVzaFRva2Vuc0ZvckFwcFwocGFja2FnZU5hbWVcKS8pOwphc3NlcnQubWF0Y2goZGIsIC9mdWxsX29wZW5fbW9kZSA9IHRydWUvKTsKYXNzZXJ0Lm1hdGNoKGRiLCAvcG9saWN5LT4nYWxsb3dlZEFwcHMnLyk7CmFzc2VydC5tYXRjaChjdXN0b21lciwgL3ByaXZhdGUgZnVuIGlzVXBkYXRlQXZhaWxhYmxlXChhcHA6IENhdGFsb2dBcHAsIGluc3RhbGxlZDogQm9vbGVhblwpOiBCb29sZWFuLyk7CmFzc2VydC5tYXRjaChjdXN0b21lciwgL2luc3RhbGxlZFZlcnNpb24gIT0gcmVtb3RlVmVyc2lvbi8pOwpjb25zb2xlLmxvZygnUGxheSB1cGRhdGUgd2F0Y2hlciBzdGF0aWMgY2hlY2tzIHBhc3NlZCcpOwoiIiIpCgpwID0gUGF0aCgnYmFja2VuZC9wYWNrYWdlLmpzb24nKQpzID0gcC5yZWFkX3RleHQoKQpvbGQgPSAnbm9kZSB0ZXN0LW5ld3MtYnViYmxlLXdpZHRoLXN0YXRpYy5qcycKbmV3ID0gJ25vZGUgdGVzdC1uZXdzLWJ1YmJsZS13aWR0aC1zdGF0aWMuanMgJiYgbm9kZSB0ZXN0LXBsYXktdXBkYXRlLXdhdGNoZXItc3RhdGljLmpzJwppZiBvbGQgbm90IGluIHM6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCdwYWNrYWdlIHRlc3Qgc2NyaXB0IG1hcmtlciBub3QgZm91bmQnKQpwLndyaXRlX3RleHQocy5yZXBsYWNlKG9sZCwgbmV3LCAxKSkK' | base64 -d > /tmp/patch.py
+          python3 /tmp/patch.py
+      - name: Remove temporary workflow
         run: rm .github/workflows/patch-play-update-watcher.yml
-
-      - name: Commit patched implementation
+      - name: Commit implementation
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
