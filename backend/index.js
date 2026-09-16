@@ -1214,15 +1214,22 @@ app.get('/api/apps/play-search', requireAdmin, wrap(async (req, res) => {
 }));
 
 app.post('/api/apps/from-play', requireAdmin, wrap(async (req, res) => {
-  const { packageName } = req.body || {};
+  const { packageName, category } = req.body || {};
   if (typeof packageName !== 'string' || !PACKAGE_NAME_REGEX.test(packageName)) {
     return res.status(400).json({ error: 'invalid packageName format' });
+  }
+  let requestedCategory = null;
+  if (category !== undefined && category !== null && category !== '') {
+    if (typeof category !== 'string' || !(await isKnownAppCategory(category))) {
+      return res.status(400).json({ error: 'invalid category' });
+    }
+    requestedCategory = category;
   }
   try {
     const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
     await db.addAppToCatalog(
       appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
-      appInfo.category,
+      requestedCategory || appInfo.category,
     );
     res.json({ status: 'ok', app: appInfo, catalog: await db.listAppsCatalog() });
   } catch (e) {
