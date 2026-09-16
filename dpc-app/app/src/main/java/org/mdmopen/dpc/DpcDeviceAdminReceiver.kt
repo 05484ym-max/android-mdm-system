@@ -11,7 +11,7 @@ class DpcDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
-        Log.d(TAG, "Device admin enabled")
+        Log.d(TAG, "Device admin enabled on ${AndroidCompatibility.label()}")
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
@@ -20,22 +20,32 @@ class DpcDeviceAdminReceiver : DeviceAdminReceiver() {
     }
 
     /**
-     * Fires once provisioning succeeds. Stores whatever the QR carried so the
-     * compliance screen can enrol without the installer typing anything.
+     * Completion path shared by the same APK on Android 10+.
+     *
+     * Android 10/11 rely on this callback as the durable hand-off after legacy
+     * managed-device provisioning. Android 12+ may additionally invoke the newer
+     * provisioning mode/compliance activities, but this broadcast remains a safe
+     * idempotent fallback. Persist QR extras first, then schedule background work.
      */
     override fun onProfileProvisioningComplete(context: Context, intent: Intent) {
         super.onProfileProvisioningComplete(context, intent)
 
-        val extras = intent.getParcelableExtra<PersistableBundle>(
+        intent.getParcelableExtra<PersistableBundle>(
             DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE
-        ) ?: return
+        )?.let { extras ->
+            extras.getString("serverUrl")?.takeIf { it.isNotBlank() }
+                ?.let { Config.setServerUrl(context, it) }
+            extras.getString("enrollmentToken")?.takeIf { it.isNotBlank() }
+                ?.let { Config.setPendingEnrollmentToken(context, it) }
+        }
 
-        extras.getString("serverUrl")?.takeIf { it.isNotBlank() }
-            ?.let { Config.setServerUrl(context, it) }
-        extras.getString("enrollmentToken")?.takeIf { it.isNotBlank() }
-            ?.let { Config.setPendingEnrollmentToken(context, it) }
+        runCatching {
+            PostProvisionEnrollmentScheduler.enqueueIfPending(context.applicationContext)
+        }.onFailure {
+            Log.e(TAG, "Could not schedule post-provision enrollment", it)
+        }
 
-        Log.i(TAG, "Provisioning extras stored")
+        Log.i(TAG, "Provisioning complete on ${AndroidCompatibility.label()}")
     }
 
     private companion object {
