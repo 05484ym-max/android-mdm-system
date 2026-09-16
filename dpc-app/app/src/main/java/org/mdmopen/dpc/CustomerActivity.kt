@@ -47,7 +47,7 @@ class CustomerActivity : Activity() {
         val iconFrame: FrameLayout,
         val icon: ImageView,
         val label: TextView,
-        val badge: View,
+        val badge: TextView,
     )
 
     private lateinit var contentArea: LinearLayout
@@ -265,15 +265,21 @@ class CustomerActivity : Activity() {
             setImageResource(iconRes)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
         }
-        val badgeDot = View(this).apply {
+        val badgeDot = TextView(this).apply {
+            textSize = 9f
+            typeface = heavyFont
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
             background = circle("#B52F24")
+            minWidth = dp(18)
+            minimumHeight = dp(18)
+            setPadding(dp(4), 0, dp(4), 0)
             visibility = View.GONE
         }
         val iconFrame = FrameLayout(this).apply {
             addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })
-            addView(badgeDot, FrameLayout.LayoutParams(dp(8), dp(8)).apply {
+            addView(badgeDot, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18)).apply {
                 gravity = Gravity.TOP or Gravity.END
-                marginEnd = dp(1)
             })
         }
         val labelView = TextView(this).apply {
@@ -1406,6 +1412,8 @@ class CustomerActivity : Activity() {
         isNewsActive = true
         headerLabelView.text = "חדשות ועדכונים"
         setActiveNav(newsNavItem)
+        newsItems.forEach { Config.markUpdateRead(this, it.id) }
+        updateNewsBadge()
         renderNewsList()
         refreshNews()
     }
@@ -1429,6 +1437,9 @@ class CustomerActivity : Activity() {
                 Config.setNewsCache(applicationContext, fetched)
                 runOnUiThread {
                     newsItems = fetched
+                    if (isNewsActive) {
+                        fetched.forEach { Config.markUpdateRead(this, it.id) }
+                    }
                     updateNewsBadge()
                     if (isNewsActive) renderNewsList()
                 }
@@ -1437,8 +1448,15 @@ class CustomerActivity : Activity() {
     }
 
     private fun updateNewsBadge() {
-        val hasUnread = newsItems.any { !Config.isUpdateRead(this, it.id) }
-        newsNavItem.badge.visibility = if (hasUnread) View.VISIBLE else View.GONE
+        val unreadCount = newsItems.count { !Config.isUpdateRead(this, it.id) }
+        newsNavItem.badge.apply {
+            text = when {
+                unreadCount > 99 -> "99+"
+                unreadCount > 0 -> unreadCount.toString()
+                else -> ""
+            }
+            visibility = if (unreadCount > 0) View.VISIBLE else View.GONE
+        }
     }
 
     private fun showNewsDetail(item: UpdateItem) {
