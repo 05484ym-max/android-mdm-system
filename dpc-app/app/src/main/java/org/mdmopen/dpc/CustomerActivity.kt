@@ -1560,6 +1560,11 @@ class CustomerActivity : Activity() {
             "ROUNDED" -> "sans-serif-rounded"
             "SERIF" -> "serif"
             "MONO" -> "monospace"
+            "LIGHT" -> "sans-serif-light"
+            "MEDIUM" -> "sans-serif-medium"
+            "CONDENSED" -> "sans-serif-condensed"
+            "BLACK" -> "sans-serif-black"
+            "SERIF_MONO" -> "serif-monospace"
             else -> "sans-serif"
         }
         return Typeface.create(family, if (bold) Typeface.BOLD else Typeface.NORMAL)

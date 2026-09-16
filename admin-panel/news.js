@@ -20,7 +20,7 @@
   const fontScaleInput = document.getElementById('newsFontScaleInput');
   const fontScaleNumber = document.getElementById('newsFontScaleNumber');
   const fontFamilyInput = document.getElementById('newsFontFamilyInput');
-  const mediaField = mediaInput && mediaInput.closest('.news-media-field');
+  const typographyField = fontFamilyInput && fontFamilyInput.closest('.news-typography-field');
   if (!listEl || !titleInput || !bodyInput || !pinnedInput || !publishedInput || !saveBtn || !cancelEditBtn || !formTitle || !formError || !mediaInput || !mediaPreview || !removeMediaRow || !removeMediaInput || !bubbleWidthInput || !bubbleWidthNumber || !fontScaleInput || !fontScaleNumber || !fontFamilyInput) return;
 
   let editingId = null;
@@ -31,7 +31,7 @@
   if (mediaLabel) mediaLabel.textContent = '📎 צרף תמונה או סרטון';
   const clampBubbleWidth = value => Math.max(55, Math.min(100, Number.parseInt(value, 10) || 88));
   const clampFontScale = value => Math.max(80, Math.min(150, Number.parseInt(value, 10) || 100));
-  const fontCss = value => ({ SYSTEM: 'inherit', ROUNDED: 'ui-rounded, Arial, sans-serif', SERIF: 'Georgia, Times New Roman, serif', MONO: 'ui-monospace, Consolas, monospace' }[value] || 'inherit');
+  const fontCss = value => ({ SYSTEM: 'inherit', ROUNDED: 'ui-rounded, Arial, sans-serif', SERIF: 'Georgia, Times New Roman, serif', MONO: 'ui-monospace, Consolas, monospace', LIGHT: 'Arial, sans-serif', MEDIUM: 'Arial, sans-serif', CONDENSED: 'Arial Narrow, Roboto Condensed, sans-serif', BLACK: 'Arial Black, Arial, sans-serif', SERIF_MONO: 'Courier New, ui-monospace, monospace' }[value] || 'inherit');
 
   const livePreview = document.createElement('div');
   livePreview.className = 'news-live-preview';
@@ -44,7 +44,7 @@
         <div class="news-live-media" id="newsLiveMedia" style="display:none;"></div>
       </div>
     </div>`;
-  if (mediaField) mediaField.insertAdjacentElement('afterend', livePreview);
+  if (typographyField) typographyField.insertAdjacentElement('afterend', livePreview);
   const liveBubble = document.getElementById('newsLiveBubble');
   const liveTitle = document.getElementById('newsLiveTitle');
   const liveBody = document.getElementById('newsLiveBody');
@@ -65,6 +65,7 @@
     liveTitle.style.fontSize = `${0.98 * fontScale}rem`;
     liveBody.style.fontSize = `${0.88 * fontScale}rem`;
     liveBubble.style.fontFamily = fontCss(fontFamilyInput.value);
+    liveBubble.style.fontWeight = fontFamilyInput.value === 'LIGHT' ? '300' : fontFamilyInput.value === 'MEDIUM' ? '500' : fontFamilyInput.value === 'BLACK' ? '900' : '400';
     const title = titleInput.value.trim();
     const body = bodyInput.value.trim();
     liveTitle.textContent = title || 'כותרת ההודעה';
@@ -93,7 +94,7 @@
     const safeScale = clampFontScale(scale);
     fontScaleInput.value = String(safeScale);
     fontScaleNumber.value = String(safeScale);
-    fontFamilyInput.value = ['SYSTEM','ROUNDED','SERIF','MONO'].includes(String(family || '').toUpperCase()) ? String(family).toUpperCase() : 'SYSTEM';
+    fontFamilyInput.value = ['SYSTEM','ROUNDED','SERIF','MONO','LIGHT','MEDIUM','CONDENSED','BLACK','SERIF_MONO'].includes(String(family || '').toUpperCase()) ? String(family).toUpperCase() : 'SYSTEM';
     renderLivePreview();
   }
 
