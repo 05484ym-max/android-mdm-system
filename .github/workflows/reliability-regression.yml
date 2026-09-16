@@ -92,29 +92,57 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Android 16 provisioning contracts
+      - name: Verify Android 10-16 provisioning contracts
         run: |
           set -euo pipefail
           SRC=dpc-app/app/src/main/java/org/mdmopen/dpc
           MANIFEST=dpc-app/app/src/main/AndroidManifest.xml
           GRADLE=dpc-app/app/build.gradle.kts
           BUILD=.github/workflows/build-dpc.yml
+
           grep -q 'compileSdk = 36' "$GRADLE"
           grep -q 'platforms;android-36' "$BUILD"
-          grep -q 'ACTION_GET_PROVISIONING_MODE' "$SRC/ProvisioningActivity.kt"
-          grep -q 'ACTION_ADMIN_POLICY_COMPLIANCE' "$SRC/ProvisioningActivity.kt"
+
+          # Android 12+ callbacks are deliberately split like the reference DPC.
+          grep -q 'class GetProvisioningModeActivity' "$SRC/GetProvisioningModeActivity.kt"
+          grep -q 'ACTION_GET_PROVISIONING_MODE' "$SRC/GetProvisioningModeActivity.kt"
+          grep -q 'PROVISIONING_MODE_FULLY_MANAGED_DEVICE' "$SRC/GetProvisioningModeActivity.kt"
+          grep -q 'EXTRA_PROVISIONING_ALLOWED_PROVISIONING_MODES' "$SRC/GetProvisioningModeActivity.kt"
+          grep -q 'class AdminPolicyComplianceActivity' "$SRC/AdminPolicyComplianceActivity.kt"
+          grep -q 'ACTION_ADMIN_POLICY_COMPLIANCE' "$SRC/AdminPolicyComplianceActivity.kt"
+          grep -q 'setResult(RESULT_OK)' "$SRC/AdminPolicyComplianceActivity.kt"
           grep -q 'ACTION_PROVISIONING_SUCCESSFUL' "$SRC/ProvisioningSuccessActivity.kt"
+
+          grep -q 'android:name=".GetProvisioningModeActivity"' "$MANIFEST"
+          grep -q 'android:name=".AdminPolicyComplianceActivity"' "$MANIFEST"
+          grep -q 'android.app.action.GET_PROVISIONING_MODE' "$MANIFEST"
+          grep -q 'android.app.action.ADMIN_POLICY_COMPLIANCE' "$MANIFEST"
           grep -q 'android.app.action.PROVISIONING_SUCCESSFUL' "$MANIFEST"
           grep -q 'android.app.action.PROFILE_PROVISIONING_COMPLETE' "$MANIFEST"
           grep -q 'android.app.action.DEVICE_OWNER_CHANGED' "$MANIFEST"
+
+          # QR stays intentionally minimal: component + signer checksum + URL.
           grep -q 'PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM' "$BUILD"
-          if grep -q 'PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM' "$BUILD"; then
-            echo 'Provisioning QR must use exactly one integrity mechanism: signature checksum only' >&2
+          grep -q 'PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION' "$BUILD"
+          grep -q 'mdm.apk?v=' "$BUILD"
+          for forbidden in \
+            PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM \
+            PROVISIONING_SKIP_ENCRYPTION \
+            PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED; do
+            if grep -q "$forbidden" "$BUILD"; then
+              echo "Minimal provisioning QR must not include $forbidden" >&2
+              exit 1
+            fi
+          done
+
+          # Setup Wizard callbacks must not perform blocking work.
+          if grep -qE 'ApiClient\(|PolicySync\.run\(|WorkManager|getInstance\(|Thread\(' \
+            "$SRC/GetProvisioningModeActivity.kt" "$SRC/AdminPolicyComplianceActivity.kt"; then
+            echo 'Provisioning callbacks must not block Setup Wizard with background/network work' >&2
             exit 1
           fi
-          grep -q 'mdm.apk?v=' "$BUILD"
-          if grep -qE 'ApiClient\(|PolicySync\.run\(|Thread\(' "$SRC/ProvisioningActivity.kt"; then
-            echo 'ProvisioningActivity must not block Setup Wizard with network/policy work' >&2
+          if grep -q 'EXTRA_PROVISIONING_SKIP_EDUCATION_SCREENS' "$SRC/GetProvisioningModeActivity.kt"; then
+            echo 'Do not send optional education-screen flags during compatibility isolation' >&2
             exit 1
           fi
 
