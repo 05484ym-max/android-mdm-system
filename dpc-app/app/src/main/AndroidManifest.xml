@@ -79,6 +79,15 @@
 
         <receiver android:name=".InstallResultReceiver" android:exported="false" />
 
+        <receiver
+            android:name=".PackageInstallGuardReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
+
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
