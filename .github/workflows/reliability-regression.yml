@@ -6,6 +6,9 @@ on:
       - 'backend/**'
       - 'ai-service/**'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/**'
+      - 'dpc-app/app/src/main/AndroidManifest.xml'
+      - 'dpc-app/app/build.gradle.kts'
+      - '.github/workflows/build-dpc.yml'
       - '.github/workflows/reliability-regression.yml'
   push:
     branches: [main]
@@ -13,6 +16,9 @@ on:
       - 'backend/**'
       - 'ai-service/**'
       - 'dpc-app/app/src/main/java/org/mdmopen/dpc/**'
+      - 'dpc-app/app/src/main/AndroidManifest.xml'
+      - 'dpc-app/app/build.gradle.kts'
+      - '.github/workflows/build-dpc.yml'
       - '.github/workflows/reliability-regression.yml'
 
 permissions:
@@ -83,6 +89,29 @@ jobs:
           grep -q 'registerPushToken' "$SRC/PushRegistration.kt"
           if grep -q 'pushToken == Config.pushToken' "$SRC/PushRegistration.kt"; then
             echo 'PushRegistration must reassert the current token after server-side pruning' >&2
+            exit 1
+          fi
+
+      - name: Verify Android 16 provisioning contracts
+        run: |
+          set -euo pipefail
+          SRC=dpc-app/app/src/main/java/org/mdmopen/dpc
+          MANIFEST=dpc-app/app/src/main/AndroidManifest.xml
+          GRADLE=dpc-app/app/build.gradle.kts
+          BUILD=.github/workflows/build-dpc.yml
+          grep -q 'compileSdk = 36' "$GRADLE"
+          grep -q 'platforms;android-36' "$BUILD"
+          grep -q 'ACTION_GET_PROVISIONING_MODE' "$SRC/ProvisioningActivity.kt"
+          grep -q 'ACTION_ADMIN_POLICY_COMPLIANCE' "$SRC/ProvisioningActivity.kt"
+          grep -q 'ACTION_PROVISIONING_SUCCESSFUL' "$SRC/ProvisioningSuccessActivity.kt"
+          grep -q 'android.app.action.PROVISIONING_SUCCESSFUL' "$MANIFEST"
+          grep -q 'android.app.action.PROFILE_PROVISIONING_COMPLETE' "$MANIFEST"
+          grep -q 'android.app.action.DEVICE_OWNER_CHANGED' "$MANIFEST"
+          grep -q 'PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM' "$BUILD"
+          grep -q 'PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM' "$BUILD"
+          grep -q 'mdm.apk?v=' "$BUILD"
+          if grep -qE 'ApiClient\(|PolicySync\.run\(|Thread\(' "$SRC/ProvisioningActivity.kt"; then
+            echo 'ProvisioningActivity must not block Setup Wizard with network/policy work' >&2
             exit 1
           fi
 
