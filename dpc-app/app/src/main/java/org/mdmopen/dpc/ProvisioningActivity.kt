@@ -65,12 +65,7 @@ class ProvisioningActivity : Activity() {
 
         try {
             readAdminExtras()
-            if (!Config.serverUrl(this).isBlank() &&
-                !Config.pendingEnrollmentToken(this).isNullOrBlank()
-            ) {
-                PostProvisionEnrollmentScheduler.enqueue(applicationContext)
-            }
-
+            PostProvisionEnrollmentScheduler.enqueueIfPending(applicationContext)
             setResult(RESULT_OK)
         } catch (_: Exception) {
             // Provisioning must not be held hostage by background/server setup.
