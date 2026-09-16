@@ -1,0 +1,67 @@
+name: Patch News Unread Count
+
+on:
+  push:
+    branches:
+      - feat/news-unread-count
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/news-unread-count
+          fetch-depth: 0
+
+      - name: Replace red dot with unread count and mark news read on entry
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
+          s = p.read_text()
+
+          replacements = []
+          replacements.append((
+'''        val badge: View,\n''',
+'''        val badge: TextView,\n'''))
+
+          replacements.append((
+'''        val badgeDot = View(this).apply {\n            background = circle("#B52F24")\n            visibility = View.GONE\n        }\n        val iconFrame = FrameLayout(this).apply {\n            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })\n            addView(badgeDot, FrameLayout.LayoutParams(dp(8), dp(8)).apply {\n                gravity = Gravity.TOP or Gravity.END\n                marginEnd = dp(1)\n            })\n        }\n''',
+'''        val badgeDot = TextView(this).apply {\n            textSize = 9f\n            typeface = heavyFont\n            setTextColor(Color.WHITE)\n            gravity = Gravity.CENTER\n            background = circle("#B52F24")\n            minWidth = dp(18)\n            minimumHeight = dp(18)\n            setPadding(dp(4), 0, dp(4), 0)\n            visibility = View.GONE\n        }\n        val iconFrame = FrameLayout(this).apply {\n            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })\n            addView(badgeDot, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18)).apply {\n                gravity = Gravity.TOP or Gravity.END\n            })\n        }\n'''))
+
+          replacements.append((
+'''    private fun showNews() {\n        isPersonalAreaActive = false\n        isNewsActive = true\n        headerLabelView.text = "חדשות ועדכונים"\n        setActiveNav(newsNavItem)\n        renderNewsList()\n        refreshNews()\n    }\n''',
+'''    private fun showNews() {\n        isPersonalAreaActive = false\n        isNewsActive = true\n        headerLabelView.text = "חדשות ועדכונים"\n        setActiveNav(newsNavItem)\n        newsItems.forEach { Config.markUpdateRead(this, it.id) }\n        updateNewsBadge()\n        renderNewsList()\n        refreshNews()\n    }\n'''))
+
+          replacements.append((
+'''                runOnUiThread {\n                    newsItems = fetched\n                    updateNewsBadge()\n                    if (isNewsActive) renderNewsList()\n                }\n''',
+'''                runOnUiThread {\n                    newsItems = fetched\n                    if (isNewsActive) {\n                        fetched.forEach { Config.markUpdateRead(this, it.id) }\n                    }\n                    updateNewsBadge()\n                    if (isNewsActive) renderNewsList()\n                }\n'''))
+
+          replacements.append((
+'''    private fun updateNewsBadge() {\n        val hasUnread = newsItems.any { !Config.isUpdateRead(this, it.id) }\n        newsNavItem.badge.visibility = if (hasUnread) View.VISIBLE else View.GONE\n    }\n''',
+'''    private fun updateNewsBadge() {\n        val unreadCount = newsItems.count { !Config.isUpdateRead(this, it.id) }\n        newsNavItem.badge.apply {\n            text = when {\n                unreadCount > 99 -> "99+"\n                unreadCount > 0 -> unreadCount.toString()\n                else -> ""\n            }\n            visibility = if (unreadCount > 0) View.VISIBLE else View.GONE\n        }\n    }\n'''))
+
+          for old, new in replacements:
+              if old not in s:
+                  raise SystemExit(f'target block not found:\n{old[:180]}')
+              if s.count(old) != 1:
+                  raise SystemExit(f'expected exactly one target block, found {s.count(old)}:\n{old[:180]}')
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+
+      - name: Remove one-shot workflow and commit patch
+        run: |
+          rm .github/workflows/patch-news-unread-count.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt .github/workflows/patch-news-unread-count.yml
+          git diff --cached --check
+          git commit -m "Show unread news count and clear it on view"
+          git push origin HEAD:feat/news-unread-count
