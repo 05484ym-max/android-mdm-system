@@ -66,7 +66,7 @@ class WallpaperBrandingRetryWorker(
         }
 
         internal fun isTerminalSuccess(result: String): Boolean {
-            return result.contains("· OK ") || result.contains("· כבר מעודכן ·")
+            return result.contains("· OK ") || result.contains("· כבר מעודכן ·") || result.contains("· הסמל כבוי")
         }
     }
 }

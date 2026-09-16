@@ -39,6 +39,12 @@ object WallpaperBranding {
     private const val KEY_LAST_HOME_ID = "last_branded_home_wallpaper_id"
     private const val KEY_LAST_LOCK_ID = "last_branded_lock_wallpaper_id"
     private const val KEY_RECIPE_VERSION = "recipe_version"
+    private const val KEY_ENABLED = "customer_branding_enabled"
+    private const val KEY_HOME_SIZE_PERCENT = "customer_branding_home_size_percent"
+    private const val KEY_LOCK_SIZE_PERCENT = "customer_branding_lock_size_percent"
+    const val MIN_SIZE_PERCENT = 10
+    const val MAX_SIZE_PERCENT = 75
+    const val DEFAULT_SIZE_PERCENT = 30
     private const val ORIGINAL_FILE = "wallpaper_original.png" // legacy original
     private const val ORIGINAL_HOME_FILE = "wallpaper_original_home.png"
     private const val ORIGINAL_LOCK_FILE = "wallpaper_original_lock.png"
@@ -78,13 +84,97 @@ object WallpaperBranding {
     // screen unbranded/black. Visual emblem parameters remain unchanged.
     private const val RECIPE_VERSION = 12
 
+    fun isEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_ENABLED, true)
+
+    fun homeSizePercent(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_HOME_SIZE_PERCENT, DEFAULT_SIZE_PERCENT)
+            .coerceIn(MIN_SIZE_PERCENT, MAX_SIZE_PERCENT)
+
+    fun lockSizePercent(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_LOCK_SIZE_PERCENT, DEFAULT_SIZE_PERCENT)
+            .coerceIn(MIN_SIZE_PERCENT, MAX_SIZE_PERCENT)
+
+    @Synchronized
+    fun setSizePercents(context: Context, homePercent: Int, lockPercent: Int): String {
+        val home = homePercent.coerceIn(MIN_SIZE_PERCENT, MAX_SIZE_PERCENT)
+        val lock = lockPercent.coerceIn(MIN_SIZE_PERCENT, MAX_SIZE_PERCENT)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_HOME_SIZE_PERCENT, home)
+            .putInt(KEY_LOCK_SIZE_PERCENT, lock)
+            .remove(KEY_RECIPE_VERSION)
+            .commit()
+        return if (isEnabled(context)) {
+            apply(context)
+        } else {
+            "Android ${Build.VERSION.RELEASE} · גודל הסמל נשמר: בית $home% · נעילה $lock%"
+        }
+    }
+
+    @Synchronized
+    fun setEnabled(context: Context, enabled: Boolean): String {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_ENABLED, enabled)
+            .commit()
+        return if (enabled) apply(context) else restoreOriginals(context)
+    }
+
+    @Synchronized
+    private fun restoreOriginals(context: Context): String {
+        return try {
+            val dpm = context.getSystemService(DevicePolicyManager::class.java)
+            if (!dpm.isDeviceOwnerApp(context.packageName)) return "DO=לא"
+            val wm = WallpaperManager.getInstance(context)
+            if (!wm.isWallpaperSupported || !wm.isSetWallpaperAllowed) {
+                return "Android ${Build.VERSION.RELEASE} · לא ניתן לשנות רקע"
+            }
+
+            val legacyOriginal = File(context.filesDir, ORIGINAL_FILE)
+            val homeFile = File(context.filesDir, ORIGINAL_HOME_FILE)
+            val lockFile = File(context.filesDir, ORIGINAL_LOCK_FILE)
+            val home = when {
+                homeFile.exists() -> BitmapFactory.decodeFile(homeFile.absolutePath)
+                legacyOriginal.exists() -> BitmapFactory.decodeFile(legacyOriginal.absolutePath)
+                else -> null
+            } ?: return "Android ${Build.VERSION.RELEASE} · הסמל כבוי · אין עותק מקור לשחזור"
+
+            val lock = if (lockFile.exists()) {
+                BitmapFactory.decodeFile(lockFile.absolutePath) ?: home
+            } else {
+                home
+            }
+
+            wm.setBitmap(home, null, true, WallpaperManager.FLAG_SYSTEM)
+            wm.setBitmap(lock, null, true, WallpaperManager.FLAG_LOCK)
+
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(KEY_LAST_ID)
+                .remove(KEY_LAST_HOME_ID)
+                .remove(KEY_LAST_LOCK_ID)
+                .remove(KEY_RECIPE_VERSION)
+                .commit()
+
+            "Android ${Build.VERSION.RELEASE} · הסמל הוסר ממסך הבית והנעילה"
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore original wallpapers", e)
+            "Android ${Build.VERSION.RELEASE} · שגיאה בהסרת הסמל: ${e.message}"
+        }
+    }
+
     /**
      * Returns a short, human-readable outcome so the customer's own sync
      * toast can show it - there's no way to pull logcat off a customer's
      * phone, so this is the only diagnostic signal available in practice.
      */
+    @Synchronized
     fun apply(context: Context): String {
         try {
+            if (!isEnabled(context)) return "Android ${Build.VERSION.RELEASE} · הסמל כבוי לפי בחירת לקוח"
             val dpm = context.getSystemService(DevicePolicyManager::class.java)
             if (!dpm.isDeviceOwnerApp(context.packageName)) return "DO=לא"
 
@@ -176,8 +266,8 @@ object WallpaperBranding {
 
             // Do not change design parameters here. compositeEmblem() remains
             // the single source of truth for size, position and opacity.
-            val brandedHome = compositeEmblem(homeOriginal, emblem)
-            val brandedLock = compositeEmblem(lockOriginal, emblem)
+            val brandedHome = compositeEmblem(homeOriginal, emblem, homeSizePercent(context) / 100f)
+            val brandedLock = compositeEmblem(lockOriginal, emblem, lockSizePercent(context) / 100f)
 
             if (brandedHome.changedPixels == 0 || brandedLock.changedPixels == 0) {
                 return "Android ${Build.VERSION.RELEASE} · COMPOSITE_EMPTY H=${brandedHome.changedPixels}/${brandedHome.checkedPixels} L=${brandedLock.changedPixels}/${brandedLock.checkedPixels} · alphaMax=${sampleMaxAlpha(emblem)}"
@@ -308,12 +398,12 @@ object WallpaperBranding {
 
     /** Emblem sized to well under a third of the screen width, centered
      * horizontally, anchored in the upper third rather than filling it. */
-    private fun compositeEmblem(background: Bitmap, emblem: Bitmap): CompositeResult {
+    private fun compositeEmblem(background: Bitmap, emblem: Bitmap, widthFraction: Float): CompositeResult {
         val result = background.copy(Bitmap.Config.ARGB_8888, true) ?: background
         val canvas = Canvas(result)
 
         // DO NOT change these values without explicit customer approval.
-        val targetWidth = result.width * 0.30f
+        val targetWidth = result.width * widthFraction.coerceIn(MIN_SIZE_PERCENT / 100f, MAX_SIZE_PERCENT / 100f)
         val scale = targetWidth / emblem.width
         val targetHeight = emblem.height * scale
 
