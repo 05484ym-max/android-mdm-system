@@ -1300,6 +1300,30 @@ class CustomerActivity : Activity() {
                 switchView = Switch(this@CustomerActivity).apply {
                     isChecked = actualOn
                     isEnabled = allowToggle
+                    val states = arrayOf(
+                        intArrayOf(android.R.attr.state_checked, android.R.attr.state_enabled),
+                        intArrayOf(android.R.attr.state_checked, -android.R.attr.state_enabled),
+                        intArrayOf(-android.R.attr.state_checked, android.R.attr.state_enabled),
+                        intArrayOf(-android.R.attr.state_checked, -android.R.attr.state_enabled),
+                    )
+                    thumbTintList = android.content.res.ColorStateList(
+                        states,
+                        intArrayOf(
+                            Color.WHITE,
+                            Color.WHITE,
+                            Color.parseColor("#F2F3F2"),
+                            Color.parseColor("#F2F3F2"),
+                        ),
+                    )
+                    trackTintList = android.content.res.ColorStateList(
+                        states,
+                        intArrayOf(
+                            Color.parseColor("#1FA457"),
+                            Color.parseColor("#1FA457"),
+                            Color.parseColor("#B7BDB9"),
+                            Color.parseColor("#B7BDB9"),
+                        ),
+                    )
                 }
                 addView(switchView)
             })
