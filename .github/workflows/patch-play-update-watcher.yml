@@ -1,0 +1,203 @@
+name: Patch Play Update Watcher
+
+on:
+  push:
+    branches: [ feat/play-update-watcher ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/play-update-watcher
+      - name: Patch backend and Android client
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
+          s = p.read_text()
+          old = '''    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
+        if (!installed) return false
+        return false
+    }
+'''
+          new = '''    private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
+        if (!installed || app.appSource != "PLAY") return false
+        val remoteVersion = app.playVersion
+            ?.trim()
+            ?.takeIf { version ->
+                version.isNotEmpty() &&
+                    !version.equals("Varies with device", ignoreCase = true) &&
+                    !version.contains("משתנה", ignoreCase = true)
+            }
+            ?: return false
+
+        @Suppress("DEPRECATION")
+        val installedVersion = try {
+            packageManager.getPackageInfo(app.packageName, 0).versionName?.trim()
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        }
+        return !installedVersion.isNullOrBlank() && installedVersion != remoteVersion
+    }
+'''
+          if old not in s:
+              raise SystemExit('CustomerActivity isUpdateAvailable block not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('backend/db.js')
+          s = p.read_text()
+          marker = '''async function listDevices() {
+'''
+          helper = '''async function listPushTokensForApp(packageName) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT push_token
+       FROM devices
+      WHERE push_token IS NOT NULL
+        AND push_token <> ''
+        AND (
+          full_open_mode = true
+          OR COALESCE(policy->'allowedApps', '[]'::jsonb) ? $1
+        )`,
+    [packageName],
+  );
+  return rows.map(row => row.push_token).filter(Boolean);
+}
+
+'''
+          if marker not in s:
+              raise SystemExit('db listDevices marker not found')
+          s = s.replace(marker, helper + marker, 1)
+          export_marker = '''  listDevices,
+'''
+          if export_marker not in s:
+              raise SystemExit('db export marker not found')
+          s = s.replace(export_marker, '''  listDevices,
+  listPushTokensForApp,
+''', 1)
+          p.write_text(s)
+
+          p = Path('backend/index.js')
+          s = p.read_text()
+          old_constants = '''const PLAY_METADATA_FRESH_MS = 30 * 60 * 1000;
+const AUTO_PLAY_REFRESH_BATCH_SIZE = 3;
+const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
+const AUTO_PLAY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+'''
+          new_constants = '''const PLAY_METADATA_FRESH_MS = 10 * 60 * 1000;
+const AUTO_PLAY_REFRESH_BATCH_SIZE = 10;
+const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
+const AUTO_PLAY_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+'''
+          if old_constants not in s:
+              raise SystemExit('Play refresh constants block not found')
+          s = s.replace(old_constants, new_constants, 1)
+
+          function_marker = '''async function refreshOnePlayPackage(packageName) {
+'''
+          helpers = '''function usablePlayVersion(value) {
+  const version = typeof value === 'string' ? value.trim() : '';
+  if (!version) return null;
+  if (/varies with device/i.test(version) || /משתנה/i.test(version)) return null;
+  return version;
+}
+
+function playVersionChanged(previous, appInfo) {
+  if (!previous) return false;
+  const before = usablePlayVersion(previous.playVersion);
+  const after = usablePlayVersion(appInfo && appInfo.version);
+  return Boolean(before && after && before !== after);
+}
+
+async function wakeDevicesForPlayUpdate(packageName) {
+  const tokens = await db.listPushTokensForApp(packageName);
+  if (!tokens.length) return 0;
+  const results = await Promise.allSettled(tokens.map(token => push.wake(token, {
+    action: 'sync',
+    reason: 'app_update',
+    packageName,
+  })));
+  return results.filter(item => item.status === 'fulfilled' && item.value && item.value.sent).length;
+}
+
+'''
+          if function_marker not in s:
+              raise SystemExit('refreshOnePlayPackage marker not found')
+          s = s.replace(function_marker, helpers + function_marker, 1)
+
+          old_refresh = '''async function refreshOnePlayPackage(packageName) {
+  try {
+    const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
+    await db.addAppToCatalog(
+      appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+      appInfo.category,
+    );
+    await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
+    return true;
+  } catch (e) {
+'''
+          new_refresh = '''async function refreshOnePlayPackage(packageName) {
+  try {
+    const previous = (await db.listAppsCatalog()).find(app => app.packageName === packageName) || null;
+    const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
+    const changed = playVersionChanged(previous, appInfo);
+    await db.addAppToCatalog(
+      appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
+      appInfo.category,
+    );
+    await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
+    if (changed) {
+      const woken = await wakeDevicesForPlayUpdate(appInfo.packageName);
+      console.log(`[auto-play-metadata] update detected for ${appInfo.packageName}: ${previous.playVersion} -> ${appInfo.version}; push wake sent to ${woken} device(s)`);
+    }
+    return true;
+  } catch (e) {
+'''
+          if old_refresh not in s:
+              raise SystemExit('refreshOnePlayPackage exact block not found')
+          s = s.replace(old_refresh, new_refresh, 1)
+          p.write_text(s)
+
+          Path('backend/test-play-update-watcher-static.js').write_text(r'''const fs = require('fs');
+const assert = require('assert');
+const index = fs.readFileSync(__dirname + '/index.js', 'utf8');
+const db = fs.readFileSync(__dirname + '/db.js', 'utf8');
+const customer = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt', 'utf8');
+assert.match(index, /PLAY_METADATA_FRESH_MS = 10 \* 60 \* 1000/);
+assert.match(index, /AUTO_PLAY_REFRESH_INTERVAL_MS = 2 \* 60 \* 1000/);
+assert.match(index, /function playVersionChanged\(/);
+assert.match(index, /reason: 'app_update'/);
+assert.match(index, /wakeDevicesForPlayUpdate\(appInfo\.packageName\)/);
+assert.match(db, /async function listPushTokensForApp\(packageName\)/);
+assert.match(db, /full_open_mode = true/);
+assert.match(db, /policy->'allowedApps'/);
+assert.match(customer, /private fun isUpdateAvailable\(app: CatalogApp, installed: Boolean\): Boolean/);
+assert.match(customer, /installedVersion != remoteVersion/);
+console.log('Play update watcher static checks passed');
+''')
+
+          p = Path('backend/package.json')
+          s = p.read_text()
+          old = 'node test-news-bubble-width-static.js'
+          new = 'node test-news-bubble-width-static.js && node test-play-update-watcher-static.js'
+          if old not in s:
+              raise SystemExit('package test script marker not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Remove temporary patch workflow
+        run: rm .github/workflows/patch-play-update-watcher.yml
+
+      - name: Commit patched implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add automatic Google Play update watcher"
+          git push origin HEAD:feat/play-update-watcher
