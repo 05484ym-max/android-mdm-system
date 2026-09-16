@@ -33,7 +33,7 @@ jobs:
         run: |
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
@@ -65,7 +65,7 @@ jobs:
         run: |
           set -e
           APK=dpc-app/app/build/outputs/apk/release/app-release.apk
-          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
 
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
@@ -77,19 +77,32 @@ jobs:
             exit 1
           fi
 
-          CHECKSUM=$(python3 -c "import base64,sys; print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1])).decode().rstrip('='))" "$CERT_HEX")
+          # Keep RFC-compatible URL-safe Base64 padding. Android accepts URL-safe
+          # Base64 here and Samsung provisioning stacks have historically varied in
+          # how strictly they parse the value.
+          SIGNATURE_CHECKSUM=$(python3 -c "import base64,sys; print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1])).decode())" "$CERT_HEX")
+          PACKAGE_CHECKSUM=$(python3 - "$APK" <<'PYCHECK'
+          import base64, hashlib, sys
+          with open(sys.argv[1], 'rb') as f:
+              digest = hashlib.sha256(f.read()).digest()
+          print(base64.urlsafe_b64encode(digest).decode())
+          PYCHECK
+          )
           echo "Certificate SHA-256 : $CERT_HEX"
-          echo "SIGNATURE_CHECKSUM  : $CHECKSUM"
+          echo "SIGNATURE_CHECKSUM  : $SIGNATURE_CHECKSUM"
+          echo "PACKAGE_CHECKSUM    : $PACKAGE_CHECKSUM"
 
           mkdir -p admin-panel/downloads
           cp "$APK" admin-panel/downloads/mdm.apk
 
-          python3 - "${{ github.run_number }}" <<'PYVER'
+          DOWNLOAD_URL="https://android-mdm-system.onrender.com/downloads/mdm.apk?v=${{ github.run_number }}"
+
+          python3 - "${{ github.run_number }}" "$DOWNLOAD_URL" <<'PYVER'
           import json, sys
           version_code = int(sys.argv[1])
           data = {
               "versionCode": version_code,
-              "apkUrl": "https://android-mdm-system.onrender.com/downloads/mdm.apk"
+              "apkUrl": sys.argv[2]
           }
           with open("admin-panel/downloads/version.json", "w") as f:
               json.dump(data, f, indent=2)
@@ -98,14 +111,14 @@ jobs:
           print(json.dumps(data, indent=2))
           PYVER
 
-          python3 - "$CHECKSUM" <<'PY'
+          python3 - "$SIGNATURE_CHECKSUM" "$PACKAGE_CHECKSUM" "$DOWNLOAD_URL" <<'PY'
           import json, sys
           payload = {
             "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME":
-              "org.mdmopen.dpc/.DpcDeviceAdminReceiver",
-            "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION":
-              "https://android-mdm-system.onrender.com/downloads/mdm.apk",
+              "org.mdmopen.dpc/org.mdmopen.dpc.DpcDeviceAdminReceiver",
+            "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": sys.argv[3],
             "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": sys.argv[1],
+            "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": sys.argv[2],
             "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": True,
             "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": True,
           }
