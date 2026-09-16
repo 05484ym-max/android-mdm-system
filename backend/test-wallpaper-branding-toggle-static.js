@@ -1,5 +1,6 @@
 const fs = require('fs');
 const assert = require('assert');
+// Regression contract for customer wallpaper branding controls and per-screen size sliders.
 const wallpaper = fs.readFileSync('../dpc-app/app/src/main/java/org/mdmopen/dpc/WallpaperBranding.kt', 'utf8');
 const retry = fs.readFileSync('../dpc-app/app/src/main/java/org/mdmopen/dpc/WallpaperBrandingRetryWorker.kt', 'utf8');
 const customer = fs.readFileSync('../dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt', 'utf8');
