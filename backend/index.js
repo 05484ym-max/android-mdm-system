@@ -213,6 +213,19 @@ const DNS_PROVIDER_FILTERS_CONTENT = process.env.DNS_PROVIDER_FILTERS_CONTENT ==
   : process.env.DNS_PROVIDER_FILTERS_CONTENT === '1';
 const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
 const RECOVERY_TTL_MS = 30 * 60 * 1000;
+const ENROLLMENT_CODE_LENGTH = 10;
+// 32 unambiguous symbols = exactly 5 bits of entropy per character.
+// 10 characters therefore retain 50 bits of randomness while staying easy to type.
+const ENROLLMENT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function generateEnrollmentCode() {
+  const bytes = crypto.randomBytes(ENROLLMENT_CODE_LENGTH);
+  let code = '';
+  for (let i = 0; i < ENROLLMENT_CODE_LENGTH; i += 1) {
+    code += ENROLLMENT_CODE_ALPHABET[bytes[i] & 31];
+  }
+  return code;
+}
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -455,7 +468,7 @@ app.get('/health', (req, res) => {
 // ---------- enrollment (admin) ----------
 
 app.post('/api/enrollments', requireAdmin, wrap(async (req, res) => {
-  const token = crypto.randomBytes(16).toString('hex').toUpperCase();
+  const token = generateEnrollmentCode();
   const expiresAt = new Date(Date.now() + ENROLLMENT_TTL_MS);
   await db.createEnrollment(crypto.randomUUID(), sha256(token), expiresAt);
   res.json({ token, expiresAt: expiresAt.toISOString() });

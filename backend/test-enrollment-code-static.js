@@ -1,0 +1,10 @@
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const source = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+assert.match(source, /const ENROLLMENT_CODE_LENGTH = 10;/);
+assert.match(source, /const ENROLLMENT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';/);
+assert.match(source, /app\.post\('\/api\/enrollments'[\s\S]*?const token = generateEnrollmentCode\(\);/);
+assert.match(source, /app\.post\('\/api\/devices\/:deviceId\/recovery-code'[\s\S]*?crypto\.randomBytes\(16\)\.toString\('hex'\)\.toUpperCase\(\)/);
+assert.strictEqual((source.match(/const token = generateEnrollmentCode\(\);/g) || []).length, 1);
+console.log('enrollment code static checks passed');
