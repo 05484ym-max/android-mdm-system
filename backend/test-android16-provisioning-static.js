@@ -13,6 +13,14 @@ const application = fs.readFileSync(
   __dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/MdmApplication.kt',
   'utf8'
 );
+const receiver = fs.readFileSync(
+  __dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/DpcDeviceAdminReceiver.kt',
+  'utf8'
+);
+const compatibility = fs.readFileSync(
+  __dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/AndroidCompatibility.kt',
+  'utf8'
+);
 
 // Android provisioning compliance must return promptly. Network enrollment and
 // policy sync are forbidden from the setup-wizard callback itself.
@@ -23,6 +31,11 @@ assert.doesNotMatch(provisioning, /ApiClient\(/);
 assert.doesNotMatch(provisioning, /PolicySync\.run/);
 assert.doesNotMatch(provisioning, /Thread\s*\{/);
 assert.doesNotMatch(provisioning, /COMPLIANCE_TIMEOUT_MS/);
+
+// Never accept a managed-profile fallback when the product requires Device Owner.
+assert.match(provisioning, /PROVISIONING_MODE_FULLY_MANAGED_DEVICE/);
+assert.match(provisioning, /!allowed\.contains\(fullyManaged\)/);
+assert.match(provisioning, /setResult\(RESULT_CANCELED\)/);
 
 // Enrollment is durable, network-constrained and retryable after provisioning.
 assert.match(worker, /setInitialDelay\(10, TimeUnit\.SECONDS\)/);
@@ -37,4 +50,19 @@ assert.match(worker, /PolicySync\.run\(context\)/);
 // Process death immediately after provisioning must re-arm pending enrollment.
 assert.match(application, /PostProvisionEnrollmentScheduler\.enqueueIfPending\(this\)/);
 
-console.log('Android 16 provisioning compliance static checks passed');
+// One APK must dynamically support Android 10 through Android 16+.
+assert.match(compatibility, /ANDROID_10_11/);
+assert.match(compatibility, /ANDROID_12_14/);
+assert.match(compatibility, /ANDROID_15/);
+assert.match(compatibility, /ANDROID_16_PLUS/);
+assert.match(compatibility, /sdk >= 36/);
+assert.match(compatibility, /sdk >= 35/);
+assert.match(compatibility, /sdk >= 31/);
+assert.match(compatibility, /usesLegacyProvisioningCompletion/);
+
+// Android 10/11 and newer devices both get a durable provisioning-complete path.
+assert.match(receiver, /onProfileProvisioningComplete/);
+assert.match(receiver, /PostProvisionEnrollmentScheduler\.enqueueIfPending\(context\.applicationContext\)/);
+assert.match(receiver, /AndroidCompatibility\.label\(\)/);
+
+console.log('Dynamic Android 10-16 provisioning static checks passed');

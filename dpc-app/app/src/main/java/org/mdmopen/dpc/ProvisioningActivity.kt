@@ -6,17 +6,22 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.os.PersistableBundle
+import android.util.Log
 import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** The two screens Android 12+ provisioning drives while setting up a device owner. */
+/**
+ * Provisioning callbacks used by Android 12+ while the same APK remains compatible
+ * with Android 10/11 through DeviceAdminReceiver completion callbacks.
+ */
 class ProvisioningActivity : Activity() {
 
     private lateinit var statusView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(TAG, "Provisioning callback ${intent.action} on ${AndroidCompatibility.label()}")
 
         when (intent.action) {
             DevicePolicyManager.ACTION_GET_PROVISIONING_MODE -> replyWithProvisioningMode()
@@ -28,23 +33,26 @@ class ProvisioningActivity : Activity() {
         }
     }
 
-    /** Android asks which provisioning modes this DPC supports. */
+    /** Android 12+ asks which provisioning mode this DPC supports. */
     private fun replyWithProvisioningMode() {
         val allowed = intent.getIntegerArrayListExtra(
             DevicePolicyManager.EXTRA_PROVISIONING_ALLOWED_PROVISIONING_MODES
         )
-        val mode = when {
-            allowed.isNullOrEmpty() ->
-                DevicePolicyManager.PROVISIONING_MODE_FULLY_MANAGED_DEVICE
-            allowed.contains(DevicePolicyManager.PROVISIONING_MODE_FULLY_MANAGED_DEVICE) ->
-                DevicePolicyManager.PROVISIONING_MODE_FULLY_MANAGED_DEVICE
-            else -> allowed.first()
+
+        // The product is a fully managed Device Owner. Never silently select a
+        // managed-profile mode merely because it appears first in an OEM list.
+        val fullyManaged = DevicePolicyManager.PROVISIONING_MODE_FULLY_MANAGED_DEVICE
+        if (!allowed.isNullOrEmpty() && !allowed.contains(fullyManaged)) {
+            Log.e(TAG, "Fully managed mode was not offered by setup wizard: $allowed")
+            setResult(RESULT_CANCELED)
+            finish()
+            return
         }
 
         setResult(
             RESULT_OK,
             Intent().apply {
-                putExtra(DevicePolicyManager.EXTRA_PROVISIONING_MODE, mode)
+                putExtra(DevicePolicyManager.EXTRA_PROVISIONING_MODE, fullyManaged)
                 putExtra(DevicePolicyManager.EXTRA_PROVISIONING_SKIP_EDUCATION_SCREENS, true)
             },
         )
@@ -53,11 +61,7 @@ class ProvisioningActivity : Activity() {
 
     /**
      * Keep Android's compliance callback deliberately short and deterministic.
-     *
-     * Newer Android/Samsung setup flows can abort provisioning when a DPC keeps
-     * ACTION_ADMIN_POLICY_COMPLIANCE open for network enrollment or policy sync.
-     * We therefore persist the QR extras, enqueue durable background enrollment,
-     * and return RESULT_OK immediately. The worker owns retries and policy sync.
+     * Network enrollment and policy sync run only after setup hands control back.
      */
     private fun runComplianceStep() {
         setContentView(buildUi())
@@ -67,11 +71,10 @@ class ProvisioningActivity : Activity() {
             readAdminExtras()
             PostProvisionEnrollmentScheduler.enqueueIfPending(applicationContext)
             setResult(RESULT_OK)
-        } catch (_: Exception) {
-            // Provisioning must not be held hostage by background/server setup.
-            // Any already-persisted enrollment token remains available for later
-            // retry from the app or worker. Returning OK lets Device Owner setup
-            // complete instead of dropping into the OEM "contact IT admin" screen.
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not persist/schedule provisioning extras", e)
+            // Do not keep Setup Wizard blocked by server/background work. Durable
+            // completion callbacks and app startup can re-arm pending enrollment.
             setResult(RESULT_OK)
         } finally {
             finish()
@@ -114,5 +117,9 @@ class ProvisioningActivity : Activity() {
             setPadding(0, 32, 0, 0)
         }
         addView(statusView)
+    }
+
+    private companion object {
+        const val TAG = "ProvisioningActivity"
     }
 }
