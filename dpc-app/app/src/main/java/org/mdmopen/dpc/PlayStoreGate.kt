@@ -10,17 +10,20 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.Worker
+import androidx.work.WorkerParameters
+import java.util.concurrent.TimeUnit
 
 /**
- * Play Store is hidden by default, same as any app the customer hasn't been
- * approved for. A short approved-install window reveals it and takes an
- * install-permission lease from ManagedInstallWindow. Play Store never writes
- * DISALLOW_INSTALL_APPS directly; that restriction has one owner only.
+ * Opens one guarded Google Play install lease for one exact package.
  *
- * Because Android's install restriction is global rather than package-scoped,
- * every Play window is paired with PlayInstallGuard. If any newly-installed
- * package differs from the exact requested package, PackageInstallGuardReceiver
- * quarantines it and this gate immediately closes the Play window.
+ * Android does not expose a package-scoped DISALLOW_INSTALL_APPS exception, so
+ * PackageInstallGuardReceiver remains the security backstop. The customer-facing
+ * PlayInstallBlockingActivity is deliberately a UI/security-hardening layer, not
+ * the sole authorization boundary.
  */
 object PlayStoreGate {
     private const val REVEAL_WINDOW_MS = 10_000L
@@ -28,54 +31,50 @@ object PlayStoreGate {
     private const val POLL_INTERVAL_MS = 1_500L
     private const val PACKAGE = "com.android.vending"
     private const val TAG = "PlayStoreGate"
+    private const val TIMEOUT_WORK = "play-install-hard-timeout"
 
     fun openForInstall(context: Context, packageName: String, displayName: String? = null) {
         val appContext = context.applicationContext
         val dpm = appContext.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(appContext, DpcDeviceAdminReceiver::class.java)
+        val appName = displayName ?: Config.appCatalog(appContext)
+            .firstOrNull { it.packageName == packageName }
+            ?.name ?: packageName
+        val startingVersion = installedVersionCode(appContext, packageName)
 
-        val myDeadline = System.currentTimeMillis() + REVEAL_WINDOW_MS + MAX_WAIT_MS
-        val session = PlayInstallGuard.begin(appContext, packageName, myDeadline)
+        val deadline = System.currentTimeMillis() + REVEAL_WINDOW_MS + MAX_WAIT_MS
+        val session = PlayInstallGuard.begin(appContext, packageName, deadline)
+        PlayInstallStatusStore.begin(appContext, session.id, packageName, appName)
 
         try {
-            Config.setPlayStoreAllowedUntil(appContext, myDeadline)
+            Config.setPlayStoreAllowedUntil(appContext, deadline)
             dpm.setApplicationHidden(admin, PACKAGE, false)
             ManagedInstallWindow.open(appContext)
         } catch (e: Exception) {
-            PlayInstallGuard.clear(appContext, session.id)
+            failClosed(appContext, session.id, "לא ניתן היה לפתוח התקנה מאובטחת")
             throw e
         }
 
         try {
-            context.startActivity(
+            appContext.startActivity(
                 Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
                     .setPackage(PACKAGE)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-        } catch (_: Exception) {
-            try {
-                context.startActivity(
-                    Intent(
-                        Intent.ACTION_VIEW,
-                        Uri.parse("https://play.google.com/store/apps/details?id=$packageName"),
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            } catch (e: Exception) {
-                finishSession(appContext, session.id)
-                closePlayUi(appContext, admin, dpm)
-                throw e
-            }
+            PlayInstallStatusStore.update(appContext, session.id, PlayInstallStage.OPENING)
+        } catch (e: Exception) {
+            // Do not fall back to an unrestricted browser URL. Failure closes the
+            // temporary install lease before any customer-facing error is shown.
+            failClosed(appContext, session.id, "Google Play לא זמין במכשיר")
+            throw e
         }
 
-        val appName = displayName ?: Config.appCatalog(appContext)
-            .firstOrNull { it.packageName == packageName }
-            ?.name ?: packageName
-
-        val startingVersion = installedVersionCode(appContext, packageName)
+        scheduleHardTimeout(appContext, deadline)
 
         Handler(Looper.getMainLooper()).postDelayed({
             if (!PlayInstallGuard.isActive(appContext, session.id)) return@postDelayed
-            InstallOverlay.show(appContext, appName)
+            PlayInstallStatusStore.update(appContext, session.id, PlayInstallStage.WAITING)
+            launchBlockingActivity(appContext)
             pollForInstall(
                 appContext,
                 packageName,
@@ -108,19 +107,19 @@ object PlayStoreGate {
         startingVersion: Long?,
         elapsedMs: Long,
     ) {
-        // An unauthorized-package receiver may already have consumed this
-        // session and restored the install restriction. Never close the shared
-        // lease twice from this older polling callback.
         if (!PlayInstallGuard.isActive(context, sessionId)) return
 
         val currentVersion = installedVersionCode(context, packageName)
         val done = if (startingVersion == null) currentVersion != null else
             currentVersion != null && currentVersion > startingVersion
 
-        if (done || elapsedMs >= MAX_WAIT_MS) {
-            if (finishSession(context, sessionId)) {
-                closePlayUi(context, admin, dpm)
-            }
+        if (done) {
+            completeTargetInstall(context, packageName, sessionId)
+            return
+        }
+
+        if (elapsedMs >= MAX_WAIT_MS) {
+            failClosed(context, sessionId, "זמן ההתקנה הסתיים. ההרשאה נסגרה אוטומטית")
             return
         }
 
@@ -137,9 +136,29 @@ object PlayStoreGate {
         }, POLL_INTERVAL_MS)
     }
 
-    /** Called only by PackageInstallGuardReceiver after it has already hidden
-     * and suspended the unauthorized package. Consumes exactly the active Play
-     * lease, restores normal install blocking, hides Play, and returns Home. */
+    /** Receiver fast-path: the exact approved package emitted ADDED/REPLACED. */
+    fun completeBecauseTargetInstalled(context: Context, changedPackage: String) {
+        val appContext = context.applicationContext
+        val session = PlayInstallGuard.activeSession(appContext) ?: return
+        if (session.targetPackage != changedPackage) return
+        completeTargetInstall(appContext, changedPackage, session.id)
+    }
+
+    private fun completeTargetInstall(context: Context, packageName: String, sessionId: String) {
+        if (!PlayInstallGuard.isActive(context, sessionId)) return
+        PlayInstallStatusStore.update(context, sessionId, PlayInstallStage.INSTALLING)
+        if (!finishSession(context, sessionId)) return
+        closePlayUi(context)
+        PlayInstallStatusStore.update(
+            context,
+            sessionId,
+            PlayInstallStage.COMPLETED,
+            "$packageName הותקנה בהצלחה",
+        )
+        launchBlockingActivity(context)
+    }
+
+    /** Called only after PackageInstallGuardReceiver quarantines another package. */
     fun abortBecauseUnauthorizedInstall(context: Context, installedPackage: String) {
         val appContext = context.applicationContext
         val session = PlayInstallGuard.abortCurrent(appContext) ?: return
@@ -152,32 +171,63 @@ object PlayStoreGate {
 
         ManagedInstallWindow.close(appContext)
         Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        cancelHardTimeout(appContext)
+        closePlayUi(appContext)
+        PlayInstallStatusStore.update(
+            appContext,
+            session.id,
+            PlayInstallStage.FAILED,
+            "זוהתה התקנה לא מאושרת. ההרשאה נסגרה מיד",
+        )
+        launchBlockingActivity(appContext)
+    }
 
-        val dpm = appContext.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val admin = ComponentName(appContext, DpcDeviceAdminReceiver::class.java)
-        closePlayUi(appContext, admin, dpm)
+    /** Process-start recovery: an in-flight Play lease from a previous process is stale. */
+    fun recoverAfterProcessStart(context: Context) {
+        val appContext = context.applicationContext
+        val snapshot = PlayInstallStatusStore.snapshot(appContext) ?: return
+        if (snapshot.stage.terminal) return
+
+        val session = PlayInstallGuard.abortCurrent(appContext)
+        if (session != null) {
+            ManagedInstallWindow.close(appContext)
+        } else if (ManagedInstallWindow.isOpen(appContext)) {
+            // Corrupt/missing ownership metadata is safer to close than to leave open.
+            ManagedInstallWindow.forceClose(appContext)
+        }
+        Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        cancelHardTimeout(appContext)
+        closePlayUi(appContext)
+        PlayInstallStatusStore.update(
+            appContext,
+            snapshot.sessionId,
+            PlayInstallStage.FAILED,
+            "ההתקנה הופסקה לאחר אתחול תהליך וההרשאה נסגרה",
+        )
+    }
+
+    private fun failClosed(context: Context, sessionId: String, message: String) {
+        val appContext = context.applicationContext
+        val wasActive = PlayInstallGuard.finish(appContext, sessionId)
+        if (wasActive) ManagedInstallWindow.close(appContext)
+        Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        cancelHardTimeout(appContext)
+        closePlayUi(appContext)
+        PlayInstallStatusStore.update(appContext, sessionId, PlayInstallStage.FAILED, message)
+        launchBlockingActivity(appContext)
     }
 
     private fun finishSession(context: Context, sessionId: String): Boolean {
         if (!PlayInstallGuard.finish(context, sessionId)) return false
         ManagedInstallWindow.close(context)
         Config.setPlayStoreAllowedUntil(context, System.currentTimeMillis())
+        cancelHardTimeout(context)
         return true
     }
 
-    private fun closePlayUi(
-        context: Context,
-        admin: ComponentName,
-        dpm: DevicePolicyManager,
-    ) {
-        try {
-            context.startActivity(
-                Intent(Intent.ACTION_MAIN)
-                    .addCategory(Intent.CATEGORY_HOME)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        } catch (_: Exception) {}
-
+    private fun closePlayUi(context: Context) {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val admin = ComponentName(context, DpcDeviceAdminReceiver::class.java)
         try {
             if (dpm.isDeviceOwnerApp(context.packageName)) {
                 dpm.setApplicationHidden(admin, PACKAGE, true)
@@ -185,10 +235,57 @@ object PlayStoreGate {
         } catch (e: Exception) {
             Log.e(TAG, "Could not hide Play Store while closing guarded install window", e)
         }
-
         InstallOverlay.hide(context)
+    }
+
+    private fun launchBlockingActivity(context: Context) {
+        runCatching {
+            context.startActivity(
+                Intent(context, PlayInstallBlockingActivity::class.java)
+                    .addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                    )
+            )
+        }.onFailure { Log.e(TAG, "Could not show Play install blocking UI", it) }
+    }
+
+    private fun scheduleHardTimeout(context: Context, deadline: Long) {
+        val delayMs = (deadline - System.currentTimeMillis()).coerceAtLeast(1_000L)
+        val request = OneTimeWorkRequestBuilder<PlayInstallTimeoutWorker>()
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            TIMEOUT_WORK,
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
+    }
+
+    private fun cancelHardTimeout(context: Context) {
+        WorkManager.getInstance(context).cancelUniqueWork(TIMEOUT_WORK)
+    }
+
+    fun handleHardTimeout(context: Context) {
+        val session = PlayInstallGuard.activeSession(context) ?: return
+        if (System.currentTimeMillis() < session.expiresAt) return
+        failClosed(context, session.id, "זמן ההתקנה הסתיים. ההרשאה נסגרה אוטומטית")
     }
 
     fun isWindowClosed(context: Context): Boolean =
         Config.playStoreAllowedUntil(context) <= System.currentTimeMillis()
+}
+
+class PlayInstallTimeoutWorker(
+    appContext: Context,
+    params: WorkerParameters,
+) : Worker(appContext, params) {
+    override fun doWork(): Result = try {
+        PlayStoreGate.handleHardTimeout(applicationContext)
+        Result.success()
+    } catch (e: Exception) {
+        Log.e("PlayInstallTimeout", "Hard-timeout recovery failed", e)
+        Result.retry()
+    }
 }
