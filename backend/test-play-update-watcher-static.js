@@ -20,20 +20,22 @@ assert.match(customer, /private fun isUpdateAvailable\(app: CatalogApp, installe
 assert.match(customer, /installedVersion != remoteVersion/);
 assert.match(customer, /updateAvailable -> "עדכון זמין"/);
 
-// A Play install window must now be package-scoped. The target package is
-// persisted before the global install restriction is lifted; a PACKAGE_ADDED
-// receiver quarantines any other newly-installed package and consumes exactly
-// that Play lease so the ordinary install block is restored immediately.
+// A Play install/update window must be package-scoped. The target package is
+// persisted before the global install restriction is lifted; PACKAGE_ADDED
+// events, including replacements/updates, must quarantine any different
+// package and consume exactly that Play lease so the ordinary install block is
+// restored immediately.
 assert.match(playGate, /PlayInstallGuard\.begin\(appContext, packageName, myDeadline\)/);
 assert.match(playGate, /abortBecauseUnauthorizedInstall/);
 assert.match(playGate, /ManagedInstallWindow\.close\(appContext\)/);
 assert.match(playGuard, /KEY_TARGET_PACKAGE/);
 assert.match(playGuard, /ManagedInstallWindow\.close\(context\)/);
 assert.match(packageGuard, /Intent\.ACTION_PACKAGE_ADDED/);
-assert.match(packageGuard, /installedPackage == session\.targetPackage/);
-assert.match(packageGuard, /setPackagesSuspended\(admin, arrayOf\(installedPackage\), true\)/);
-assert.match(packageGuard, /setApplicationHidden\(admin, installedPackage, true\)/);
-assert.match(packageGuard, /PlayStoreGate\.abortBecauseUnauthorizedInstall\(appContext, installedPackage\)/);
+assert.match(packageGuard, /changedPackage == session\.targetPackage/);
+assert.doesNotMatch(packageGuard, /getBooleanExtra\(Intent\.EXTRA_REPLACING, false\)\) return/);
+assert.match(packageGuard, /setPackagesSuspended\(admin, arrayOf\(changedPackage\), true\)/);
+assert.match(packageGuard, /setApplicationHidden\(admin, changedPackage, true\)/);
+assert.match(packageGuard, /PlayStoreGate\.abortBecauseUnauthorizedInstall\(appContext, changedPackage\)/);
 assert.match(manifest, /android:name="\.PackageInstallGuardReceiver"/);
 assert.match(manifest, /android\.intent\.action\.PACKAGE_ADDED/);
 
