@@ -10,8 +10,8 @@ import android.util.Log
  * Android 12+ admin-integrated provisioning mode callback.
  *
  * Keep this callback deliberately tiny and deterministic. The QR flow is for a
- * fully-managed Device Owner, so we return only that mode and never run network,
- * policy, WorkManager or UI work while Setup Wizard is waiting for the result.
+ * fully-managed Device Owner, so we return only that mode and never start
+ * background, network, policy or UI work while Setup Wizard is waiting.
  */
 class GetProvisioningModeActivity : Activity() {
 
