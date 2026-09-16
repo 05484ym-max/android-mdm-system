@@ -25,9 +25,10 @@ assert.doesNotMatch(provisioning, /Thread\s*\{/);
 assert.doesNotMatch(provisioning, /COMPLIANCE_TIMEOUT_MS/);
 
 // Enrollment is durable, network-constrained and retryable after provisioning.
+assert.match(worker, /setInitialDelay\(10, TimeUnit\.SECONDS\)/);
 assert.match(worker, /NetworkType\.CONNECTED/);
 assert.match(worker, /enqueueUniqueWork/);
-assert.match(worker, /ExistingWorkPolicy\.REPLACE/);
+assert.match(worker, /ExistingWorkPolicy\.KEEP/);
 assert.match(worker, /Result\.retry\(\)/);
 assert.match(worker, /Config\.setEnrollmentCredentials/);
 assert.match(worker, /Config\.clearPendingEnrollmentToken/);
