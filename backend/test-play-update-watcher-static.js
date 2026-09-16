@@ -13,4 +13,5 @@ assert.match(db, /full_open_mode = true/);
 assert.match(db, /policy->'allowedApps'/);
 assert.match(customer, /private fun isUpdateAvailable\(app: CatalogApp, installed: Boolean\): Boolean/);
 assert.match(customer, /installedVersion != remoteVersion/);
+assert.match(customer, /updateAvailable -> "עדכון זמין"/);
 console.log('Play update watcher static checks passed');
