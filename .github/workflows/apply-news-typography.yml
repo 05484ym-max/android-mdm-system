@@ -1,0 +1,32 @@
+name: Apply News Typography Patch
+
+on:
+  push:
+    branches:
+      - feat/news-live-preview
+    paths:
+      - '.github/workflows/apply-news-typography.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/news-live-preview
+      - name: Apply typography patch
+        run: python3 scripts/patch_news_typography.py
+      - name: Run backend regression suite
+        working-directory: backend
+        run: npm test
+      - name: Commit patched files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/apply-news-typography.yml scripts/patch_news_typography.py
+          git add -A
+          git commit -m 'Add per-message news typography controls'
+          git push origin HEAD:feat/news-live-preview
