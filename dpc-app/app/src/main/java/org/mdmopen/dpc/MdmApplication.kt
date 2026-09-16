@@ -9,14 +9,12 @@ class MdmApplication : Application() {
         super.onCreate()
         registerActivityLifecycleCallbacks(CustomerUiPolish())
 
-        // If Android killed the process immediately after provisioning, the QR
-        // credentials are already persisted. Re-arm durable enrollment on the
-        // next process start without making the setup wizard wait for network.
+        runCatching { PlayStoreGate.recoverAfterProcessStart(this) }
+            .onFailure { Log.e("MdmApplication", "Play install recovery failed", it) }
+
         runCatching { PostProvisionEnrollmentScheduler.enqueueIfPending(this) }
             .onFailure { Log.w("MdmApplication", "Could not resume pending enrollment", it) }
 
-        // Capability probing may execute OEM getprop checks, so keep it off the
-        // main thread. Failure must never block the existing Device Owner flow.
         thread(name = "mdm-capability-detect", isDaemon = true) {
             runCatching { CapabilitySnapshotStore.refresh(this) }
                 .onFailure { Log.w("MdmApplication", "Capability detection failed", it) }
