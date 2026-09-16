@@ -134,3 +134,25 @@
 }
 #newsFontScaleInput { flex:1; min-width:120px; accent-color:var(--accent); }
 #newsFontFamilyInput { margin-bottom:0; }
+
+
+/* Compact composer controls and keep live preview directly under typography. */
+.news-width-field, .news-typography-field {
+  margin: 6px 0 7px; padding: 9px 10px; border-radius: 12px;
+}
+.news-width-controls { gap: 7px; align-items: center; }
+.news-width-number { width: 70px; padding-top: 7px; padding-bottom: 7px; }
+.news-media-label { margin-bottom: 5px; }
+.news-media-help { margin-top: 4px; line-height: 1.3; }
+#newsFontFamilyInput { padding-top: 8px; padding-bottom: 8px; }
+.news-live-preview { margin: 7px 0 9px; padding: 9px; border-radius: 13px; }
+.news-live-preview-label { margin-bottom: 6px; }
+.news-live-preview-stage { min-height: 92px; padding: 7px; }
+.news-live-bubble { padding: 10px; border-radius: 13px; }
+.news-media-field { margin-top: 8px; }
+@media (max-width: 520px) {
+  .news-width-field, .news-typography-field { padding: 8px; }
+  .news-width-controls input[type=range] { min-width: 0; }
+  .news-width-number { width: 64px; }
+  .news-live-preview-stage { min-height: 82px; }
+}

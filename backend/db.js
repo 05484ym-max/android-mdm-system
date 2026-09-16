@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS customer_updates (
   media_size_bytes  BIGINT,
   bubble_width_percent INTEGER NOT NULL DEFAULT 88 CHECK (bubble_width_percent BETWEEN 55 AND 100),
   font_scale_percent INTEGER NOT NULL DEFAULT 100 CHECK (font_scale_percent BETWEEN 80 AND 150),
-  font_family TEXT NOT NULL DEFAULT 'SYSTEM' CHECK (font_family IN ('SYSTEM','ROUNDED','SERIF','MONO')),
+  font_family TEXT NOT NULL DEFAULT 'SYSTEM' CHECK (font_family IN ('SYSTEM','ROUNDED','SERIF','MONO','LIGHT','MEDIUM','CONDENSED','BLACK','SERIF_MONO')),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at      TIMESTAMPTZ
@@ -232,7 +232,9 @@ ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_mime_type TEXT;
 ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_size_bytes BIGINT;
 ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS bubble_width_percent INTEGER NOT NULL DEFAULT 88 CHECK (bubble_width_percent BETWEEN 55 AND 100);
 ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS font_scale_percent INTEGER NOT NULL DEFAULT 100 CHECK (font_scale_percent BETWEEN 80 AND 150);
-ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS font_family TEXT NOT NULL DEFAULT 'SYSTEM' CHECK (font_family IN ('SYSTEM','ROUNDED','SERIF','MONO'));
+ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS font_family TEXT NOT NULL DEFAULT 'SYSTEM' CHECK (font_family IN ('SYSTEM','ROUNDED','SERIF','MONO','LIGHT','MEDIUM','CONDENSED','BLACK','SERIF_MONO'));
+ALTER TABLE customer_updates DROP CONSTRAINT IF EXISTS customer_updates_font_family_check;
+ALTER TABLE customer_updates ADD CONSTRAINT customer_updates_font_family_check CHECK (font_family IN ('SYSTEM','ROUNDED','SERIF','MONO','LIGHT','MEDIUM','CONDENSED','BLACK','SERIF_MONO'));
 
 -- Matches the device-facing query's own WHERE/ORDER BY exactly (see
 -- listPublishedCustomerUpdatesForDevice) - a partial index over only the
