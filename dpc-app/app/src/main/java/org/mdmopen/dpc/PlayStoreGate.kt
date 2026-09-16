@@ -268,9 +268,12 @@ object PlayStoreGate {
     }
 
     fun handleHardTimeout(context: Context) {
-        val session = PlayInstallGuard.activeSession(context) ?: return
-        if (System.currentTimeMillis() < session.expiresAt) return
-        failClosed(context, session.id, "זמן ההתקנה הסתיים. ההרשאה נסגרה אוטומטית")
+        val snapshot = PlayInstallStatusStore.snapshot(context) ?: return
+        if (snapshot.stage.terminal) return
+        // activeSession() clears expired guard state as a side effect, so timeout
+        // cleanup must use the recovery path which also hides Play and closes any
+        // remaining managed-install lease before marking the UI failed.
+        recoverAfterProcessStart(context)
     }
 
     fun isWindowClosed(context: Context): Boolean =
