@@ -348,13 +348,13 @@ class CustomerActivity : Activity() {
 
         contentArea.addView(personalDetailsCard(rows))
 
+        contentArea.addView(sectionTitle("סמל יהודי כשר ברקע"))
+        contentArea.addView(wallpaperBrandingToggleCard())
+
         contentArea.addView(whatsAppFeaturedCard(), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(14) })
-
-        contentArea.addView(sectionTitle("סמל יהודי כשר ברקע"))
-        contentArea.addView(wallpaperBrandingToggleCard())
 
         // Keep DNS functionality intact, below the approved hero content so the first screen
         // remains visually identical to the mockup while advanced controls remain available.
@@ -369,6 +369,8 @@ class CustomerActivity : Activity() {
     private fun wallpaperBrandingToggleCard(): LinearLayout {
         var homePercent = WallpaperBranding.homeSizePercent(this)
         var lockPercent = WallpaperBranding.lockSizePercent(this)
+        var homeTopPercent = WallpaperBranding.homeTopPercent(this)
+        var lockTopPercent = WallpaperBranding.lockTopPercent(this)
         val enabledAtStart = WallpaperBranding.isEnabled(this)
 
         val homeValue = TextView(this).apply {
@@ -379,6 +381,18 @@ class CustomerActivity : Activity() {
         }
         val lockValue = TextView(this).apply {
             text = "$lockPercent%"
+            textSize = 12.5f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(ACCENT_DARK))
+        }
+        val homeTopValue = TextView(this).apply {
+            text = "$homeTopPercent%"
+            textSize = 12.5f
+            typeface = heavyFont
+            setTextColor(Color.parseColor(ACCENT_DARK))
+        }
+        val lockTopValue = TextView(this).apply {
+            text = "$lockTopPercent%"
             textSize = 12.5f
             typeface = heavyFont
             setTextColor(Color.parseColor(ACCENT_DARK))
@@ -438,6 +452,54 @@ class CustomerActivity : Activity() {
         val homeSeek = homeControl.tag as SeekBar
         val lockSeek = lockControl.tag as SeekBar
 
+        fun makeTopControl(title: String, initial: Int, valueView: TextView, onValue: (Int) -> Unit): LinearLayout {
+            val seek = SeekBar(this).apply {
+                max = WallpaperBranding.MAX_TOP_PERCENT - WallpaperBranding.MIN_TOP_PERCENT
+                progress = initial - WallpaperBranding.MIN_TOP_PERCENT
+                isEnabled = enabledAtStart
+            }
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val value = WallpaperBranding.MIN_TOP_PERCENT + progress
+                    valueView.text = "$value%"
+                    onValue(value)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    if (!WallpaperBranding.isEnabled(this@CustomerActivity)) return
+                    val currentHome = homeTopPercent
+                    val currentLock = lockTopPercent
+                    Thread {
+                        val result = WallpaperBranding.setTopPercents(applicationContext, currentHome, currentLock)
+                        runOnUiThread { Toast.makeText(this@CustomerActivity, result, Toast.LENGTH_SHORT).show() }
+                    }.start()
+                }
+            })
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(8), 0, dp(2))
+                addView(LinearLayout(this@CustomerActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(TextView(this@CustomerActivity).apply {
+                        text = title
+                        textSize = 13f
+                        typeface = mediumFont
+                        setTextColor(Color.parseColor(TEXT))
+                        gravity = Gravity.RIGHT
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(valueView)
+                })
+                addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                tag = seek
+            }
+        }
+
+        val homeTopControl = makeTopControl("מיקום הסמל למעלה / למטה במסך הבית", homeTopPercent, homeTopValue) { homeTopPercent = it }
+        val lockTopControl = makeTopControl("מיקום הסמל למעלה / למטה במסך הנעילה", lockTopPercent, lockTopValue) { lockTopPercent = it }
+        val homeTopSeek = homeTopControl.tag as SeekBar
+        val lockTopSeek = lockTopControl.tag as SeekBar
+
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.RIGHT
@@ -470,6 +532,8 @@ class CustomerActivity : Activity() {
                     button.isEnabled = false
                     homeSeek.isEnabled = enabled
                     lockSeek.isEnabled = enabled
+                    homeTopSeek.isEnabled = enabled
+                    lockTopSeek.isEnabled = enabled
                     text = if (enabled) "מוסיף סמל..." else "מסיר סמל..."
                     Thread {
                         val result = WallpaperBranding.setEnabled(applicationContext, enabled)
@@ -487,6 +551,8 @@ class CustomerActivity : Activity() {
             ))
             addView(homeControl)
             addView(lockControl)
+            addView(homeTopControl)
+            addView(lockTopControl)
         }
     }
 

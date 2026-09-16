@@ -42,9 +42,14 @@ object WallpaperBranding {
     private const val KEY_ENABLED = "customer_branding_enabled"
     private const val KEY_HOME_SIZE_PERCENT = "customer_branding_home_size_percent"
     private const val KEY_LOCK_SIZE_PERCENT = "customer_branding_lock_size_percent"
+    private const val KEY_HOME_TOP_PERCENT = "customer_branding_home_top_percent"
+    private const val KEY_LOCK_TOP_PERCENT = "customer_branding_lock_top_percent"
     const val MIN_SIZE_PERCENT = 10
     const val MAX_SIZE_PERCENT = 75
     const val DEFAULT_SIZE_PERCENT = 30
+    const val MIN_TOP_PERCENT = 5
+    const val MAX_TOP_PERCENT = 75
+    const val DEFAULT_TOP_PERCENT = 28
     private const val ORIGINAL_FILE = "wallpaper_original.png" // legacy original
     private const val ORIGINAL_HOME_FILE = "wallpaper_original_home.png"
     private const val ORIGINAL_LOCK_FILE = "wallpaper_original_lock.png"
@@ -98,6 +103,16 @@ object WallpaperBranding {
             .getInt(KEY_LOCK_SIZE_PERCENT, DEFAULT_SIZE_PERCENT)
             .coerceIn(MIN_SIZE_PERCENT, MAX_SIZE_PERCENT)
 
+    fun homeTopPercent(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_HOME_TOP_PERCENT, DEFAULT_TOP_PERCENT)
+            .coerceIn(MIN_TOP_PERCENT, MAX_TOP_PERCENT)
+
+    fun lockTopPercent(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_LOCK_TOP_PERCENT, DEFAULT_TOP_PERCENT)
+            .coerceIn(MIN_TOP_PERCENT, MAX_TOP_PERCENT)
+
     @Synchronized
     fun setSizePercents(context: Context, homePercent: Int, lockPercent: Int): String {
         val home = homePercent.coerceIn(MIN_SIZE_PERCENT, MAX_SIZE_PERCENT)
@@ -112,6 +127,23 @@ object WallpaperBranding {
             apply(context)
         } else {
             "Android ${Build.VERSION.RELEASE} · גודל הסמל נשמר: בית $home% · נעילה $lock%"
+        }
+    }
+
+    @Synchronized
+    fun setTopPercents(context: Context, homePercent: Int, lockPercent: Int): String {
+        val home = homePercent.coerceIn(MIN_TOP_PERCENT, MAX_TOP_PERCENT)
+        val lock = lockPercent.coerceIn(MIN_TOP_PERCENT, MAX_TOP_PERCENT)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_HOME_TOP_PERCENT, home)
+            .putInt(KEY_LOCK_TOP_PERCENT, lock)
+            .remove(KEY_RECIPE_VERSION)
+            .commit()
+        return if (isEnabled(context)) {
+            apply(context)
+        } else {
+            "Android ${Build.VERSION.RELEASE} · מיקום הסמל נשמר: בית $home% · נעילה $lock%"
         }
     }
 
@@ -266,8 +298,8 @@ object WallpaperBranding {
 
             // Do not change design parameters here. compositeEmblem() remains
             // the single source of truth for size, position and opacity.
-            val brandedHome = compositeEmblem(homeOriginal, emblem, homeSizePercent(context) / 100f)
-            val brandedLock = compositeEmblem(lockOriginal, emblem, lockSizePercent(context) / 100f)
+            val brandedHome = compositeEmblem(homeOriginal, emblem, homeSizePercent(context) / 100f, homeTopPercent(context) / 100f)
+            val brandedLock = compositeEmblem(lockOriginal, emblem, lockSizePercent(context) / 100f, lockTopPercent(context) / 100f)
 
             if (brandedHome.changedPixels == 0 || brandedLock.changedPixels == 0) {
                 return "Android ${Build.VERSION.RELEASE} · COMPOSITE_EMPTY H=${brandedHome.changedPixels}/${brandedHome.checkedPixels} L=${brandedLock.changedPixels}/${brandedLock.checkedPixels} · alphaMax=${sampleMaxAlpha(emblem)}"
@@ -398,7 +430,7 @@ object WallpaperBranding {
 
     /** Emblem sized to well under a third of the screen width, centered
      * horizontally, anchored in the upper third rather than filling it. */
-    private fun compositeEmblem(background: Bitmap, emblem: Bitmap, widthFraction: Float): CompositeResult {
+    private fun compositeEmblem(background: Bitmap, emblem: Bitmap, widthFraction: Float, topFraction: Float): CompositeResult {
         val result = background.copy(Bitmap.Config.ARGB_8888, true) ?: background
         val canvas = Canvas(result)
 
@@ -408,7 +440,9 @@ object WallpaperBranding {
         val targetHeight = emblem.height * scale
 
         val left = (result.width - targetWidth) / 2f
-        val top = result.height * 0.28f
+        val requestedTop = result.height * topFraction.coerceIn(MIN_TOP_PERCENT / 100f, MAX_TOP_PERCENT / 100f)
+        val maxTop = (result.height - targetHeight).coerceAtLeast(0f)
+        val top = requestedTop.coerceIn(0f, maxTop)
 
         val destRect = RectF(left, top, left + targetWidth, top + targetHeight)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
