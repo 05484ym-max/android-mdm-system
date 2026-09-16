@@ -12,4 +12,13 @@ assert(retry.includes('result.contains("· הסמל כבוי")'));
 assert(customer.includes('sectionTitle("סמל יהודי כשר ברקע")'));
 assert(customer.includes('wallpaperBrandingToggleCard()'));
 assert(customer.includes('WallpaperBranding.setEnabled(applicationContext, enabled)'));
+
+assert(wallpaper.includes('KEY_HOME_SIZE_PERCENT = "customer_branding_home_size_percent"'));
+assert(wallpaper.includes('KEY_LOCK_SIZE_PERCENT = "customer_branding_lock_size_percent"'));
+assert(wallpaper.includes('const val MIN_SIZE_PERCENT = 10'));
+assert(wallpaper.includes('const val MAX_SIZE_PERCENT = 75'));
+assert(wallpaper.includes('fun setSizePercents(context: Context, homePercent: Int, lockPercent: Int): String'));
+assert(customer.includes('SeekBar.OnSeekBarChangeListener'));
+assert(customer.includes('גודל הסמל במסך הבית'));
+assert(customer.includes('גודל הסמל במסך הנעילה'));
 console.log('wallpaper branding customer toggle wiring: ok');
