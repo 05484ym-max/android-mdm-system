@@ -221,10 +221,20 @@ class MainActivity : Activity() {
                     result.deviceId,
                     result.deviceToken,
                 )
+
+                // Registration alone only establishes identity. Pull the first full policy/catalog
+                // immediately so the customer UI and app store are ready without a reboot or wait.
+                val syncMessage = PolicySync.run(this@MainActivity)
+                SyncScheduler.schedule(this@MainActivity)
+                UpdateCheckScheduler.scheduleIfNeeded(this@MainActivity)
+
                 mainHandler.post {
                     enrollInput.setText("")
                     refreshStatus()
                     log("המכשיר נרשם בהצלחה. מזהה מכשיר: ${result.deviceId}")
+                    log(syncMessage)
+                    startActivity(Intent(this@MainActivity, CustomerActivity::class.java))
+                    finish()
                 }
             } catch (e: Exception) {
                 postLog("רישום נכשל: ${e.message}")
