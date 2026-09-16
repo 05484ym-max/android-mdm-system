@@ -68,6 +68,7 @@ object PolicySync {
             DnsFailSafeScheduler.scheduleIfNeeded(context)
             PushRegistration.ensureRegistered(context)
             val wallpaperResult = WallpaperBranding.apply(context)
+            WallpaperBrandingRetryWorker.scheduleIfNeeded(context, wallpaperResult)
 
             val summary = buildString {
                 append("רקע: $wallpaperResult")
