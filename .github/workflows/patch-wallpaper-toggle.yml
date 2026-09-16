@@ -1,0 +1,82 @@
+name: Patch Wallpaper Branding Toggle
+on:
+  push:
+    branches: [feat/customer-wallpaper-branding-toggle]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/customer-wallpaper-branding-toggle
+      - name: Patch customer wallpaper branding toggle
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          wp = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/WallpaperBranding.kt')
+          s = wp.read_text()
+          s = s.replace(
+              '    private const val KEY_RECIPE_VERSION = "recipe_version"\n',
+              '    private const val KEY_RECIPE_VERSION = "recipe_version"\n    private const val KEY_ENABLED = "customer_branding_enabled"\n'
+          )
+          marker = '    /**\n     * Returns a short, human-readable outcome so the customer\'s own sync\n'
+          methods = '''    fun isEnabled(context: Context): Boolean =\n        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)\n            .getBoolean(KEY_ENABLED, true)\n\n    @Synchronized\n    fun setEnabled(context: Context, enabled: Boolean): String {\n        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)\n            .edit()\n            .putBoolean(KEY_ENABLED, enabled)\n            .commit()\n        return if (enabled) apply(context) else restoreOriginals(context)\n    }\n\n    @Synchronized\n    private fun restoreOriginals(context: Context): String {\n        return try {\n            val dpm = context.getSystemService(DevicePolicyManager::class.java)\n            if (!dpm.isDeviceOwnerApp(context.packageName)) return "DO=לא"\n            val wm = WallpaperManager.getInstance(context)\n            if (!wm.isWallpaperSupported || !wm.isSetWallpaperAllowed) {\n                return "Android ${Build.VERSION.RELEASE} · לא ניתן לשנות רקע"\n            }\n\n            val legacyOriginal = File(context.filesDir, ORIGINAL_FILE)\n            val homeFile = File(context.filesDir, ORIGINAL_HOME_FILE)\n            val lockFile = File(context.filesDir, ORIGINAL_LOCK_FILE)\n            val home = when {\n                homeFile.exists() -> BitmapFactory.decodeFile(homeFile.absolutePath)\n                legacyOriginal.exists() -> BitmapFactory.decodeFile(legacyOriginal.absolutePath)\n                else -> null\n            } ?: return "Android ${Build.VERSION.RELEASE} · הסמל כבוי · אין עותק מקור לשחזור"\n\n            val lock = if (lockFile.exists()) {\n                BitmapFactory.decodeFile(lockFile.absolutePath) ?: home\n            } else {\n                home\n            }\n\n            wm.setBitmap(home, null, true, WallpaperManager.FLAG_SYSTEM)\n            wm.setBitmap(lock, null, true, WallpaperManager.FLAG_LOCK)\n\n            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()\n                .remove(KEY_LAST_ID)\n                .remove(KEY_LAST_HOME_ID)\n                .remove(KEY_LAST_LOCK_ID)\n                .remove(KEY_RECIPE_VERSION)\n                .commit()\n\n            "Android ${Build.VERSION.RELEASE} · הסמל הוסר ממסך הבית והנעילה"\n        } catch (e: Exception) {\n            Log.w(TAG, "Could not restore original wallpapers", e)\n            "Android ${Build.VERSION.RELEASE} · שגיאה בהסרת הסמל: ${e.message}"\n        }\n    }\n\n'''
+          if methods.strip() not in s:
+              if marker not in s:
+                  raise SystemExit('WallpaperBranding insertion marker not found')
+              s = s.replace(marker, methods + marker)
+          s = s.replace(
+              '    fun apply(context: Context): String {\n        try {\n',
+              '    @Synchronized\n    fun apply(context: Context): String {\n        try {\n            if (!isEnabled(context)) return "Android ${Build.VERSION.RELEASE} · הסמל כבוי לפי בחירת לקוח"\n'
+          )
+          wp.write_text(s)
+
+          retry = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/WallpaperBrandingRetryWorker.kt')
+          s = retry.read_text()
+          s = s.replace(
+              '            return result.contains("· OK ") || result.contains("· כבר מעודכן ·")',
+              '            return result.contains("· OK ") || result.contains("· כבר מעודכן ·") || result.contains("· הסמל כבוי")'
+          )
+          retry.write_text(s)
+
+          ca = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
+          s = ca.read_text()
+          old = '''        contentArea.addView(whatsAppFeaturedCard(), LinearLayout.LayoutParams(\n            ViewGroup.LayoutParams.MATCH_PARENT,\n            ViewGroup.LayoutParams.WRAP_CONTENT\n        ).apply { topMargin = dp(14) })\n\n        // Keep DNS functionality intact, below the approved hero content so the first screen\n'''
+          new = '''        contentArea.addView(whatsAppFeaturedCard(), LinearLayout.LayoutParams(\n            ViewGroup.LayoutParams.MATCH_PARENT,\n            ViewGroup.LayoutParams.WRAP_CONTENT\n        ).apply { topMargin = dp(14) })\n\n        contentArea.addView(sectionTitle("סמל יהודי כשר ברקע"))\n        contentArea.addView(wallpaperBrandingToggleCard())\n\n        // Keep DNS functionality intact, below the approved hero content so the first screen\n'''
+          if old not in s:
+              raise SystemExit('CustomerActivity personal-area marker not found')
+          s = s.replace(old, new)
+
+          marker = '    private fun personalWelcomeCard(): LinearLayout {\n'
+          method = '''    private fun wallpaperBrandingToggleCard(): LinearLayout {\n        return LinearLayout(this).apply {\n            orientation = LinearLayout.VERTICAL\n            gravity = Gravity.RIGHT\n            background = cardBackground()\n            setPadding(dp(18), dp(14), dp(18), dp(14))\n\n            addView(TextView(this@CustomerActivity).apply {\n                text = "סמל על מסך הבית והנעילה"\n                textSize = 14.5f\n                typeface = heavyFont\n                setTextColor(Color.parseColor(TEXT))\n                gravity = Gravity.RIGHT\n            })\n\n            addView(TextView(this@CustomerActivity).apply {\n                text = "אפשר להציג או להסיר את סמל יהודי כשר לפי בחירת הלקוח. השינוי מתבצע מיד, בלי הפעלה מחדש."\n                textSize = 12f\n                typeface = mediumFont\n                setTextColor(Color.parseColor(MUTED))\n                gravity = Gravity.RIGHT\n                setPadding(0, dp(4), 0, dp(9))\n            })\n\n            val toggle = Switch(this@CustomerActivity).apply {\n                text = if (WallpaperBranding.isEnabled(this@CustomerActivity)) "מוצג" else "מוסר"\n                isChecked = WallpaperBranding.isEnabled(this@CustomerActivity)\n                setTextColor(Color.parseColor(TEXT))\n                typeface = mediumFont\n                setOnCheckedChangeListener { button, enabled ->\n                    button.isEnabled = false\n                    text = if (enabled) "מוסיף סמל..." else "מסיר סמל..."\n                    Thread {\n                        val result = WallpaperBranding.setEnabled(applicationContext, enabled)\n                        runOnUiThread {\n                            text = if (enabled) "מוצג" else "מוסר"\n                            button.isEnabled = true\n                            Toast.makeText(this@CustomerActivity, result, Toast.LENGTH_LONG).show()\n                        }\n                    }.start()\n                }\n            }\n            addView(toggle, LinearLayout.LayoutParams(\n                ViewGroup.LayoutParams.MATCH_PARENT,\n                ViewGroup.LayoutParams.WRAP_CONTENT\n            ))\n        }\n    }\n\n'''
+          if method.strip() not in s:
+              if marker not in s:
+                  raise SystemExit('CustomerActivity method marker not found')
+              s = s.replace(marker, method + marker)
+          ca.write_text(s)
+
+          test = Path('backend/test-wallpaper-branding-toggle-static.js')
+          test.write_text('''const fs = require('fs');\nconst assert = require('assert');\nconst wallpaper = fs.readFileSync('../dpc-app/app/src/main/java/org/mdmopen/dpc/WallpaperBranding.kt', 'utf8');\nconst retry = fs.readFileSync('../dpc-app/app/src/main/java/org/mdmopen/dpc/WallpaperBrandingRetryWorker.kt', 'utf8');\nconst customer = fs.readFileSync('../dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt', 'utf8');\nassert(wallpaper.includes('KEY_ENABLED = "customer_branding_enabled"'));\nassert(wallpaper.includes('fun isEnabled(context: Context): Boolean'));\nassert(wallpaper.includes('fun setEnabled(context: Context, enabled: Boolean): String'));\nassert(wallpaper.includes('private fun restoreOriginals(context: Context): String'));\nassert(wallpaper.includes('if (!isEnabled(context))'));\nassert(retry.includes('result.contains("· הסמל כבוי")'));\nassert(customer.includes('sectionTitle("סמל יהודי כשר ברקע")'));\nassert(customer.includes('wallpaperBrandingToggleCard()'));\nassert(customer.includes('WallpaperBranding.setEnabled(applicationContext, enabled)'));\nconsole.log('wallpaper branding customer toggle wiring: ok');\n''')
+
+          pkg = Path('backend/package.json')
+          s = pkg.read_text()
+          needle = 'node test-news-typography-static.js'
+          if 'test-wallpaper-branding-toggle-static.js' not in s:
+              if needle not in s:
+                  raise SystemExit('package.json test marker not found')
+              s = s.replace(needle, needle + ' && node test-wallpaper-branding-toggle-static.js')
+          pkg.write_text(s)
+          PY
+      - name: Remove one-shot workflow and commit patch
+        shell: bash
+        run: |
+          rm .github/workflows/patch-wallpaper-toggle.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add customer wallpaper branding toggle"
+          git push origin HEAD:feat/customer-wallpaper-branding-toggle
