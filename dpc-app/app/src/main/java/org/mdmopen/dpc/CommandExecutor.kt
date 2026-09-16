@@ -52,7 +52,18 @@ class CommandExecutor(private val context: Context) {
             PolicyEnforcer(context).openDebuggingUntilNextSync()
             "ניפוי באגים נפתח זמנית עד הסנכרון הבא"
         }
+        "SET_FRP_POLICY" -> {
+            val accountsJson = queued.params.getJSONArray("recoveryAccounts")
+            val accounts = (0 until accountsJson.length()).map { index ->
+                accountsJson.getString(index)
+            }
+            FactoryResetProtectionManager(context).applyRecoveryAccounts(accounts)
+        }
         "RELEASE_DEVICE_OWNER" -> {
+            // Clear any DPC-managed FRP override before ownership is relinquished. A failure
+            // here must abort release rather than strand an unmanaged device behind stale
+            // enterprise recovery credentials.
+            FactoryResetProtectionManager(context).clearManagedPolicyForRelease()
             PolicyEnforcer(context).releaseDeviceOwner()
             if (requestSelfUninstall()) {
                 "ניהול המכשיר הוסר; Android פתח את תהליך מחיקת אפליקציית הניהול"
