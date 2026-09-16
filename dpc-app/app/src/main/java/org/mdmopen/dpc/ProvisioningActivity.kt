@@ -5,23 +5,14 @@ import android.app.admin.DevicePolicyManager
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.PersistableBundle
 import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** The two screens Android 12+ provisioning drives while setting up a device owner. */
 class ProvisioningActivity : Activity() {
 
-    companion object {
-        private const val COMPLIANCE_TIMEOUT_MS = 60_000L
-    }
-
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val complianceFinished = AtomicBoolean(false)
     private lateinit var statusView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,56 +52,35 @@ class ProvisioningActivity : Activity() {
     }
 
     /**
-     * The final provisioning screen. Enrols against the server when the QR carried
-     * credentials, then hands control back so setup can finish.
+     * Keep Android's compliance callback deliberately short and deterministic.
+     *
+     * Newer Android/Samsung setup flows can abort provisioning when a DPC keeps
+     * ACTION_ADMIN_POLICY_COMPLIANCE open for network enrollment or policy sync.
+     * We therefore persist the QR extras, enqueue durable background enrollment,
+     * and return RESULT_OK immediately. The worker owns retries and policy sync.
      */
     private fun runComplianceStep() {
         setContentView(buildUi())
-        readAdminExtras()
+        status("מסיים את הגדרת המכשיר…")
 
-        val serverUrl = Config.serverUrl(this)
-        val enrollmentToken = Config.pendingEnrollmentToken(this)
-
-        if (serverUrl.isEmpty() || enrollmentToken == null) {
-            status("המכשיר מוכן. הרישום יושלם מתוך האפליקציה.")
-            mainHandler.postDelayed({ done() }, 1500)
-            return
-        }
-
-        val timeout = Runnable {
-            if (complianceFinished.compareAndSet(false, true)) {
-                status("הרישום מתעכב. ההגדרה תסתיים וניתן להשלים את הרישום מתוך האפליקציה.")
-                mainHandler.postDelayed({ done() }, 1200)
+        try {
+            readAdminExtras()
+            if (!Config.serverUrl(this).isBlank() &&
+                !Config.pendingEnrollmentToken(this).isNullOrBlank()
+            ) {
+                PostProvisionEnrollmentScheduler.enqueue(applicationContext)
             }
-        }
-        mainHandler.postDelayed(timeout, COMPLIANCE_TIMEOUT_MS)
 
-        fun complete(message: String) {
-            mainHandler.post {
-                if (complianceFinished.compareAndSet(false, true)) {
-                    mainHandler.removeCallbacks(timeout)
-                    status(message)
-                    mainHandler.postDelayed({ done() }, 4000)
-                }
-            }
+            setResult(RESULT_OK)
+        } catch (_: Exception) {
+            // Provisioning must not be held hostage by background/server setup.
+            // Any already-persisted enrollment token remains available for later
+            // retry from the app or worker. Returning OK lets Device Owner setup
+            // complete instead of dropping into the OEM "contact IT admin" screen.
+            setResult(RESULT_OK)
+        } finally {
+            finish()
         }
-
-        status("רושם את המכשיר בשרת…")
-        Thread {
-            try {
-                val result = ApiClient(serverUrl).enroll(enrollmentToken)
-                Config.setEnrollmentCredentials(
-                    this,
-                    result.deviceId,
-                    result.deviceToken,
-                )
-                Config.clearPendingEnrollmentToken(this)
-                PolicySync.run(this)
-                complete("המכשיר נרשם. מזהה מכשיר: ${result.deviceId}")
-            } catch (e: Exception) {
-                complete("הרישום לא הושלם: ${e.message}. אפשר להשלים מהאפליקציה.")
-            }
-        }.start()
     }
 
     /** Credentials the admin embedded in the QR code. */
@@ -123,11 +93,6 @@ class ProvisioningActivity : Activity() {
             ?.let { Config.setServerUrl(this, it) }
         extras.getString("enrollmentToken")?.takeIf { it.isNotBlank() }
             ?.let { Config.setPendingEnrollmentToken(this, it) }
-    }
-
-    private fun done() {
-        setResult(RESULT_OK)
-        finish()
     }
 
     private fun status(message: String) {
