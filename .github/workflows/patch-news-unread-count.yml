@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,32 +24,34 @@ jobs:
           p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
           s = p.read_text()
 
-          replacements = []
-          replacements.append((
-'''        val badge: View,\n''',
-'''        val badge: TextView,\n'''))
+          pairs = [
+              (
+                  '        val badge: View,\n',
+                  '        val badge: TextView,\n',
+              ),
+              (
+                  '        val badgeDot = View(this).apply {\n            background = circle("#B52F24")\n            visibility = View.GONE\n        }\n        val iconFrame = FrameLayout(this).apply {\n            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })\n            addView(badgeDot, FrameLayout.LayoutParams(dp(8), dp(8)).apply {\n                gravity = Gravity.TOP or Gravity.END\n                marginEnd = dp(1)\n            })\n        }\n',
+                  '        val badgeDot = TextView(this).apply {\n            textSize = 9f\n            typeface = heavyFont\n            setTextColor(Color.WHITE)\n            gravity = Gravity.CENTER\n            background = circle("#B52F24")\n            minWidth = dp(18)\n            minimumHeight = dp(18)\n            setPadding(dp(4), 0, dp(4), 0)\n            visibility = View.GONE\n        }\n        val iconFrame = FrameLayout(this).apply {\n            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })\n            addView(badgeDot, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18)).apply {\n                gravity = Gravity.TOP or Gravity.END\n            })\n        }\n',
+              ),
+              (
+                  '    private fun showNews() {\n        isPersonalAreaActive = false\n        isNewsActive = true\n        headerLabelView.text = "חדשות ועדכונים"\n        setActiveNav(newsNavItem)\n        renderNewsList()\n        refreshNews()\n    }\n',
+                  '    private fun showNews() {\n        isPersonalAreaActive = false\n        isNewsActive = true\n        headerLabelView.text = "חדשות ועדכונים"\n        setActiveNav(newsNavItem)\n        newsItems.forEach { Config.markUpdateRead(this, it.id) }\n        updateNewsBadge()\n        renderNewsList()\n        refreshNews()\n    }\n',
+              ),
+              (
+                  '                runOnUiThread {\n                    newsItems = fetched\n                    updateNewsBadge()\n                    if (isNewsActive) renderNewsList()\n                }\n',
+                  '                runOnUiThread {\n                    newsItems = fetched\n                    if (isNewsActive) {\n                        fetched.forEach { Config.markUpdateRead(this, it.id) }\n                    }\n                    updateNewsBadge()\n                    if (isNewsActive) renderNewsList()\n                }\n',
+              ),
+              (
+                  '    private fun updateNewsBadge() {\n        val hasUnread = newsItems.any { !Config.isUpdateRead(this, it.id) }\n        newsNavItem.badge.visibility = if (hasUnread) View.VISIBLE else View.GONE\n    }\n',
+                  '    private fun updateNewsBadge() {\n        val unreadCount = newsItems.count { !Config.isUpdateRead(this, it.id) }\n        newsNavItem.badge.apply {\n            text = when {\n                unreadCount > 99 -> "99+"\n                unreadCount > 0 -> unreadCount.toString()\n                else -> ""\n            }\n            visibility = if (unreadCount > 0) View.VISIBLE else View.GONE\n        }\n    }\n',
+              ),
+          ]
 
-          replacements.append((
-'''        val badgeDot = View(this).apply {\n            background = circle("#B52F24")\n            visibility = View.GONE\n        }\n        val iconFrame = FrameLayout(this).apply {\n            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })\n            addView(badgeDot, FrameLayout.LayoutParams(dp(8), dp(8)).apply {\n                gravity = Gravity.TOP or Gravity.END\n                marginEnd = dp(1)\n            })\n        }\n''',
-'''        val badgeDot = TextView(this).apply {\n            textSize = 9f\n            typeface = heavyFont\n            setTextColor(Color.WHITE)\n            gravity = Gravity.CENTER\n            background = circle("#B52F24")\n            minWidth = dp(18)\n            minimumHeight = dp(18)\n            setPadding(dp(4), 0, dp(4), 0)\n            visibility = View.GONE\n        }\n        val iconFrame = FrameLayout(this).apply {\n            addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22)).apply { gravity = Gravity.CENTER })\n            addView(badgeDot, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18)).apply {\n                gravity = Gravity.TOP or Gravity.END\n            })\n        }\n'''))
-
-          replacements.append((
-'''    private fun showNews() {\n        isPersonalAreaActive = false\n        isNewsActive = true\n        headerLabelView.text = "חדשות ועדכונים"\n        setActiveNav(newsNavItem)\n        renderNewsList()\n        refreshNews()\n    }\n''',
-'''    private fun showNews() {\n        isPersonalAreaActive = false\n        isNewsActive = true\n        headerLabelView.text = "חדשות ועדכונים"\n        setActiveNav(newsNavItem)\n        newsItems.forEach { Config.markUpdateRead(this, it.id) }\n        updateNewsBadge()\n        renderNewsList()\n        refreshNews()\n    }\n'''))
-
-          replacements.append((
-'''                runOnUiThread {\n                    newsItems = fetched\n                    updateNewsBadge()\n                    if (isNewsActive) renderNewsList()\n                }\n''',
-'''                runOnUiThread {\n                    newsItems = fetched\n                    if (isNewsActive) {\n                        fetched.forEach { Config.markUpdateRead(this, it.id) }\n                    }\n                    updateNewsBadge()\n                    if (isNewsActive) renderNewsList()\n                }\n'''))
-
-          replacements.append((
-'''    private fun updateNewsBadge() {\n        val hasUnread = newsItems.any { !Config.isUpdateRead(this, it.id) }\n        newsNavItem.badge.visibility = if (hasUnread) View.VISIBLE else View.GONE\n    }\n''',
-'''    private fun updateNewsBadge() {\n        val unreadCount = newsItems.count { !Config.isUpdateRead(this, it.id) }\n        newsNavItem.badge.apply {\n            text = when {\n                unreadCount > 99 -> "99+"\n                unreadCount > 0 -> unreadCount.toString()\n                else -> ""\n            }\n            visibility = if (unreadCount > 0) View.VISIBLE else View.GONE\n        }\n    }\n'''))
-
-          for old, new in replacements:
+          for old, new in pairs:
               if old not in s:
-                  raise SystemExit(f'target block not found:\n{old[:180]}')
+                  raise SystemExit('target block not found: ' + old[:120].replace('\n', '\\n'))
               if s.count(old) != 1:
-                  raise SystemExit(f'expected exactly one target block, found {s.count(old)}:\n{old[:180]}')
+                  raise SystemExit('expected exactly one target block, found ' + str(s.count(old)))
               s = s.replace(old, new, 1)
 
           p.write_text(s)
