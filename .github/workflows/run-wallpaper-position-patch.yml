@@ -1,0 +1,23 @@
+name: Run Wallpaper Position Patch
+on:
+  push:
+    branches: [feat/wallpaper-position-controls]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/wallpaper-position-controls
+      - name: Apply patch
+        run: python3 tools/patch_wallpaper_position_controls.py
+      - name: Commit result
+        run: |
+          rm tools/patch_wallpaper_position_controls.py .github/workflows/run-wallpaper-position-patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add wallpaper vertical position controls'
+          git push origin HEAD:feat/wallpaper-position-controls
