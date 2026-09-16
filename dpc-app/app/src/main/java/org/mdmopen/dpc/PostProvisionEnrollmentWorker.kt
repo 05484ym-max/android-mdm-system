@@ -32,6 +32,9 @@ object PostProvisionEnrollmentScheduler {
 
     fun enqueue(context: Context) {
         val request = OneTimeWorkRequestBuilder<PostProvisionEnrollmentWorker>()
+            // Give Android's setup wizard time to finish committing Device Owner
+            // state before policy code runs in the background.
+            .setInitialDelay(10, TimeUnit.SECONDS)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -42,7 +45,7 @@ object PostProvisionEnrollmentScheduler {
 
         WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
             UNIQUE_WORK,
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.KEEP,
             request,
         )
     }
