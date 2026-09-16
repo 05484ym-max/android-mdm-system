@@ -81,6 +81,9 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const UPDATE_TITLE_MAX_LENGTH = 200;
 const UPDATE_BODY_MAX_LENGTH = 20000;
 const UPDATE_LIST_LIMIT_FOR_DEVICE = 50;
+const NEWS_BUBBLE_WIDTH_DEFAULT = 88;
+const NEWS_BUBBLE_WIDTH_MIN = 55;
+const NEWS_BUBBLE_WIDTH_MAX = 100;
 const SUPPORT_SUBJECT_MAX_LENGTH = 120;
 const SUPPORT_MESSAGE_MAX_LENGTH = 5000;
 const SUPPORT_REPLY_MAX_LENGTH = 5000;
@@ -140,6 +143,14 @@ function parseNewsBoolean(value, fallback) {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return null;
+}
+
+function parseNewsBubbleWidth(value, fallback = NEWS_BUBBLE_WIDTH_DEFAULT) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= NEWS_BUBBLE_WIDTH_MIN && parsed <= NEWS_BUBBLE_WIDTH_MAX
+    ? parsed
+    : null;
 }
 
 async function uploadNewsMedia(req, file) {
@@ -633,6 +644,7 @@ app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(as
   const { title, body } = req.body || {};
   const pinned = parseNewsBoolean(req.body && req.body.pinned, false);
   const published = parseNewsBoolean(req.body && req.body.published, false);
+  const bubbleWidthPercent = parseNewsBubbleWidth(req.body && req.body.bubbleWidthPercent);
   if (typeof title !== 'string' || !title.trim()) {
     return res.status(400).json({ error: 'title is required' });
   }
@@ -647,6 +659,9 @@ app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(as
   }
   if (pinned === null) return res.status(400).json({ error: 'pinned must be a boolean' });
   if (published === null) return res.status(400).json({ error: 'published must be a boolean' });
+  if (bubbleWidthPercent === null) {
+    return res.status(400).json({ error: `bubbleWidthPercent must be an integer between ${NEWS_BUBBLE_WIDTH_MIN} and ${NEWS_BUBBLE_WIDTH_MAX}` });
+  }
 
   let media = null;
   try {
@@ -661,6 +676,7 @@ app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(as
       body: body.trim(),
       pinned,
       published,
+      bubbleWidthPercent,
       ...(media || {}),
     });
     res.json(created);
@@ -700,6 +716,13 @@ app.put('/api/customer-updates/:id', requireAdmin, optionalNewsMediaUpload, wrap
     const pinned = parseNewsBoolean(req.body.pinned, false);
     if (pinned === null) return res.status(400).json({ error: 'pinned must be a boolean' });
     patch.pinned = pinned;
+  }
+  if (req.body.bubbleWidthPercent !== undefined) {
+    const bubbleWidthPercent = parseNewsBubbleWidth(req.body.bubbleWidthPercent);
+    if (bubbleWidthPercent === null) {
+      return res.status(400).json({ error: `bubbleWidthPercent must be an integer between ${NEWS_BUBBLE_WIDTH_MIN} and ${NEWS_BUBBLE_WIDTH_MAX}` });
+    }
+    patch.bubbleWidthPercent = bubbleWidthPercent;
   }
   const removeMedia = parseNewsBoolean(req.body.removeMedia, false);
   if (removeMedia === null) return res.status(400).json({ error: 'removeMedia must be a boolean' });

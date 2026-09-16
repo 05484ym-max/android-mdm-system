@@ -95,6 +95,7 @@ data class UpdateItem(
     val mediaUrl: String? = null,
     val mediaMimeType: String? = null,
     val mediaSizeBytes: Long? = null,
+    val bubbleWidthPercent: Int = 88,
 )
 
 data class SupportTicket(
@@ -290,6 +291,7 @@ class ApiClient(
                 mediaUrl = if (item.isNull("mediaUrl")) null else item.optString("mediaUrl", null),
                 mediaMimeType = if (item.isNull("mediaMimeType")) null else item.optString("mediaMimeType", null),
                 mediaSizeBytes = if (item.isNull("mediaSizeBytes")) null else item.optLong("mediaSizeBytes"),
+                bubbleWidthPercent = item.optInt("bubbleWidthPercent", 88).coerceIn(55, 100),
             )
         }
     }

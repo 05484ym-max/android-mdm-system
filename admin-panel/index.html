@@ -561,6 +561,15 @@
     <h2 id="newsFormTitle">הודעה חדשה</h2>
     <input class="login-input" id="newsTitleInput" placeholder="כותרת" maxlength="200" />
     <textarea class="login-input news-textarea" id="newsBodyInput" placeholder="תוכן ההודעה (טקסט רגיל בלבד)" maxlength="20000"></textarea>
+    <div class="news-width-field">
+      <label for="newsBubbleWidthInput" class="news-media-label">רוחב בועת ההודעה</label>
+      <div class="news-width-controls">
+        <input type="range" id="newsBubbleWidthInput" min="55" max="100" step="1" value="88" />
+        <input type="number" class="login-input news-width-number" id="newsBubbleWidthNumber" min="55" max="100" step="1" value="88" inputmode="numeric" />
+        <span class="news-width-percent">%</span>
+      </div>
+      <div class="news-media-help">55%–100% · ברירת מחדל 88%. התמונה או הסרטון יתאימו אוטומטית לרוחב הבועה.</div>
+    </div>
     <div class="news-media-field">
       <label for="newsMediaInput" class="news-media-label">תמונה או סרטון (אופציונלי)</label>
       <input type="file" class="login-input" id="newsMediaInput"

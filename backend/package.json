@@ -4,7 +4,7 @@
   "description": "Yehudi Kasher MDM backend",
   "main": "index.js",
   "scripts": {
-    "test": "node --check index.js && node --check db.js && node --check universalEntry.js && node --check reliabilityBridge.js && node --check uploadMemoryGuard.js && node --check push.js",
+    "test": "node --check index.js && node --check db.js && node --check universalEntry.js && node --check reliabilityBridge.js && node --check uploadMemoryGuard.js && node --check push.js && node test-news-bubble-width-static.js",
     "start": "node universalEntry.js"
   },
   "keywords": [],

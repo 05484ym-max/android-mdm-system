@@ -81,3 +81,14 @@
 .wa-runtime-ok { background: #E6F4EA; color: #216E39; border: 1px solid #B7DFC2; }
 .wa-runtime-warn { background: #FFF4E5; color: #8A4B08; border: 1px solid #F3D29A; }
 .wa-runtime-off { background: var(--bg); color: var(--text-dim); border: 1px solid var(--card-border); }
+
+
+/* Per-message news bubble width control. */
+.news-width-field {
+  margin: 10px 0 12px; padding: 12px; border: 1px solid var(--card-border);
+  border-radius: 14px; background: var(--bg);
+}
+.news-width-controls { display:flex; align-items:center; gap:10px; direction:ltr; }
+#newsBubbleWidthInput { flex:1; min-width:120px; accent-color:var(--accent); }
+.news-width-number { width:82px; margin:0; text-align:center; direction:ltr; }
+.news-width-percent { font-weight:800; color:var(--accent); }

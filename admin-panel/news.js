@@ -15,7 +15,9 @@
   const mediaPreview = document.getElementById('newsMediaPreview');
   const removeMediaRow = document.getElementById('newsRemoveMediaRow');
   const removeMediaInput = document.getElementById('newsRemoveMediaInput');
-  if (!listEl || !titleInput || !bodyInput || !pinnedInput || !publishedInput || !saveBtn || !cancelEditBtn || !formTitle || !formError || !mediaInput || !mediaPreview || !removeMediaRow || !removeMediaInput) return;
+  const bubbleWidthInput = document.getElementById('newsBubbleWidthInput');
+  const bubbleWidthNumber = document.getElementById('newsBubbleWidthNumber');
+  if (!listEl || !titleInput || !bodyInput || !pinnedInput || !publishedInput || !saveBtn || !cancelEditBtn || !formTitle || !formError || !mediaInput || !mediaPreview || !removeMediaRow || !removeMediaInput || !bubbleWidthInput || !bubbleWidthNumber) return;
 
   let editingId = null;
   let editingItem = null;
@@ -23,6 +25,18 @@
   const esc = str => String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const mediaLabel = document.querySelector('label[for="newsMediaInput"]');
   if (mediaLabel) mediaLabel.textContent = '📎 צרף תמונה או סרטון';
+  const clampBubbleWidth = value => Math.max(55, Math.min(100, Number.parseInt(value, 10) || 88));
+  function applyBubblePreviewWidth(value) {
+    const width = clampBubbleWidth(value);
+    mediaPreview.style.width = `${width}%`;
+    mediaPreview.style.marginInlineStart = 'auto';
+  }
+  function setBubbleWidth(value) {
+    const width = clampBubbleWidth(value);
+    bubbleWidthInput.value = String(width);
+    bubbleWidthNumber.value = String(width);
+    applyBubblePreviewWidth(width);
+  }
 
   function requireLogin() { const el = document.getElementById('loginScreen'); if (el) el.style.display = 'flex'; }
   function selectedMediaKind(file) {
@@ -49,12 +63,12 @@
   function resetForm() {
     editingId = null; editingItem = null; clearLocalPreviewUrl(); mediaInput.value = ''; removeMediaInput.checked = false;
     mediaPreview.innerHTML = ''; mediaPreview.style.display = 'none'; removeMediaRow.style.display = 'none';
-    titleInput.value = ''; bodyInput.value = ''; pinnedInput.checked = false; publishedInput.checked = false; publishedInput.disabled = false;
+    titleInput.value = ''; bodyInput.value = ''; pinnedInput.checked = false; publishedInput.checked = false; publishedInput.disabled = false; setBubbleWidth(88);
     formTitle.textContent = 'הודעה חדשה'; saveBtn.textContent = 'שלח ללקוחות'; cancelEditBtn.style.display = 'none'; formError.textContent = '';
   }
   function startEdit(item) {
     editingId = item.id; editingItem = item; mediaInput.value = ''; removeMediaInput.checked = false; showFormMediaPreview(item);
-    titleInput.value = item.title; bodyInput.value = item.body; pinnedInput.checked = item.pinned; publishedInput.checked = item.published; publishedInput.disabled = true;
+    titleInput.value = item.title; bodyInput.value = item.body; pinnedInput.checked = item.pinned; publishedInput.checked = item.published; publishedInput.disabled = true; setBubbleWidth(item.bubbleWidthPercent || 88);
     formTitle.textContent = 'עריכת הודעה'; saveBtn.textContent = 'עדכן הודעה'; cancelEditBtn.style.display = ''; formError.textContent = '';
     titleInput.scrollIntoView({behavior:'smooth',block:'center'});
   }
@@ -71,6 +85,15 @@
     else showFormMediaPreview(editingItem);
   });
   cancelEditBtn.addEventListener('click', resetForm);
+  bubbleWidthInput.addEventListener('input', () => setBubbleWidth(bubbleWidthInput.value));
+  bubbleWidthNumber.addEventListener('input', () => {
+    const numeric = Number.parseInt(bubbleWidthNumber.value, 10);
+    if (Number.isInteger(numeric) && numeric >= 55 && numeric <= 100) {
+      bubbleWidthInput.value = String(numeric);
+      applyBubblePreviewWidth(numeric);
+    }
+  });
+  bubbleWidthNumber.addEventListener('change', () => setBubbleWidth(bubbleWidthNumber.value));
 
   function newsCard(item) {
     const badges = [`<span class="news-badge ${item.published ? 'published' : 'draft'}">${item.published ? 'פורסם' : 'טיוטה'}</span>`];
@@ -130,7 +153,7 @@
       if (file.size > 50 * 1024 * 1024) { formError.textContent = 'הקובץ גדול מ-50MB'; return; }
     }
     formError.textContent = ''; saveBtn.disabled = true;
-    const form = new FormData(); form.append('title', title); form.append('body', body); form.append('pinned', String(pinnedInput.checked));
+    const form = new FormData(); form.append('title', title); form.append('body', body); form.append('pinned', String(pinnedInput.checked)); form.append('bubbleWidthPercent', String(clampBubbleWidth(bubbleWidthNumber.value)));
     if (!editingId) form.append('published', String(publishedInput.checked));
     if (editingId && removeMediaInput.checked) form.append('removeMedia', 'true');
     if (file) form.append('media', file, file.name);
@@ -145,4 +168,5 @@
   });
   document.querySelectorAll('.nav-btn').forEach(btn => { if (btn.dataset.tab === 'news') btn.addEventListener('click', loadNews); });
   refreshBtn?.addEventListener('click', loadNews);
+  setBubbleWidth(88);
 })();
