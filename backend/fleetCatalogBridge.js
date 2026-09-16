@@ -1,5 +1,7 @@
 'use strict';
 
+const CATALOG_SEED_MARKER = 'fleetCatalogSeededV1';
+
 /**
  * Keeps the shared app catalog and per-device allowlists aligned without
  * changing the established per-device policy APIs.
@@ -7,8 +9,14 @@
  * Semantics:
  * - A brand-new catalog app is approved for every currently enrolled device.
  * - A newly enrolled device starts with every app currently in the catalog.
- * - Existing per-device removal remains possible afterwards; we do not
- *   continuously re-add a package on every sync.
+ * - A device created during a transient/older backend deployment self-heals on
+ *   its next authenticated lookup: an empty, never-seeded allowlist is filled
+ *   once from the global catalog. A non-empty legacy allowlist is only marked
+ *   seeded, so existing per-device choices are not broadened unexpectedly.
+ * - Existing per-device removal remains possible afterwards; a durable marker
+ *   inside policy prevents later lookups/syncs from re-adding removed apps.
+ * - All later setPolicy calls preserve that internal marker even when callers
+ *   normalize policy down to the public fields.
  * - When cached Play metadata or an uploaded APK release changes, devices are
  *   woken so the store can refresh update status quickly, but policy is not
  *   rewritten unless the package is newly global.
@@ -27,6 +35,24 @@ function installFleetCatalogBridge(db, push, logger = console) {
   const originalAddAppToCatalog = db.addAppToCatalog.bind(db);
   const originalInsertUploadedApp = db.insertUploadedApp.bind(db);
   const originalCreateDevice = db.createDevice.bind(db);
+  const originalGetDevice = db.getDevice.bind(db);
+  const originalSetPolicy = db.setPolicy.bind(db);
+
+  // Policy writers elsewhere intentionally normalize to the public policy
+  // shape. Keep the bridge's internal one-time marker from being dropped by
+  // those writes, otherwise an intentionally emptied allowlist could later be
+  // mistaken for an unseeded fresh device and get repopulated.
+  db.setPolicy = async function setPolicyPreservingCatalogSeed(deviceId, policy) {
+    const current = await originalGetDevice(deviceId);
+    const currentPolicy = current && current.policy && typeof current.policy === 'object'
+      ? current.policy
+      : {};
+    const nextPolicy = policy && typeof policy === 'object' ? { ...policy } : {};
+    if (currentPolicy[CATALOG_SEED_MARKER] === true && nextPolicy[CATALOG_SEED_MARKER] !== true) {
+      nextPolicy[CATALOG_SEED_MARKER] = true;
+    }
+    return originalSetPolicy(deviceId, nextPolicy);
+  };
 
   async function wakeDevice(deviceId) {
     const full = await db.getDevice(deviceId);
@@ -70,22 +96,47 @@ function installFleetCatalogBridge(db, push, logger = console) {
     return { devices: devices.length, policiesChanged, wakesSent };
   }
 
-  async function seedNewDevice(device) {
-    const catalog = await db.listAppsCatalog();
-    const packages = [...new Set(catalog.map(app => app.packageName).filter(Boolean))];
-    if (packages.length === 0) return device;
-
+  async function seedDeviceOnce(device) {
+    if (!device) return device;
     const current = device.policy && typeof device.policy === 'object' ? device.policy : {};
-    const allowed = Array.isArray(current.allowedApps) ? current.allowedApps : [];
-    const merged = [...new Set([...allowed, ...packages])];
-    if (merged.length === allowed.length && merged.every((value, i) => value === allowed[i])) return device;
+    if (current[CATALOG_SEED_MARKER] === true) return device;
 
-    return db.setPolicy(device.deviceId, { ...current, allowedApps: merged });
+    const allowed = Array.isArray(current.allowedApps) ? current.allowedApps : [];
+    let merged = allowed;
+
+    // Only an empty legacy/fresh allowlist is self-healed. A non-empty device
+    // may have deliberate per-device removals from before this marker existed;
+    // preserve those choices and simply mark migration complete.
+    if (allowed.length === 0) {
+      const catalog = await db.listAppsCatalog();
+      const packages = [...new Set(catalog.map(app => app.packageName).filter(Boolean))];
+      merged = [...new Set([...allowed, ...packages])];
+    }
+
+    const updated = await db.setPolicy(device.deviceId, {
+      ...current,
+      allowedApps: merged,
+      [CATALOG_SEED_MARKER]: true,
+    });
+
+    logger.info?.(
+      `[fleet-catalog] seeded device=${device.deviceId} apps=${merged.length} previous=${allowed.length}`,
+    );
+    return updated;
   }
+
+  // requireDevice performs getDevice() before every device-facing sync. This
+  // makes the repair happen before the same request builds the store response,
+  // so a freshly enrolled device does not need a reboot/re-enrollment or an
+  // extra manual sync just because its create-time seed was missed.
+  db.getDevice = async function getDeviceWithCatalogSelfHeal(deviceId) {
+    const device = await originalGetDevice(deviceId);
+    return seedDeviceOnce(device);
+  };
 
   db.createDevice = async function createDeviceWithGlobalCatalog(...args) {
     const device = await originalCreateDevice(...args);
-    return seedNewDevice(device);
+    return seedDeviceOnce(device);
   };
 
   db.addAppToCatalog = async function addAppToCatalogGlobally(packageName, ...args) {
@@ -119,7 +170,7 @@ function installFleetCatalogBridge(db, push, logger = console) {
     return result;
   };
 
-  return { approveForFleet, seedNewDevice, wakeFleet };
+  return { approveForFleet, seedDeviceOnce, wakeFleet };
 }
 
 function playMetadataChanged(before, after) {
@@ -133,6 +184,7 @@ function apkReleaseChanged(before, after) {
 }
 
 module.exports = {
+  CATALOG_SEED_MARKER,
   installFleetCatalogBridge,
   playMetadataChanged,
   apkReleaseChanged,
