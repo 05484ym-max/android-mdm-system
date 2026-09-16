@@ -1387,21 +1387,52 @@ const PLAY_METADATA_ERROR_MAX_LENGTH = 300;
 // Google Play lookup for Waze per window. Claims are persisted/locked in
 // Postgres (db.claimAppsForPlayMetadataRefresh), so multiple server instances
 // also avoid refreshing the same package at the same time.
-const PLAY_METADATA_FRESH_MS = 30 * 60 * 1000;
-const AUTO_PLAY_REFRESH_BATCH_SIZE = 3;
+const PLAY_METADATA_FRESH_MS = 10 * 60 * 1000;
+const AUTO_PLAY_REFRESH_BATCH_SIZE = 10;
 const AUTO_PLAY_REFRESH_MIN_KICK_MS = 60 * 1000;
-const AUTO_PLAY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const AUTO_PLAY_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 let autoPlayRefreshRunning = false;
 let lastAutoPlayRefreshKickAt = 0;
 
+function usablePlayVersion(value) {
+  const version = typeof value === 'string' ? value.trim() : '';
+  if (!version) return null;
+  if (/varies with device/i.test(version) || /משתנה/i.test(version)) return null;
+  return version;
+}
+
+function playVersionChanged(previous, appInfo) {
+  if (!previous) return false;
+  const before = usablePlayVersion(previous.playVersion);
+  const after = usablePlayVersion(appInfo && appInfo.version);
+  return Boolean(before && after && before !== after);
+}
+
+async function wakeDevicesForPlayUpdate(packageName) {
+  const tokens = await db.listPushTokensForApp(packageName);
+  if (!tokens.length) return 0;
+  const results = await Promise.allSettled(tokens.map(token => push.wake(token, {
+    action: 'sync',
+    reason: 'app_update',
+    packageName,
+  })));
+  return results.filter(item => item.status === 'fulfilled' && item.value && item.value.sent).length;
+}
+
 async function refreshOnePlayPackage(packageName) {
   try {
+    const previous = (await db.listAppsCatalog()).find(app => app.packageName === packageName) || null;
     const appInfo = await playStoreSearch.getPlayStoreApp(packageName);
+    const changed = playVersionChanged(previous, appInfo);
     await db.addAppToCatalog(
       appInfo.packageName, appInfo.name, appInfo.iconUrl, appInfo.version, appInfo.updated,
       appInfo.category,
     );
     await db.recordPlayMetadataCheckSuccess(appInfo.packageName);
+    if (changed) {
+      const woken = await wakeDevicesForPlayUpdate(appInfo.packageName);
+      console.log(`[auto-play-metadata] update detected for ${appInfo.packageName}: ${previous.playVersion} -> ${appInfo.version}; push wake sent to ${woken} device(s)`);
+    }
     return true;
   } catch (e) {
     const message = String(e.message || 'unknown error').slice(0, PLAY_METADATA_ERROR_MAX_LENGTH);
