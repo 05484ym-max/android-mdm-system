@@ -911,8 +911,23 @@ class CustomerActivity : Activity() {
     }
 
     private fun isUpdateAvailable(app: CatalogApp, installed: Boolean): Boolean {
-        if (!installed) return false
-        return false
+        if (!installed || app.appSource != "PLAY") return false
+        val remoteVersion = app.playVersion
+            ?.trim()
+            ?.takeIf { version ->
+                version.isNotEmpty() &&
+                    !version.equals("Varies with device", ignoreCase = true) &&
+                    !version.contains("משתנה", ignoreCase = true)
+            }
+            ?: return false
+
+        @Suppress("DEPRECATION")
+        val installedVersion = try {
+            packageManager.getPackageInfo(app.packageName, 0).versionName?.trim()
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        }
+        return !installedVersion.isNullOrBlank() && installedVersion != remoteVersion
     }
 
     private fun isInstalled(packageName: String): Boolean {

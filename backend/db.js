@@ -373,6 +373,21 @@ async function getDevice(deviceId) {
   return rows[0] ? toDevice(rows[0]) : null;
 }
 
+async function listPushTokensForApp(packageName) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT push_token
+       FROM devices
+      WHERE push_token IS NOT NULL
+        AND push_token <> ''
+        AND (
+          full_open_mode = true
+          OR COALESCE(policy->'allowedApps', '[]'::jsonb) ? $1
+        )`,
+    [packageName],
+  );
+  return rows.map(row => row.push_token).filter(Boolean);
+}
+
 async function listDevices() {
   const { rows } = await pool.query(
     `SELECT device_id, registered_at, subscription, policy, status,
@@ -1768,6 +1783,7 @@ module.exports = {
   createCustomAppCategory,
   getDevice,
   listDevices,
+  listPushTokensForApp,
   deleteDevice,
   generateUniqueDeviceId,
   createDevice,

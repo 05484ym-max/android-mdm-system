@@ -1,0 +1,16 @@
+const fs = require('fs');
+const assert = require('assert');
+const index = fs.readFileSync(__dirname + '/index.js', 'utf8');
+const db = fs.readFileSync(__dirname + '/db.js', 'utf8');
+const customer = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt', 'utf8');
+assert.match(index, /PLAY_METADATA_FRESH_MS = 10 \* 60 \* 1000/);
+assert.match(index, /AUTO_PLAY_REFRESH_INTERVAL_MS = 2 \* 60 \* 1000/);
+assert.match(index, /function playVersionChanged\(/);
+assert.match(index, /reason: 'app_update'/);
+assert.match(index, /wakeDevicesForPlayUpdate\(appInfo\.packageName\)/);
+assert.match(db, /async function listPushTokensForApp\(packageName\)/);
+assert.match(db, /full_open_mode = true/);
+assert.match(db, /policy->'allowedApps'/);
+assert.match(customer, /private fun isUpdateAvailable\(app: CatalogApp, installed: Boolean\): Boolean/);
+assert.match(customer, /installedVersion != remoteVersion/);
+console.log('Play update watcher static checks passed');
