@@ -1,0 +1,38 @@
+name: Patch Update Available Label
+
+on:
+  push:
+    branches: [ feat/play-update-watcher ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/play-update-watcher
+      - name: Change update button label
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
+          s = p.read_text()
+          old = '            updateAvailable -> "עדכן"\n'
+          new = '            updateAvailable -> "עדכון זמין"\n'
+          if old not in s:
+              raise SystemExit('update label marker not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Remove temporary workflow
+        run: rm .github/workflows/patch-update-label.yml
+      - name: Commit label change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Show update available on app cards"
+          git push origin HEAD:feat/play-update-watcher
