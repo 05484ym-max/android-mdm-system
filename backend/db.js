@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS customer_updates (
   media_storage_key TEXT,
   media_mime_type   TEXT,
   media_size_bytes  BIGINT,
+  bubble_width_percent INTEGER NOT NULL DEFAULT 88 CHECK (bubble_width_percent BETWEEN 55 AND 100),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at      TIMESTAMPTZ
@@ -227,6 +228,7 @@ ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_url TEXT;
 ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_storage_key TEXT;
 ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_mime_type TEXT;
 ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS media_size_bytes BIGINT;
+ALTER TABLE customer_updates ADD COLUMN IF NOT EXISTS bubble_width_percent INTEGER NOT NULL DEFAULT 88 CHECK (bubble_width_percent BETWEEN 55 AND 100);
 
 -- Matches the device-facing query's own WHERE/ORDER BY exactly (see
 -- listPublishedCustomerUpdatesForDevice) - a partial index over only the
@@ -1247,6 +1249,7 @@ function mapCustomerUpdateRow(row) {
     mediaStorageKey: row.media_storage_key || null,
     mediaMimeType: row.media_mime_type || null,
     mediaSizeBytes: row.media_size_bytes == null ? null : Number(row.media_size_bytes),
+    bubbleWidthPercent: Number(row.bubble_width_percent || 88),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     publishedAt: row.published_at ? row.published_at.toISOString() : null,
@@ -1290,21 +1293,21 @@ async function getCustomerUpdateById(id) {
 async function createCustomerUpdate(id, {
   title, body, pinned, published,
   mediaType = null, mediaUrl = null, mediaStorageKey = null,
-  mediaMimeType = null, mediaSizeBytes = null,
+  mediaMimeType = null, mediaSizeBytes = null, bubbleWidthPercent = 88,
 }) {
   const { rows } = await pool.query(
     `INSERT INTO customer_updates (
        id, title, body, pinned, published, published_at,
-       media_type, media_url, media_storage_key, media_mime_type, media_size_bytes
+       media_type, media_url, media_storage_key, media_mime_type, media_size_bytes, bubble_width_percent
      )
      VALUES (
        $1, $2, $3, $4, $5, CASE WHEN $5 THEN now() ELSE NULL END,
-       $6, $7, $8, $9, $10
+       $6, $7, $8, $9, $10, $11
      )
      RETURNING *`,
     [
       id, title, body, pinned, published,
-      mediaType, mediaUrl, mediaStorageKey, mediaMimeType, mediaSizeBytes,
+      mediaType, mediaUrl, mediaStorageKey, mediaMimeType, mediaSizeBytes, bubbleWidthPercent,
     ],
   );
   return mapCustomerUpdateRow(rows[0]);
@@ -1341,6 +1344,7 @@ async function updateCustomerUpdate(id, patch) {
     ['mediaStorageKey', 'media_storage_key'],
     ['mediaMimeType', 'media_mime_type'],
     ['mediaSizeBytes', 'media_size_bytes'],
+    ['bubbleWidthPercent', 'bubble_width_percent'],
   ]) {
     if (Object.prototype.hasOwnProperty.call(patch, field)) {
       params.push(patch[field]);
@@ -1401,7 +1405,7 @@ async function deleteCustomerUpdate(id) {
 async function listPublishedCustomerUpdatesForDevice(limit) {
   const { rows } = await pool.query(
     `SELECT id, title, body, pinned, media_type, media_url,
-            media_mime_type, media_size_bytes, published_at, created_at
+            media_mime_type, media_size_bytes, bubble_width_percent, published_at, created_at
        FROM customer_updates
       WHERE published = true
       ORDER BY pinned DESC, COALESCE(published_at, created_at) DESC
@@ -1417,6 +1421,7 @@ async function listPublishedCustomerUpdatesForDevice(limit) {
     mediaUrl: row.media_url || null,
     mediaMimeType: row.media_mime_type || null,
     mediaSizeBytes: row.media_size_bytes == null ? null : Number(row.media_size_bytes),
+    bubbleWidthPercent: Number(row.bubble_width_percent || 88),
     // Guaranteed non-null for a published row - see createCustomerUpdate/
     // setCustomerUpdatePublished, both of which always stamp published_at
     // the moment published becomes true. COALESCE above is defense in

@@ -190,6 +190,7 @@ object Config {
                 mediaUrl = if (item.isNull("mediaUrl")) null else item.optString("mediaUrl", null),
                 mediaMimeType = if (item.isNull("mediaMimeType")) null else item.optString("mediaMimeType", null),
                 mediaSizeBytes = if (item.isNull("mediaSizeBytes")) null else item.optLong("mediaSizeBytes"),
+                bubbleWidthPercent = item.optInt("bubbleWidthPercent", 88).coerceIn(55, 100),
             )
         }
     }
@@ -208,6 +209,7 @@ object Config {
                     .put("mediaUrl", item.mediaUrl)
                     .put("mediaMimeType", item.mediaMimeType)
                     .put("mediaSizeBytes", item.mediaSizeBytes)
+                    .put("bubbleWidthPercent", item.bubbleWidthPercent)
             )
         }
         prefs(context).edit().putString(KEY_NEWS_CACHE, array.toString()).apply()

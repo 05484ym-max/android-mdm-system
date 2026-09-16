@@ -1447,7 +1447,7 @@ class CustomerActivity : Activity() {
             })
         }
         addNewsMedia(detailCard, item, true)
-        contentArea.addView(detailCard)
+        contentArea.addView(detailCard, newsBubbleLayoutParams(item, bottomMarginDp = 0))
     }
 
     private fun newsCard(item: UpdateItem): LinearLayout {
@@ -1456,7 +1456,7 @@ class CustomerActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             background = cardBackground()
             setPadding(dp(15), dp(14), dp(15), dp(14))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(11) }
+            layoutParams = newsBubbleLayoutParams(item, bottomMarginDp = 11)
             isClickable = true
             addView(LinearLayout(this@CustomerActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1492,6 +1492,17 @@ class CustomerActivity : Activity() {
                 setPadding(0, dp(7), 0, 0)
             })
             setOnClickListener { showNewsDetail(item) }
+        }
+    }
+
+    private fun newsBubbleLayoutParams(item: UpdateItem, bottomMarginDp: Int): LinearLayout.LayoutParams {
+        val percent = item.bubbleWidthPercent.coerceIn(55, 100)
+        val availableWidth = (resources.displayMetrics.widthPixels - contentArea.paddingLeft - contentArea.paddingRight)
+            .coerceAtLeast(dp(220))
+        val width = (availableWidth * (percent / 100f)).toInt().coerceAtLeast(dp(180))
+        return LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.RIGHT
+            bottomMargin = dp(bottomMarginDp)
         }
     }
 
