@@ -77,10 +77,9 @@ jobs:
             exit 1
           fi
 
-          # Device-owner QR provisioning should authenticate the DPC by signer.
-          # Do not also send PACKAGE_CHECKSUM: Android provisioning accepts either
-          # package or signature verification, and using both makes the QR brittle
-          # when the hosted APK changes or a CDN serves a different build briefly.
+          # Match the minimal reference DPC QR shape: component + download URL +
+          # signer checksum only. Avoid optional legacy provisioning flags while
+          # diagnosing OEM/Android 16 setup-wizard compatibility.
           SIGNATURE_CHECKSUM=$(python3 -c "import base64,sys; print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1])).decode())" "$CERT_HEX")
           echo "Certificate SHA-256 : $CERT_HEX"
           echo "SIGNATURE_CHECKSUM  : $SIGNATURE_CHECKSUM"
@@ -109,10 +108,8 @@ jobs:
           payload = {
             "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME":
               "org.mdmopen.dpc/org.mdmopen.dpc.DpcDeviceAdminReceiver",
-            "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": sys.argv[2],
             "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": sys.argv[1],
-            "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": True,
-            "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": True,
+            "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": sys.argv[2],
           }
           with open("admin-panel/downloads/provisioning.json", "w") as f:
               json.dump(payload, f, indent=2)
