@@ -84,6 +84,10 @@ const UPDATE_LIST_LIMIT_FOR_DEVICE = 50;
 const NEWS_BUBBLE_WIDTH_DEFAULT = 88;
 const NEWS_BUBBLE_WIDTH_MIN = 55;
 const NEWS_BUBBLE_WIDTH_MAX = 100;
+const NEWS_FONT_SCALE_DEFAULT = 100;
+const NEWS_FONT_SCALE_MIN = 80;
+const NEWS_FONT_SCALE_MAX = 150;
+const NEWS_FONT_FAMILIES = new Set(['SYSTEM', 'ROUNDED', 'SERIF', 'MONO']);
 const SUPPORT_SUBJECT_MAX_LENGTH = 120;
 const SUPPORT_MESSAGE_MAX_LENGTH = 5000;
 const SUPPORT_REPLY_MAX_LENGTH = 5000;
@@ -151,6 +155,18 @@ function parseNewsBubbleWidth(value, fallback = NEWS_BUBBLE_WIDTH_DEFAULT) {
   return Number.isInteger(parsed) && parsed >= NEWS_BUBBLE_WIDTH_MIN && parsed <= NEWS_BUBBLE_WIDTH_MAX
     ? parsed
     : null;
+}
+
+function parseNewsFontScale(value, fallback = NEWS_FONT_SCALE_DEFAULT) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= NEWS_FONT_SCALE_MIN && parsed <= NEWS_FONT_SCALE_MAX ? parsed : null;
+}
+
+function parseNewsFontFamily(value, fallback = 'SYSTEM') {
+  if (value === undefined || value === null || value === '') return fallback;
+  const normalized = String(value).trim().toUpperCase();
+  return NEWS_FONT_FAMILIES.has(normalized) ? normalized : null;
 }
 
 async function uploadNewsMedia(req, file) {
@@ -658,6 +674,8 @@ app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(as
   const pinned = parseNewsBoolean(req.body && req.body.pinned, false);
   const published = parseNewsBoolean(req.body && req.body.published, false);
   const bubbleWidthPercent = parseNewsBubbleWidth(req.body && req.body.bubbleWidthPercent);
+  const fontScalePercent = parseNewsFontScale(req.body && req.body.fontScalePercent);
+  const fontFamily = parseNewsFontFamily(req.body && req.body.fontFamily);
   if (typeof title !== 'string' || !title.trim()) {
     return res.status(400).json({ error: 'title is required' });
   }
@@ -675,6 +693,10 @@ app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(as
   if (bubbleWidthPercent === null) {
     return res.status(400).json({ error: `bubbleWidthPercent must be an integer between ${NEWS_BUBBLE_WIDTH_MIN} and ${NEWS_BUBBLE_WIDTH_MAX}` });
   }
+  if (fontScalePercent === null) {
+    return res.status(400).json({ error: `fontScalePercent must be an integer between ${NEWS_FONT_SCALE_MIN} and ${NEWS_FONT_SCALE_MAX}` });
+  }
+  if (fontFamily === null) return res.status(400).json({ error: 'invalid fontFamily' });
 
   let media = null;
   try {
@@ -690,6 +712,8 @@ app.post('/api/customer-updates', requireAdmin, optionalNewsMediaUpload, wrap(as
       pinned,
       published,
       bubbleWidthPercent,
+      fontScalePercent,
+      fontFamily,
       ...(media || {}),
     });
     res.json(created);
@@ -736,6 +760,18 @@ app.put('/api/customer-updates/:id', requireAdmin, optionalNewsMediaUpload, wrap
       return res.status(400).json({ error: `bubbleWidthPercent must be an integer between ${NEWS_BUBBLE_WIDTH_MIN} and ${NEWS_BUBBLE_WIDTH_MAX}` });
     }
     patch.bubbleWidthPercent = bubbleWidthPercent;
+  }
+  if (req.body.fontScalePercent !== undefined) {
+    const fontScalePercent = parseNewsFontScale(req.body.fontScalePercent);
+    if (fontScalePercent === null) {
+      return res.status(400).json({ error: `fontScalePercent must be an integer between ${NEWS_FONT_SCALE_MIN} and ${NEWS_FONT_SCALE_MAX}` });
+    }
+    patch.fontScalePercent = fontScalePercent;
+  }
+  if (req.body.fontFamily !== undefined) {
+    const fontFamily = parseNewsFontFamily(req.body.fontFamily);
+    if (fontFamily === null) return res.status(400).json({ error: 'invalid fontFamily' });
+    patch.fontFamily = fontFamily;
   }
   const removeMedia = parseNewsBoolean(req.body.removeMedia, false);
   if (removeMedia === null) return res.status(400).json({ error: 'removeMedia must be a boolean' });

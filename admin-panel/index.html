@@ -570,6 +570,22 @@
       </div>
       <div class="news-media-help">55%–100% · ברירת מחדל 88%. התמונה או הסרטון יתאימו אוטומטית לרוחב הבועה.</div>
     </div>
+    <div class="news-typography-field">
+      <label for="newsFontScaleInput" class="news-media-label">גודל גופן</label>
+      <div class="news-width-controls">
+        <input type="range" id="newsFontScaleInput" min="80" max="150" step="5" value="100" />
+        <input type="number" class="login-input news-width-number" id="newsFontScaleNumber" min="80" max="150" step="5" value="100" inputmode="numeric" />
+        <span class="news-width-percent">%</span>
+      </div>
+      <label for="newsFontFamilyInput" class="news-media-label" style="margin-top:10px">סגנון גופן</label>
+      <select id="newsFontFamilyInput" class="login-input">
+        <option value="SYSTEM">רגיל</option>
+        <option value="ROUNDED">מעוגל</option>
+        <option value="SERIF">קלאסי</option>
+        <option value="MONO">מונוספייס</option>
+      </select>
+      <div class="news-media-help">השינוי מוצג מיד בתצוגה המקדימה ונשמר לכל הודעה.</div>
+    </div>
     <div class="news-media-field">
       <label for="newsMediaInput" class="news-media-label">תמונה או סרטון (אופציונלי)</label>
       <input type="file" class="login-input" id="newsMediaInput"

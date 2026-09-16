@@ -191,6 +191,8 @@ object Config {
                 mediaMimeType = if (item.isNull("mediaMimeType")) null else item.optString("mediaMimeType", null),
                 mediaSizeBytes = if (item.isNull("mediaSizeBytes")) null else item.optLong("mediaSizeBytes"),
                 bubbleWidthPercent = item.optInt("bubbleWidthPercent", 88).coerceIn(55, 100),
+                fontScalePercent = item.optInt("fontScalePercent", 100).coerceIn(80, 150),
+                fontFamily = item.optString("fontFamily", "SYSTEM"),
             )
         }
     }
@@ -210,6 +212,8 @@ object Config {
                     .put("mediaMimeType", item.mediaMimeType)
                     .put("mediaSizeBytes", item.mediaSizeBytes)
                     .put("bubbleWidthPercent", item.bubbleWidthPercent)
+                    .put("fontScalePercent", item.fontScalePercent)
+                    .put("fontFamily", item.fontFamily)
             )
         }
         prefs(context).edit().putString(KEY_NEWS_CACHE, array.toString()).apply()
