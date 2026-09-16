@@ -352,6 +352,9 @@ class CustomerActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(14) })
 
+        contentArea.addView(sectionTitle("סמל יהודי כשר ברקע"))
+        contentArea.addView(wallpaperBrandingToggleCard())
+
         // Keep DNS functionality intact, below the approved hero content so the first screen
         // remains visually identical to the mockup while advanced controls remain available.
         contentArea.addView(sectionTitle("סינון DNS"))
@@ -360,6 +363,55 @@ class CustomerActivity : Activity() {
         contentArea.addView(personalDetailsCard(listOf(
             Triple(R.drawable.ic_row_shield, "מצב הסינון", dnsModeLabel(dnsStatus.dnsMode))
         )))
+    }
+
+    private fun wallpaperBrandingToggleCard(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.RIGHT
+            background = cardBackground()
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = "סמל על מסך הבית והנעילה"
+                textSize = 14.5f
+                typeface = heavyFont
+                setTextColor(Color.parseColor(TEXT))
+                gravity = Gravity.RIGHT
+            })
+
+            addView(TextView(this@CustomerActivity).apply {
+                text = "אפשר להציג או להסיר את סמל יהודי כשר לפי בחירת הלקוח. השינוי מתבצע מיד, בלי הפעלה מחדש."
+                textSize = 12f
+                typeface = mediumFont
+                setTextColor(Color.parseColor(MUTED))
+                gravity = Gravity.RIGHT
+                setPadding(0, dp(4), 0, dp(9))
+            })
+
+            val toggle = Switch(this@CustomerActivity).apply {
+                text = if (WallpaperBranding.isEnabled(this@CustomerActivity)) "מוצג" else "מוסר"
+                isChecked = WallpaperBranding.isEnabled(this@CustomerActivity)
+                setTextColor(Color.parseColor(TEXT))
+                typeface = mediumFont
+                setOnCheckedChangeListener { button, enabled ->
+                    button.isEnabled = false
+                    text = if (enabled) "מוסיף סמל..." else "מסיר סמל..."
+                    Thread {
+                        val result = WallpaperBranding.setEnabled(applicationContext, enabled)
+                        runOnUiThread {
+                            text = if (enabled) "מוצג" else "מוסר"
+                            button.isEnabled = true
+                            Toast.makeText(this@CustomerActivity, result, Toast.LENGTH_LONG).show()
+                        }
+                    }.start()
+                }
+            }
+            addView(toggle, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
     }
 
     private fun personalWelcomeCard(): LinearLayout {

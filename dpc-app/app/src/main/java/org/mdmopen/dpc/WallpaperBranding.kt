@@ -39,6 +39,7 @@ object WallpaperBranding {
     private const val KEY_LAST_HOME_ID = "last_branded_home_wallpaper_id"
     private const val KEY_LAST_LOCK_ID = "last_branded_lock_wallpaper_id"
     private const val KEY_RECIPE_VERSION = "recipe_version"
+    private const val KEY_ENABLED = "customer_branding_enabled"
     private const val ORIGINAL_FILE = "wallpaper_original.png" // legacy original
     private const val ORIGINAL_HOME_FILE = "wallpaper_original_home.png"
     private const val ORIGINAL_LOCK_FILE = "wallpaper_original_lock.png"
@@ -78,13 +79,70 @@ object WallpaperBranding {
     // screen unbranded/black. Visual emblem parameters remain unchanged.
     private const val RECIPE_VERSION = 12
 
+    fun isEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_ENABLED, true)
+
+    @Synchronized
+    fun setEnabled(context: Context, enabled: Boolean): String {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_ENABLED, enabled)
+            .commit()
+        return if (enabled) apply(context) else restoreOriginals(context)
+    }
+
+    @Synchronized
+    private fun restoreOriginals(context: Context): String {
+        return try {
+            val dpm = context.getSystemService(DevicePolicyManager::class.java)
+            if (!dpm.isDeviceOwnerApp(context.packageName)) return "DO=לא"
+            val wm = WallpaperManager.getInstance(context)
+            if (!wm.isWallpaperSupported || !wm.isSetWallpaperAllowed) {
+                return "Android ${Build.VERSION.RELEASE} · לא ניתן לשנות רקע"
+            }
+
+            val legacyOriginal = File(context.filesDir, ORIGINAL_FILE)
+            val homeFile = File(context.filesDir, ORIGINAL_HOME_FILE)
+            val lockFile = File(context.filesDir, ORIGINAL_LOCK_FILE)
+            val home = when {
+                homeFile.exists() -> BitmapFactory.decodeFile(homeFile.absolutePath)
+                legacyOriginal.exists() -> BitmapFactory.decodeFile(legacyOriginal.absolutePath)
+                else -> null
+            } ?: return "Android ${Build.VERSION.RELEASE} · הסמל כבוי · אין עותק מקור לשחזור"
+
+            val lock = if (lockFile.exists()) {
+                BitmapFactory.decodeFile(lockFile.absolutePath) ?: home
+            } else {
+                home
+            }
+
+            wm.setBitmap(home, null, true, WallpaperManager.FLAG_SYSTEM)
+            wm.setBitmap(lock, null, true, WallpaperManager.FLAG_LOCK)
+
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .remove(KEY_LAST_ID)
+                .remove(KEY_LAST_HOME_ID)
+                .remove(KEY_LAST_LOCK_ID)
+                .remove(KEY_RECIPE_VERSION)
+                .commit()
+
+            "Android ${Build.VERSION.RELEASE} · הסמל הוסר ממסך הבית והנעילה"
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore original wallpapers", e)
+            "Android ${Build.VERSION.RELEASE} · שגיאה בהסרת הסמל: ${e.message}"
+        }
+    }
+
     /**
      * Returns a short, human-readable outcome so the customer's own sync
      * toast can show it - there's no way to pull logcat off a customer's
      * phone, so this is the only diagnostic signal available in practice.
      */
+    @Synchronized
     fun apply(context: Context): String {
         try {
+            if (!isEnabled(context)) return "Android ${Build.VERSION.RELEASE} · הסמל כבוי לפי בחירת לקוח"
             val dpm = context.getSystemService(DevicePolicyManager::class.java)
             if (!dpm.isDeviceOwnerApp(context.packageName)) return "DO=לא"
 
