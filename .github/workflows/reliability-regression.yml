@@ -107,8 +107,11 @@ jobs:
           grep -q 'android.app.action.PROVISIONING_SUCCESSFUL' "$MANIFEST"
           grep -q 'android.app.action.PROFILE_PROVISIONING_COMPLETE' "$MANIFEST"
           grep -q 'android.app.action.DEVICE_OWNER_CHANGED' "$MANIFEST"
-          grep -q 'PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM' "$BUILD"
           grep -q 'PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM' "$BUILD"
+          if grep -q 'PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM' "$BUILD"; then
+            echo 'Provisioning QR must use exactly one integrity mechanism: signature checksum only' >&2
+            exit 1
+          fi
           grep -q 'mdm.apk?v=' "$BUILD"
           if grep -qE 'ApiClient\(|PolicySync\.run\(|Thread\(' "$SRC/ProvisioningActivity.kt"; then
             echo 'ProvisioningActivity must not block Setup Wizard with network/policy work' >&2
