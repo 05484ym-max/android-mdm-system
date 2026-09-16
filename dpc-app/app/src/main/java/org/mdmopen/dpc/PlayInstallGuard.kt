@@ -26,8 +26,14 @@ object PlayInstallGuard {
 
     @Synchronized
     fun begin(context: Context, targetPackage: String, expiresAt: Long): Session {
-        val current = activeSession(context)
-        check(current == null) { "A Google Play install session is already active" }
+        // A second Play request supersedes the previous Play request. Release
+        // exactly the old Play lease before creating the new session so rapid
+        // taps cannot leak an install-permission lease until the failsafe.
+        activeSession(context)?.let { current ->
+            if (clear(context, current.id)) {
+                ManagedInstallWindow.close(context)
+            }
+        }
 
         val session = Session(UUID.randomUUID().toString(), targetPackage, expiresAt)
         val persisted = prefs(context).edit()
