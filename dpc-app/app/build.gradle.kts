@@ -10,12 +10,16 @@ val keystorePath: String? = System.getenv("DPC_KEYSTORE_PATH")
 
 android {
     namespace = "org.mdmopen.dpc"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.mdmopen.dpc"
         minSdk = 29
-        targetSdk = 34
+        // Android 16 runs apps targeting older SDKs, so target 35 keeps the current
+        // behavior model while compileSdk 36 lets us build and validate against the
+        // Android 16 platform APIs. We can raise targetSdk separately after device
+        // provisioning is proven stable on Samsung Android 16.
+        targetSdk = 35
         versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
         versionName = "0.1.${System.getenv("VERSION_CODE") ?: "0"}"
     }
@@ -28,8 +32,7 @@ android {
                 keyAlias = System.getenv("DPC_KEY_ALIAS")
                 keyPassword = System.getenv("DPC_KEYSTORE_PASSWORD")
             }
-            // minSdk 29 makes AGP drop v1 signing. Some OEM provisioning stacks still
-            // read the signature the old way, so keep all three schemes.
+            // Keep all signature schemes because OEM provisioning stacks vary.
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
