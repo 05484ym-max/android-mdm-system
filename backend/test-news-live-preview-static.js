@@ -1,0 +1,14 @@
+const fs = require('fs');
+const assert = require('assert');
+const js = fs.readFileSync('../admin-panel/news.js', 'utf8');
+const css = fs.readFileSync('../admin-panel/news.css', 'utf8');
+assert(js.includes('news-live-preview'));
+assert(js.includes('function renderLivePreview()'));
+assert(js.includes("titleInput.addEventListener('input', renderLivePreview)"));
+assert(js.includes("bodyInput.addEventListener('input', renderLivePreview)"));
+assert(js.includes('liveBubble.style.width'));
+assert(js.includes('currentPreviewMedia()'));
+assert(js.includes('mediaPreview.innerHTML = mediaMarkup(type, localPreviewUrl)'));
+assert(css.includes('.news-live-bubble'));
+assert(css.includes('.news-live-media img'));
+console.log('news live preview wiring: ok');
