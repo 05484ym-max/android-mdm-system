@@ -861,7 +861,7 @@ class CustomerActivity : Activity() {
 
         val statusLabel = when {
             !installed -> "התקנה"
-            updateAvailable -> "עדכן"
+            updateAvailable -> "עדכון זמין"
             else -> "✓  מותקן"
         }
 
