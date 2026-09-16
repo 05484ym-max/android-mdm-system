@@ -45,13 +45,20 @@ object PlayInstallGuard {
         return session
     }
 
+    @Synchronized
     fun activeSession(context: Context): Session? {
         val p = prefs(context)
         val id = p.getString(KEY_SESSION_ID, null) ?: return null
         val target = p.getString(KEY_TARGET_PACKAGE, null)?.takeIf { it.isNotBlank() } ?: return null
         val expiresAt = p.getLong(KEY_EXPIRES_AT, 0L)
         if (expiresAt <= System.currentTimeMillis()) {
-            clear(context, id)
+            // The Play session owns exactly one ManagedInstallWindow lease.
+            // If the app/process stopped polling and the guard expires, consume
+            // that one lease here instead of leaving installs open until the
+            // broader ten-minute ManagedInstallWindow failsafe.
+            if (clear(context, id)) {
+                ManagedInstallWindow.close(context)
+            }
             return null
         }
         return Session(id, target, expiresAt)
