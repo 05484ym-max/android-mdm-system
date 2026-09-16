@@ -2,7 +2,8 @@ name: Apply enrollment code patch
 
 on:
   push:
-    branches: [fix/enrollment-code-10]
+    branches:
+      - fix/enrollment-code-10
 
 permissions:
   contents: write
@@ -19,47 +20,20 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path('backend/index.js')
           s = p.read_text()
           anchor = "const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;\nconst RECOVERY_TTL_MS = 30 * 60 * 1000;\n"
-          replacement = """const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;
-const RECOVERY_TTL_MS = 30 * 60 * 1000;
-const ENROLLMENT_CODE_LENGTH = 10;
-// 32 unambiguous symbols = exactly 5 bits of entropy per character.
-// 10 characters therefore retain 50 bits of randomness while staying easy to type.
-const ENROLLMENT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-function generateEnrollmentCode() {
-  const bytes = crypto.randomBytes(ENROLLMENT_CODE_LENGTH);
-  let code = '';
-  for (let i = 0; i < ENROLLMENT_CODE_LENGTH; i += 1) {
-    code += ENROLLMENT_CODE_ALPHABET[bytes[i] & 31];
-  }
-  return code;
-}
-"""
+          replacement = "const ENROLLMENT_TTL_MS = 24 * 60 * 60 * 1000;\nconst RECOVERY_TTL_MS = 30 * 60 * 1000;\nconst ENROLLMENT_CODE_LENGTH = 10;\n// 32 unambiguous symbols = exactly 5 bits of entropy per character.\n// 10 characters therefore retain 50 bits of randomness while staying easy to type.\nconst ENROLLMENT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';\n\nfunction generateEnrollmentCode() {\n  const bytes = crypto.randomBytes(ENROLLMENT_CODE_LENGTH);\n  let code = '';\n  for (let i = 0; i < ENROLLMENT_CODE_LENGTH; i += 1) {\n    code += ENROLLMENT_CODE_ALPHABET[bytes[i] & 31];\n  }\n  return code;\n}\n"
           if anchor not in s:
               raise SystemExit('enrollment constants anchor not found')
           s = s.replace(anchor, replacement, 1)
-
           old = "const token = crypto.randomBytes(16).toString('hex').toUpperCase();"
           if s.count(old) < 2:
               raise SystemExit('expected enrollment and recovery token generators')
           s = s.replace(old, "const token = generateEnrollmentCode();", 1)
           p.write_text(s)
-
-          Path('backend/test-enrollment-code-static.js').write_text("""const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
-const source = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
-assert.match(source, /const ENROLLMENT_CODE_LENGTH = 10;/);
-assert.match(source, /const ENROLLMENT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';/);
-assert.match(source, /app\\.post\\('\/api\/enrollments'[\\s\\S]*?const token = generateEnrollmentCode\\(\\);/);
-assert.match(source, /app\\.post\\('\/api\/devices\/:deviceId\/recovery-code'[\\s\\S]*?crypto\\.randomBytes\\(16\\)\\.toString\\('hex'\\)\\.toUpperCase\\(\\)/);
-assert.strictEqual((source.match(/const token = generateEnrollmentCode\\(\\);/g) || []).length, 1);
-console.log('enrollment code static checks passed');
-""")
+          test = Path('backend/test-enrollment-code-static.js')
+          test.write_text("const assert = require('assert');\nconst fs = require('fs');\nconst path = require('path');\nconst source = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');\nassert.match(source, /const ENROLLMENT_CODE_LENGTH = 10;/);\nassert.match(source, /const ENROLLMENT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';/);\nassert.match(source, /app\\.post\\('\\/api\\/enrollments'[\\s\\S]*?const token = generateEnrollmentCode\\(\\);/);\nassert.match(source, /app\\.post\\('\\/api\\/devices\\/:deviceId\\/recovery-code'[\\s\\S]*?crypto\\.randomBytes\\(16\\)\\.toString\\('hex'\\)\\.toUpperCase\\(\\)/);\nassert.strictEqual((source.match(/const token = generateEnrollmentCode\\(\\);/g) || []).length, 1);\nconsole.log('enrollment code static checks passed');\n")
           PY
       - name: Run focused test
         run: node backend/test-enrollment-code-static.js
@@ -67,7 +41,7 @@ console.log('enrollment code static checks passed');
         run: |
           git rm .github/workflows/patch-enrollment-code-10.yml
           git add backend/index.js backend/test-enrollment-code-static.js
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Shorten enrollment codes to 10 characters'
           git push origin HEAD:fix/enrollment-code-10
