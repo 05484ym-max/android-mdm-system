@@ -20,7 +20,8 @@ import java.util.WeakHashMap
  *
  * Keeps the existing customer/store behavior untouched while replacing the old
  * text-glyph bottom navigation with consistent vector icons, normalising
- * two-column store card geometry and sharpening the transparent gold header emblem.
+ * two-column store card geometry, removing duplicate store cards, and sharpening
+ * the transparent gold header emblem.
  */
 class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
 
@@ -49,6 +50,7 @@ class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
         polishHeaderLogo(activity, root)
         polishNavigation(activity, root)
         equaliseStoreCards(activity, root)
+        dedupeStoreCards(activity, root)
     }
 
     /**
@@ -139,25 +141,129 @@ class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
 
     private fun equaliseStoreCards(activity: Activity, view: View) {
         if (view is LinearLayout && looksLikeStoreTile(view)) {
+            // Every app tile gets the exact same outer height, regardless of
+            // app-name length or whether its status is Install/Installed/Update.
             val cardHeight = dp(activity, 242)
             val lp = view.layoutParams
             if (lp != null && lp.height != cardHeight) {
                 lp.height = cardHeight
                 view.layoutParams = lp
             }
+            view.minimumHeight = cardHeight
 
             (view.getChildAt(1) as? TextView)?.let { name ->
                 name.minHeight = dp(activity, 46)
+                name.minLines = 2
+                name.maxLines = 2
+                name.ellipsize = android.text.TextUtils.TruncateAt.END
                 name.gravity = android.view.Gravity.CENTER
             }
             (view.getChildAt(2) as? TextView)?.let { category ->
                 category.minHeight = dp(activity, 31)
+                category.maxLines = 1
+                category.ellipsize = android.text.TextUtils.TruncateAt.END
                 category.gravity = android.view.Gravity.CENTER
             }
         }
         if (view is ViewGroup) {
             for (i in 0 until view.childCount) equaliseStoreCards(activity, view.getChildAt(i))
         }
+    }
+
+    /**
+     * CustomerActivity intentionally renders recommended/update sections and then
+     * the full catalog, which can make the same app appear twice. This pass finds
+     * the store list container, keeps the first visible instance of each app, and
+     * rebuilds one compact two-column grid from the unique cards. The card itself
+     * is reused, so install/update click behavior and state remain exactly intact.
+     */
+    private fun dedupeStoreCards(activity: Activity, view: View) {
+        if (view is LinearLayout && looksLikeStoreListContainer(view)) {
+            rebuildUniqueStoreGrid(activity, view)
+            return
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) dedupeStoreCards(activity, view.getChildAt(i))
+        }
+    }
+
+    private fun looksLikeStoreListContainer(view: LinearLayout): Boolean {
+        if (view.orientation != LinearLayout.VERTICAL || view.childCount == 0) return false
+        var tileCount = 0
+        for (i in 0 until view.childCount) {
+            val child = view.getChildAt(i) as? LinearLayout ?: continue
+            if (child.orientation != LinearLayout.HORIZONTAL) continue
+            for (j in 0 until child.childCount) {
+                val tile = child.getChildAt(j) as? LinearLayout ?: continue
+                if (looksLikeStoreTile(tile)) tileCount += 1
+            }
+        }
+        return tileCount >= 2
+    }
+
+    private fun rebuildUniqueStoreGrid(activity: Activity, container: LinearLayout) {
+        val unique = LinkedHashMap<String, LinearLayout>()
+        for (i in 0 until container.childCount) {
+            val row = container.getChildAt(i) as? LinearLayout ?: continue
+            if (row.orientation != LinearLayout.HORIZONTAL) continue
+            for (j in 0 until row.childCount) {
+                val tile = row.getChildAt(j) as? LinearLayout ?: continue
+                if (!looksLikeStoreTile(tile)) continue
+                val key = storeTileKey(tile)
+                unique.putIfAbsent(key, tile)
+            }
+        }
+
+        val currentTileCount = countStoreTiles(container)
+        if (unique.isEmpty() || unique.size == currentTileCount) return
+
+        // Detach cards before clearing their old rows. We deliberately remove
+        // the recommendation/update section headings too, so every app has one
+        // canonical card and there are no blank holes left by duplicate removal.
+        unique.values.forEach { tile ->
+            (tile.parent as? ViewGroup)?.removeView(tile)
+        }
+        container.removeAllViews()
+
+        unique.values.toList().chunked(2).forEach { pair ->
+            val row = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.TOP
+            }
+            pair.forEachIndexed { index, tile ->
+                row.addView(tile, LinearLayout.LayoutParams(0, dp(activity, 242), 1f).apply {
+                    if (index == 0) marginEnd = dp(activity, 6) else marginStart = dp(activity, 6)
+                })
+            }
+            if (pair.size == 1) {
+                row.addView(View(activity), LinearLayout.LayoutParams(0, 0, 1f))
+            }
+            container.addView(
+                row,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = dp(activity, 13) },
+            )
+        }
+    }
+
+    private fun countStoreTiles(container: LinearLayout): Int {
+        var count = 0
+        for (i in 0 until container.childCount) {
+            val row = container.getChildAt(i) as? LinearLayout ?: continue
+            for (j in 0 until row.childCount) {
+                val tile = row.getChildAt(j) as? LinearLayout ?: continue
+                if (looksLikeStoreTile(tile)) count += 1
+            }
+        }
+        return count
+    }
+
+    private fun storeTileKey(tile: LinearLayout): String {
+        val name = (tile.getChildAt(1) as? TextView)?.text?.toString()?.trim().orEmpty()
+        val category = (tile.getChildAt(2) as? TextView)?.text?.toString()?.trim().orEmpty()
+        return "$name\u0000$category"
     }
 
     private fun looksLikeStoreTile(view: LinearLayout): Boolean {
@@ -168,7 +274,9 @@ class CustomerUiPolish : Application.ActivityLifecycleCallbacks {
         val status = view.getChildAt(3) as? TextView ?: return false
         if (name.text.isNullOrBlank() || category.text.isNullOrBlank()) return false
         val statusText = status.text?.toString().orEmpty()
-        return statusText.contains("מותקן") || statusText == "התקנה" || statusText == "עדכן"
+        return statusText == "התקנה" ||
+            statusText.contains("מותקן") ||
+            statusText.contains("עדכון")
     }
 
     private fun dp(activity: Activity, value: Int): Int =
