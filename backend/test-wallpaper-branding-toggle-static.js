@@ -22,4 +22,12 @@ assert(wallpaper.includes('fun setSizePercents(context: Context, homePercent: In
 assert(customer.includes('SeekBar.OnSeekBarChangeListener'));
 assert(customer.includes('גודל הסמל במסך הבית'));
 assert(customer.includes('גודל הסמל במסך הנעילה'));
+
+assert(wallpaper.includes('KEY_HOME_TOP_PERCENT = "customer_branding_home_top_percent"'));
+assert(wallpaper.includes('KEY_LOCK_TOP_PERCENT = "customer_branding_lock_top_percent"'));
+assert(wallpaper.includes('const val MIN_TOP_PERCENT = 5'));
+assert(wallpaper.includes('const val MAX_TOP_PERCENT = 75'));
+assert(wallpaper.includes('fun setTopPercents(context: Context, homePercent: Int, lockPercent: Int): String'));
+assert(customer.includes('מיקום הסמל למעלה / למטה במסך הבית'));
+assert(customer.includes('מיקום הסמל למעלה / למטה במסך הנעילה'));
 console.log('wallpaper branding customer toggle wiring: ok');
