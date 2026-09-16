@@ -23,6 +23,13 @@ import java.util.concurrent.TimeUnit
 object PostProvisionEnrollmentScheduler {
     private const val UNIQUE_WORK = "post-provision-enrollment"
 
+    fun enqueueIfPending(context: Context) {
+        val appContext = context.applicationContext
+        if (Config.serverUrl(appContext).isBlank()) return
+        if (Config.pendingEnrollmentToken(appContext).isNullOrBlank()) return
+        enqueue(appContext)
+    }
+
     fun enqueue(context: Context) {
         val request = OneTimeWorkRequestBuilder<PostProvisionEnrollmentWorker>()
             .setConstraints(
