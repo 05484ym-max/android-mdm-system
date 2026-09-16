@@ -23,3 +23,11 @@ assert(config.includes('.put("bubbleWidthPercent", item.bubbleWidthPercent)'));
 assert(activity.includes('newsBubbleLayoutParams(item'));
 assert(activity.includes('percent = item.bubbleWidthPercent.coerceIn(55, 100)'));
 console.log('news bubble width wiring: ok');
+
+assert(db.includes('font_scale_percent INTEGER NOT NULL DEFAULT 100'));
+assert(db.includes("font_family TEXT NOT NULL DEFAULT 'SYSTEM'"));
+assert(api.includes('val fontScalePercent: Int = 100'));
+assert(api.includes('val fontFamily: String = "SYSTEM"'));
+assert(config.includes('.put("fontScalePercent", item.fontScalePercent)'));
+assert(activity.includes('private fun newsTypeface(item: UpdateItem'));
+assert(activity.includes('private fun newsTextSize(baseSp: Float, item: UpdateItem)'));

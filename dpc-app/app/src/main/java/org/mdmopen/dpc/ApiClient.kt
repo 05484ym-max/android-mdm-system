@@ -96,6 +96,8 @@ data class UpdateItem(
     val mediaMimeType: String? = null,
     val mediaSizeBytes: Long? = null,
     val bubbleWidthPercent: Int = 88,
+    val fontScalePercent: Int = 100,
+    val fontFamily: String = "SYSTEM",
 )
 
 data class SupportTicket(
@@ -292,6 +294,8 @@ class ApiClient(
                 mediaMimeType = if (item.isNull("mediaMimeType")) null else item.optString("mediaMimeType", null),
                 mediaSizeBytes = if (item.isNull("mediaSizeBytes")) null else item.optLong("mediaSizeBytes"),
                 bubbleWidthPercent = item.optInt("bubbleWidthPercent", 88).coerceIn(55, 100),
+                fontScalePercent = item.optInt("fontScalePercent", 100).coerceIn(80, 150),
+                fontFamily = item.optString("fontFamily", "SYSTEM"),
             )
         }
     }

@@ -17,8 +17,11 @@
   const removeMediaInput = document.getElementById('newsRemoveMediaInput');
   const bubbleWidthInput = document.getElementById('newsBubbleWidthInput');
   const bubbleWidthNumber = document.getElementById('newsBubbleWidthNumber');
+  const fontScaleInput = document.getElementById('newsFontScaleInput');
+  const fontScaleNumber = document.getElementById('newsFontScaleNumber');
+  const fontFamilyInput = document.getElementById('newsFontFamilyInput');
   const mediaField = mediaInput && mediaInput.closest('.news-media-field');
-  if (!listEl || !titleInput || !bodyInput || !pinnedInput || !publishedInput || !saveBtn || !cancelEditBtn || !formTitle || !formError || !mediaInput || !mediaPreview || !removeMediaRow || !removeMediaInput || !bubbleWidthInput || !bubbleWidthNumber) return;
+  if (!listEl || !titleInput || !bodyInput || !pinnedInput || !publishedInput || !saveBtn || !cancelEditBtn || !formTitle || !formError || !mediaInput || !mediaPreview || !removeMediaRow || !removeMediaInput || !bubbleWidthInput || !bubbleWidthNumber || !fontScaleInput || !fontScaleNumber || !fontFamilyInput) return;
 
   let editingId = null;
   let editingItem = null;
@@ -27,6 +30,8 @@
   const mediaLabel = document.querySelector('label[for="newsMediaInput"]');
   if (mediaLabel) mediaLabel.textContent = '📎 צרף תמונה או סרטון';
   const clampBubbleWidth = value => Math.max(55, Math.min(100, Number.parseInt(value, 10) || 88));
+  const clampFontScale = value => Math.max(80, Math.min(150, Number.parseInt(value, 10) || 100));
+  const fontCss = value => ({ SYSTEM: 'inherit', ROUNDED: 'ui-rounded, Arial, sans-serif', SERIF: 'Georgia, Times New Roman, serif', MONO: 'ui-monospace, Consolas, monospace' }[value] || 'inherit');
 
   const livePreview = document.createElement('div');
   livePreview.className = 'news-live-preview';
@@ -56,6 +61,10 @@
   function renderLivePreview() {
     if (!liveBubble || !liveTitle || !liveBody || !liveMedia) return;
     liveBubble.style.width = `${clampBubbleWidth(bubbleWidthNumber.value)}%`;
+    const fontScale = clampFontScale(fontScaleNumber.value) / 100;
+    liveTitle.style.fontSize = `${0.98 * fontScale}rem`;
+    liveBody.style.fontSize = `${0.88 * fontScale}rem`;
+    liveBubble.style.fontFamily = fontCss(fontFamilyInput.value);
     const title = titleInput.value.trim();
     const body = bodyInput.value.trim();
     liveTitle.textContent = title || 'כותרת ההודעה';
@@ -78,6 +87,14 @@
     bubbleWidthInput.value = String(width);
     bubbleWidthNumber.value = String(width);
     applyBubblePreviewWidth(width);
+  }
+
+  function setTypography(scale, family) {
+    const safeScale = clampFontScale(scale);
+    fontScaleInput.value = String(safeScale);
+    fontScaleNumber.value = String(safeScale);
+    fontFamilyInput.value = ['SYSTEM','ROUNDED','SERIF','MONO'].includes(String(family || '').toUpperCase()) ? String(family).toUpperCase() : 'SYSTEM';
+    renderLivePreview();
   }
 
   function requireLogin() { const el = document.getElementById('loginScreen'); if (el) el.style.display = 'flex'; }
@@ -106,12 +123,12 @@
   function resetForm() {
     editingId = null; editingItem = null; clearLocalPreviewUrl(); mediaInput.value = ''; removeMediaInput.checked = false;
     mediaPreview.innerHTML = ''; mediaPreview.style.display = 'none'; removeMediaRow.style.display = 'none';
-    titleInput.value = ''; bodyInput.value = ''; pinnedInput.checked = false; publishedInput.checked = false; publishedInput.disabled = false; setBubbleWidth(88);
+    titleInput.value = ''; bodyInput.value = ''; pinnedInput.checked = false; publishedInput.checked = false; publishedInput.disabled = false; setBubbleWidth(88); setTypography(100, 'SYSTEM');
     formTitle.textContent = 'הודעה חדשה'; saveBtn.textContent = 'שלח ללקוחות'; cancelEditBtn.style.display = 'none'; formError.textContent = ''; renderLivePreview();
   }
   function startEdit(item) {
     editingId = item.id; editingItem = item; mediaInput.value = ''; removeMediaInput.checked = false; showFormMediaPreview(item);
-    titleInput.value = item.title; bodyInput.value = item.body; pinnedInput.checked = item.pinned; publishedInput.checked = item.published; publishedInput.disabled = true; setBubbleWidth(item.bubbleWidthPercent || 88);
+    titleInput.value = item.title; bodyInput.value = item.body; pinnedInput.checked = item.pinned; publishedInput.checked = item.published; publishedInput.disabled = true; setBubbleWidth(item.bubbleWidthPercent || 88); setTypography(item.fontScalePercent || 100, item.fontFamily || 'SYSTEM');
     formTitle.textContent = 'עריכת הודעה'; saveBtn.textContent = 'עדכן הודעה'; cancelEditBtn.style.display = ''; formError.textContent = '';
     renderLivePreview();
     titleInput.scrollIntoView({behavior:'smooth',block:'center'});
@@ -141,6 +158,13 @@
     }
   });
   bubbleWidthNumber.addEventListener('change', () => setBubbleWidth(bubbleWidthNumber.value));
+  fontScaleInput.addEventListener('input', () => setTypography(fontScaleInput.value, fontFamilyInput.value));
+  fontScaleNumber.addEventListener('input', () => {
+    const numeric = Number.parseInt(fontScaleNumber.value, 10);
+    if (Number.isInteger(numeric) && numeric >= 80 && numeric <= 150) { fontScaleInput.value = String(numeric); renderLivePreview(); }
+  });
+  fontScaleNumber.addEventListener('change', () => setTypography(fontScaleNumber.value, fontFamilyInput.value));
+  fontFamilyInput.addEventListener('change', renderLivePreview);
   titleInput.addEventListener('input', renderLivePreview);
   bodyInput.addEventListener('input', renderLivePreview);
 
@@ -202,7 +226,7 @@
       if (file.size > 50 * 1024 * 1024) { formError.textContent = 'הקובץ גדול מ-50MB'; return; }
     }
     formError.textContent = ''; saveBtn.disabled = true;
-    const form = new FormData(); form.append('title', title); form.append('body', body); form.append('pinned', String(pinnedInput.checked)); form.append('bubbleWidthPercent', String(clampBubbleWidth(bubbleWidthNumber.value)));
+    const form = new FormData(); form.append('title', title); form.append('body', body); form.append('pinned', String(pinnedInput.checked)); form.append('bubbleWidthPercent', String(clampBubbleWidth(bubbleWidthNumber.value))); form.append('fontScalePercent', String(clampFontScale(fontScaleNumber.value))); form.append('fontFamily', fontFamilyInput.value);
     if (!editingId) form.append('published', String(publishedInput.checked));
     if (editingId && removeMediaInput.checked) form.append('removeMedia', 'true');
     if (file) form.append('media', file, file.name);
@@ -218,5 +242,6 @@
   document.querySelectorAll('.nav-btn').forEach(btn => { if (btn.dataset.tab === 'news') btn.addEventListener('click', loadNews); });
   refreshBtn?.addEventListener('click', loadNews);
   setBubbleWidth(88);
+  setTypography(100, 'SYSTEM');
   renderLivePreview();
 })();

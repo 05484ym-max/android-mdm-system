@@ -1458,8 +1458,8 @@ class CustomerActivity : Activity() {
         if (item.pinned) contentArea.addView(newsBadge("★ חשוב", "#F8ECD1", "#956A20"))
         contentArea.addView(TextView(this).apply {
             text = item.title
-            textSize = 19f
-            typeface = heavyFont
+            textSize = newsTextSize(19f, item)
+            typeface = newsTypeface(item, bold = true)
             setTextColor(Color.parseColor(TEXT))
             gravity = Gravity.RIGHT
             setPadding(0, dp(8), 0, dp(5))
@@ -1478,8 +1478,8 @@ class CustomerActivity : Activity() {
             setPadding(dp(15), dp(14), dp(15), dp(13))
             addView(TextView(this@CustomerActivity).apply {
                 text = item.body
-                textSize = 14.5f
-                typeface = mediumFont
+                textSize = newsTextSize(14.5f, item)
+                typeface = newsTypeface(item, bold = false)
                 setTextColor(Color.parseColor(TEXT))
                 gravity = Gravity.RIGHT
                 setLineSpacing(dp(3).toFloat(), 1f)
@@ -1502,8 +1502,8 @@ class CustomerActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 addView(TextView(this@CustomerActivity).apply {
                     text = item.title
-                    textSize = 15f
-                    typeface = heavyFont
+                    textSize = newsTextSize(15f, item)
+                    typeface = newsTypeface(item, bold = true)
                     setTextColor(Color.parseColor(TEXT))
                     gravity = Gravity.RIGHT
                     maxLines = 2
@@ -1513,8 +1513,8 @@ class CustomerActivity : Activity() {
             })
             addView(TextView(this@CustomerActivity).apply {
                 text = item.body
-                textSize = 13f
-                typeface = mediumFont
+                textSize = newsTextSize(13f, item)
+                typeface = newsTypeface(item, bold = false)
                 setTextColor(Color.parseColor(MUTED))
                 gravity = Gravity.RIGHT
                 maxLines = 3
@@ -1532,6 +1532,19 @@ class CustomerActivity : Activity() {
             })
             setOnClickListener { showNewsDetail(item) }
         }
+    }
+
+    private fun newsTextSize(baseSp: Float, item: UpdateItem): Float =
+        baseSp * (item.fontScalePercent.coerceIn(80, 150) / 100f)
+
+    private fun newsTypeface(item: UpdateItem, bold: Boolean): Typeface {
+        val family = when (item.fontFamily.uppercase()) {
+            "ROUNDED" -> "sans-serif-rounded"
+            "SERIF" -> "serif"
+            "MONO" -> "monospace"
+            else -> "sans-serif"
+        }
+        return Typeface.create(family, if (bold) Typeface.BOLD else Typeface.NORMAL)
     }
 
     private fun newsBubbleLayoutParams(item: UpdateItem, bottomMarginDp: Int): LinearLayout.LayoutParams {

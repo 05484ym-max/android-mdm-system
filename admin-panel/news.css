@@ -125,3 +125,12 @@
   display: block; width: 100%; max-height: 360px; border-radius: 10px; background: #111;
 }
 .news-media-preview .news-media-selected { display: none; }
+
+
+/* Per-message news typography controls. */
+.news-typography-field {
+  margin:10px 0 12px; padding:12px; border:1px solid var(--card-border);
+  border-radius:14px; background:var(--bg);
+}
+#newsFontScaleInput { flex:1; min-width:120px; accent-color:var(--accent); }
+#newsFontFamilyInput { margin-bottom:0; }

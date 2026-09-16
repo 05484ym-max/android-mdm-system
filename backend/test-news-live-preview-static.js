@@ -12,3 +12,8 @@ assert(js.includes('mediaPreview.innerHTML = mediaMarkup(type, localPreviewUrl)'
 assert(css.includes('.news-live-bubble'));
 assert(css.includes('.news-live-media img'));
 console.log('news live preview wiring: ok');
+
+assert(js.includes('newsFontScaleInput'));
+assert(js.includes('fontFamilyInput'));
+assert(js.includes("form.append('fontScalePercent'"));
+assert(js.includes("form.append('fontFamily'"));
