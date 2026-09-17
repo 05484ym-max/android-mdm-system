@@ -36,9 +36,9 @@ assert(reconciler.includes('setPackagesSuspended(admin, toBlock.toTypedArray(), 
 assert(reconciler.includes('setApplicationHidden(admin, pkg, true)'), 'blacklisted apps are not hidden');
 assert(reconciler.includes('essentialPackages() + context.packageName'), 'protected/core packages are not excluded');
 
-assert(receiver.includes('AppAccessPolicyStore.blockedPackages(context)'), 'package receiver does not consult blacklist');
-assert(receiver.includes('setPackagesSuspended(admin, arrayOf(packageName), true)'), 'new/replaced blacklisted package is not suspended');
-assert(receiver.includes('setApplicationHidden(admin, packageName, true)'), 'new/replaced blacklisted package is not hidden');
+assert(receiver.includes('AppAccessPolicyStore.blockedPackages(appContext)'), 'package receiver does not consult blacklist');
+assert(receiver.includes('setPackagesSuspended(admin, arrayOf(changedPackage), true)'), 'new/replaced blacklisted package is not suspended');
+assert(receiver.includes('setApplicationHidden(admin, changedPackage, true)'), 'new/replaced blacklisted package is not hidden');
 
 assert(panel.includes('/blocked-apps'), 'admin panel cannot load blacklist');
 assert(panel.includes('/policy/blocked-apps'), 'admin panel cannot save blacklist');
