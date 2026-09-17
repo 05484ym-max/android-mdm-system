@@ -20,6 +20,9 @@ class CommandExecutor(private val context: Context) {
         }
         "SYNC_POLICY" -> "מדיניות כבר סונכרנה במחזור הזה"
         "REBOOT" -> {
+            check(PlayInstallGuard.activeSession(context) == null && !ManagedInstallWindow.isOpen(context)) {
+                "אתחול נדחה: קיימת כרגע התקנה או עדכון פעילים"
+            }
             dpm.reboot(admin)
             "אתחול הופעל"
         }

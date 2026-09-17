@@ -36,6 +36,7 @@ object PlayStoreGate {
             Config.setPlayStoreAllowedUntil(appContext, deadline)
             dpm.setApplicationHidden(admin, PACKAGE, false)
             ManagedInstallWindow.open(appContext)
+            refreshKioskPolicy(appContext, failOnError = true)
         } catch (e: Exception) {
             failClosed(appContext, session.id, "לא ניתן היה לפתוח התקנה מאובטחת")
             throw e
@@ -57,7 +58,8 @@ object PlayStoreGate {
         // of Google Play visible so the customer sees Play's own real progress;
         // do not invent a percentage that Play does not expose to us.
         if (!InstallOverlay.show(appContext, appName)) {
-            Log.w(TAG, "Partial install overlay unavailable on this device; guarded package policy remains active")
+            Log.w(TAG, "Partial install overlay unavailable; showing guarded fallback immediately")
+            launchBlockingActivity(appContext)
         }
         PlayInstallStatusStore.update(appContext, session.id, PlayInstallStage.WAITING)
         scheduleHardTimeout(appContext, deadline)
@@ -140,6 +142,7 @@ object PlayStoreGate {
         if (session != null) ManagedInstallWindow.close(appContext)
         else if (ManagedInstallWindow.isOpen(appContext)) ManagedInstallWindow.forceClose(appContext)
         Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        refreshKioskPolicy(appContext)
         cancelHardTimeout(appContext)
         closePlayUi(appContext)
         PlayInstallStatusStore.update(appContext, snapshot.sessionId, PlayInstallStage.FAILED, message)
@@ -152,6 +155,7 @@ object PlayStoreGate {
         Log.w(TAG, "Closing Play session ${session.id} because unauthorized package $installedPackage was installed instead of ${session.targetPackage}")
         ManagedInstallWindow.close(appContext)
         Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        refreshKioskPolicy(appContext)
         cancelHardTimeout(appContext)
         closePlayUi(appContext)
         PlayInstallStatusStore.update(appContext, session.id, PlayInstallStage.FAILED, "זוהתה התקנה לא מאושרת. ההרשאה נסגרה מיד")
@@ -167,6 +171,7 @@ object PlayStoreGate {
         if (session != null) ManagedInstallWindow.close(appContext)
         else if (ManagedInstallWindow.isOpen(appContext)) ManagedInstallWindow.forceClose(appContext)
         Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        refreshKioskPolicy(appContext)
         cancelHardTimeout(appContext)
         closePlayUi(appContext)
         PlayInstallStatusStore.update(appContext, snapshot.sessionId, PlayInstallStage.FAILED, "ההתקנה הופסקה וההרשאה נסגרה")
@@ -178,6 +183,7 @@ object PlayStoreGate {
         val wasActive = PlayInstallGuard.finish(appContext, sessionId)
         if (wasActive) ManagedInstallWindow.close(appContext)
         Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        refreshKioskPolicy(appContext)
         cancelHardTimeout(appContext)
         closePlayUi(appContext)
         PlayInstallStatusStore.update(appContext, sessionId, PlayInstallStage.FAILED, message)
@@ -189,8 +195,32 @@ object PlayStoreGate {
         if (!PlayInstallGuard.finish(context, sessionId)) return false
         ManagedInstallWindow.close(context)
         Config.setPlayStoreAllowedUntil(context, System.currentTimeMillis())
+        refreshKioskPolicy(context)
         cancelHardTimeout(context)
         return true
+    }
+
+    private fun refreshKioskPolicy(context: Context, failOnError: Boolean = false) {
+        try {
+            val enforcer = PolicyEnforcer(context)
+            if (enforcer.isDeviceOwner()) enforcer.restoreCachedKioskPolicy()
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not refresh kiosk packages for Play install window", e)
+            if (failOnError) throw e
+        }
+    }
+
+    private fun launchBlockingActivity(context: Context) {
+        runCatching {
+            context.startActivity(
+                Intent(context, PlayInstallBlockingActivity::class.java)
+                    .addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    )
+            )
+        }.onFailure { Log.e(TAG, "Could not show guarded install fallback", it) }
     }
 
     private fun closePlayUi(context: Context) {

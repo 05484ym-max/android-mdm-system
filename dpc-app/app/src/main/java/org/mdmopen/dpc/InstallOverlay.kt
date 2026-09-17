@@ -6,6 +6,8 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.os.Build
+import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -13,22 +15,25 @@ import android.widget.ProgressBar
 import android.widget.TextView
 
 /**
- * Partial guarded-install overlay shown immediately over the lower part of
- * Google Play. The upper area stays visible and interactive so the customer can
- * see Play's own real installation progress instead of a fake percentage.
- *
- * The lower shield blocks wandering around the rest of Play during the short
- * approved install window and provides an explicit safe exit that always closes
- * the managed install window and re-hides Play Store.
+ * Partial guarded-install overlay over the lower part of Google Play.
+ * The upper Play area remains visible and interactive for Play's own
+ * install/update button and real progress UI.
  */
 object InstallOverlay {
+    private const val TAG = "InstallOverlay"
+    private const val SHIELD_HEIGHT_RATIO = 0.69f
     private var view: LinearLayout? = null
 
     fun show(context: Context, appName: String): Boolean {
         if (view != null) return true
         val appContext = context.applicationContext
-        val windowManager = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(appContext)) {
+            Log.w(TAG, "Partial install overlay unavailable: draw-over-other-apps permission is not granted")
+            return false
+        }
+
+        val windowManager = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val overlay = LinearLayout(appContext).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -38,26 +43,18 @@ object InstallOverlay {
             isFocusable = true
 
             addView(TextView(appContext).apply {
-                text = "התקנה מאובטחת פעילה"
-                textSize = 17f
+                text = "מתקין את $appName"
+                textSize = 16f
                 typeface = Typeface.create("sans-serif", Typeface.BOLD)
                 setTextColor(Color.parseColor("#1C231D"))
                 gravity = Gravity.CENTER
+                setPadding(0, 0, 0, 24)
             })
 
             addView(ProgressBar(appContext, null, android.R.attr.progressBarStyleHorizontal).apply {
                 isIndeterminate = true
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 18).apply {
-                topMargin = 28
-            })
-
-            addView(TextView(appContext).apply {
-                text = "מתקין את $appName\nהחלק העליון של Google Play נשאר גלוי כדי שתראה את ההתקדמות האמיתית."
-                textSize = 14f
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                setTextColor(Color.parseColor("#4E514B"))
-                gravity = Gravity.CENTER
-                setPadding(0, 24, 0, 24)
+                bottomMargin = 28
             })
 
             addView(TextView(appContext).apply {
@@ -89,7 +86,7 @@ object InstallOverlay {
             else
                 @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
 
-        val shieldHeight = (appContext.resources.displayMetrics.heightPixels * 0.55f).toInt()
+        val shieldHeight = (appContext.resources.displayMetrics.heightPixels * SHIELD_HEIGHT_RATIO).toInt()
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             shieldHeight,
@@ -104,7 +101,8 @@ object InstallOverlay {
             windowManager.addView(overlay, params)
             view = overlay
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not attach partial install overlay", e)
             false
         }
     }
@@ -115,7 +113,8 @@ object InstallOverlay {
         val windowManager = context.applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         try {
             windowManager.removeView(current)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not remove install overlay cleanly", e)
         }
     }
 }
