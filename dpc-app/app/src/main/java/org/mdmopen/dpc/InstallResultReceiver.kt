@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.util.Log
+import android.widget.Toast
 
 /** PackageInstaller reports install and uninstall outcomes here. */
 class InstallResultReceiver : BroadcastReceiver() {
@@ -24,7 +25,26 @@ class InstallResultReceiver : BroadcastReceiver() {
             }
         }
 
-        if (commandId == null) return
+        if (commandId == null) {
+            if (status == PackageInstaller.STATUS_SUCCESS) {
+                packageName?.let { PlayCatalogUpdateState.acknowledgeInstalledVersion(context, it) }
+                runCatching {
+                    context.applicationContext.startActivity(
+                        Intent(context.applicationContext, CustomerActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    )
+                }.onFailure {
+                    Log.w(PolicySync.TAG, "Could not return to customer store after managed install", it)
+                }
+            } else if (status != PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                Toast.makeText(
+                    context.applicationContext,
+                    "ההתקנה נכשלה: ${message ?: "שגיאה לא ידועה"}",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            return
+        }
 
         val current = CommandJournal.get(context, commandId)
         val expectedAttempt = attemptId?.let { "package:$it" }
