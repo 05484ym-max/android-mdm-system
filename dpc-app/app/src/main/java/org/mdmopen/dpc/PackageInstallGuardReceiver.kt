@@ -21,10 +21,28 @@ class PackageInstallGuardReceiver : BroadcastReceiver() {
         val appContext = context.applicationContext
         val dpm = appContext.getSystemService(DevicePolicyManager::class.java)
         if (!dpm.isDeviceOwnerApp(appContext.packageName)) {
+            // Without Device Owner we cannot safely quarantine/remove a package.
+            // Fail closed rather than leaving an unprotected Play install window.
             PlayStoreGate.abortBecauseUnauthorizedInstall(appContext, changedPackage)
             return
         }
 
+        val replacing = intent.action == Intent.ACTION_PACKAGE_REPLACED ||
+            intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
+
+        // Do not disturb Play just because another already-installed app updated in
+        // the background while the approved install window is open.
+        if (replacing) {
+            Log.i(
+                TAG,
+                "Non-target existing package updated during Play session: $changedPackage; target=${session.targetPackage}"
+            )
+            return
+        }
+
+        // A brand-new non-target package is not allowed. Keep the approved Play
+        // session open, but quarantine the unwanted app immediately and request
+        // its removal. This keeps the customer's install flow visible and simple.
         val admin = ComponentName(appContext, DpcDeviceAdminReceiver::class.java)
         var quarantined = false
         try {
@@ -39,9 +57,12 @@ class PackageInstallGuardReceiver : BroadcastReceiver() {
             Log.e(TAG, "Could not hide unauthorized package $changedPackage", e)
         }
 
-        val replacing = intent.action == Intent.ACTION_PACKAGE_REPLACED || intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
-        Log.w(TAG, "Unauthorized package changed during Play session: $changedPackage; target=${session.targetPackage}; replacing=$replacing; quarantined=$quarantined")
-        PlayStoreGate.abortBecauseUnauthorizedInstall(appContext, changedPackage)
+        Log.w(
+            TAG,
+            "Removing unauthorized package installed during Play session: $changedPackage; target=${session.targetPackage}; quarantined=$quarantined"
+        )
+        runCatching { AppInstaller(appContext).uninstall(changedPackage) }
+            .onFailure { Log.e(TAG, "Could not request removal of unauthorized package $changedPackage", it) }
     }
 
     companion object { private const val TAG = "PackageInstallGuard" }
