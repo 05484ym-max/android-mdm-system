@@ -20,6 +20,9 @@ class CommandExecutor(private val context: Context) {
         }
         "SYNC_POLICY" -> "מדיניות כבר סונכרנה במחזור הזה"
         "REBOOT" -> {
+            check(PlayInstallGuard.activeSession(context) == null) {
+                "אתחול נדחה: קיימת כרגע התקנת Google Play פעילה"
+            }
             dpm.reboot(admin)
             "אתחול הופעל"
         }
@@ -60,9 +63,6 @@ class CommandExecutor(private val context: Context) {
             FactoryResetProtectionManager(context).applyRecoveryAccounts(accounts)
         }
         "RELEASE_DEVICE_OWNER" -> {
-            // Clear any DPC-managed FRP override before ownership is relinquished. A failure
-            // here must abort release rather than strand an unmanaged device behind stale
-            // enterprise recovery credentials.
             FactoryResetProtectionManager(context).clearManagedPolicyForRelease()
             PolicyEnforcer(context).releaseDeviceOwner()
             if (requestSelfUninstall()) {
