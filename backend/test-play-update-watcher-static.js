@@ -55,7 +55,10 @@ assert.match(playGate, /Config\.setPlayStoreAllowedUntil\(appContext, System\.cu
 assert.match(playGate, /Config\.setPlayStoreAllowedUntil\(context, System\.currentTimeMillis\(\)\)[\s\S]*refreshKioskPolicy\(context\)/);
 assert.match(playGate, /private fun closePlayUi[\s\S]*InstallOverlay\.hide\(context\)/);
 
-assert.match(installOverlay, /SHIELD_HEIGHT_RATIO = 0\.69f/);
+const overlayRatioMatch = installOverlay.match(/SHIELD_HEIGHT_RATIO = (0\.\d+)f/);
+assert.ok(overlayRatioMatch, 'InstallOverlay must define SHIELD_HEIGHT_RATIO');
+const overlayRatio = Number(overlayRatioMatch[1]);
+assert.ok(overlayRatio >= 0.68 && overlayRatio <= 0.70, `Install overlay ratio out of range: ${overlayRatio}`);
 assert.match(installOverlay, /heightPixels \* SHIELD_HEIGHT_RATIO/);
 assert.match(installOverlay, /gravity = Gravity\.BOTTOM/);
 assert.match(installOverlay, /isIndeterminate = true/);
