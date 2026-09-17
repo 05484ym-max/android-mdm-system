@@ -1,7 +1,8 @@
-// "התראות" tab - a plain-Hebrew fault center.
+// "התראות" tab - a plain-Hebrew, near-real-time fault center.
 (function () {
   const HOUR_MS = 60 * 60 * 1000;
   const DAY_MS = 24 * HOUR_MS;
+  const AUTO_REFRESH_MS = 30 * 1000;
 
   const EXPLAIN = {
     DEVICE_OWNER_LOST: {
@@ -31,8 +32,8 @@
     SYNC_STALE: {
       what: 'הטלפון כן מדבר עם השרת, אבל הסנכרון המלא תקוע.',
       impact: 'מדיניות או פקודות חדשות עלולות להתעכב.',
-      solution: 'פתח אבחון ולחץ "נסה סנכרון מחדש".',
-      who: 'אפשר לנסות מרחוק',
+      solution: 'המערכת מנסה קודם להעיר את המכשיר לבד. אם זה לא מסתדר, פתח אבחון ולחץ "נסה סנכרון מחדש".',
+      who: 'המערכת מנסה קודם לבד',
     },
     LOW_STORAGE: {
       what: 'נשאר מעט מקום פנוי בטלפון.',
@@ -43,8 +44,8 @@
     DNS_FILTER_MISMATCH: {
       what: 'המצב שביקשת לסינון האינטרנט שונה ממה שהטלפון מדווח בפועל.',
       impact: 'הסינון עלול להיות כבוי כשאמור להיות פעיל, או להפך.',
-      solution: 'פתח אבחון, שלח שוב הפעלה/כיבוי של הסינון ולחץ רענון סטטוס.',
-      who: 'אפשר לנסות מרחוק',
+      solution: 'המערכת מנסה קודם סנכרון בטוח. אם אין שינוי, פתח אבחון ושלח שוב את מצב הסינון.',
+      who: 'המערכת מנסה קודם לבד',
     },
     DNS_RESOLUTION_FAILED: {
       what: 'הטלפון מחובר לרשת, אבל בדיקת ה-DNS נכשלת.',
@@ -81,6 +82,7 @@
   }
 
   const SEVERITY_LABEL = { critical: 'צריך טיפול עכשיו', warning: 'כדאי לטפל' };
+  const SCOPE_CLASS = { FLEET: 'fleet', CLUSTER: 'cluster', LIMITED: 'limited', DEVICE: 'device' };
 
   function summaryCard(cls, label, value) {
     return `<div class="alerts-stat-card ${cls}"><div class="label">${escapeHtml(label)}</div><div class="value">${value}</div></div>`;
@@ -88,12 +90,27 @@
 
   function renderSummary(list) {
     const critical = list.filter(a => a.severity === 'critical').length;
-    const warning = list.filter(a => a.severity === 'warning').length;
+    const fleet = list.filter(a => a.fleetScope === 'FLEET' || a.fleetScope === 'CLUSTER').length;
     document.getElementById('alertsSummary').innerHTML = [
       summaryCard('', 'תקלות פעילות', list.length),
       summaryCard('critical', 'לטיפול עכשיו', critical),
-      summaryCard('warning', 'כדאי לטפל', warning),
+      summaryCard('warning', 'תקלות רחבות', fleet),
     ].join('');
+  }
+
+  function scopeHtml(a) {
+    if (!a.fleetScopeLabel) {
+      return '<div class="alert-scope scope-unknown"><strong>היקף:</strong> עדיין אוסף נתונים להשוואה בין המכשירים</div>';
+    }
+    const auto = a.autoHealAllowed
+      ? '<div class="alert-autoheal">תיקון אוטומטי בטוח: המערכת מנסה סנכרון/התעוררות לבד</div>'
+      : '';
+    return `<div class="alert-scope scope-${escapeHtml(SCOPE_CLASS[a.fleetScope] || 'unknown')}">
+      <strong>${escapeHtml(a.fleetScopeLabel)}</strong>
+      <span>${escapeHtml(a.fleetScopeReason || '')}</span>
+      ${a.affectedCount != null && a.fleetCount != null ? `<small>נפגעו ${escapeHtml(a.affectedCount)} מתוך ${escapeHtml(a.fleetCount)} (${escapeHtml(a.affectedPercent || 0)}%)</small>` : ''}
+      ${auto}
+    </div>`;
   }
 
   function alertCard(a) {
@@ -114,6 +131,8 @@
         </div>
         <span class="alert-severity-badge ${escapeHtml(a.severity)}">${escapeHtml(SEVERITY_LABEL[a.severity] || 'לבדיקה')}</span>
       </div>
+
+      ${scopeHtml(a)}
 
       <div class="alert-simple-box">
         <div class="alert-simple-row"><strong>מה קרה?</strong><span>${escapeHtml(info.what)}</span></div>
@@ -144,7 +163,7 @@
   async function loadAlerts() {
     let res;
     try {
-      res = await fetch('/api/alerts');
+      res = await fetch('/api/alerts', { cache: 'no-store' });
     } catch (e) {
       document.getElementById('alertsList').innerHTML = '<div class="empty-state">לא הצלחתי להתחבר לשרת. בדוק אינטרנט ורענן.</div>';
       return;
@@ -168,4 +187,13 @@
 
   const refreshBtn = document.getElementById('alertsRefreshBtn');
   if (refreshBtn) refreshBtn.addEventListener('click', loadAlerts);
+
+  // Near-real-time view without requiring the operator to refresh manually.
+  // The backend monitor is event-driven + periodic; this only refreshes the
+  // visible admin representation and does not poll individual devices.
+  const timer = setInterval(() => {
+    const tab = document.querySelector('[data-tab-content="alerts"]');
+    if (tab && tab.offsetParent !== null) loadAlerts();
+  }, AUTO_REFRESH_MS);
+  if (timer && typeof timer.unref === 'function') timer.unref();
 })();
