@@ -6,8 +6,9 @@ const crypto = require('crypto');
 const db = require('./db');
 const diagnostics = require('./diagnostics');
 
-// Deliberately excludes LOW_BATTERY (too noisy for a first version) and
-// HEALTH_DATA_MISSING (informational, not actionable).
+// Alert only on actionable management faults. Informational states such as
+// HEALTH_DATA_MISSING and LOW_BATTERY are intentionally excluded to avoid
+// turning the panel into noise.
 const ALERT_FAULT_CODES = new Set([
   'DEVICE_OWNER_LOST',
   'DEVICE_OFFLINE',
@@ -15,22 +16,18 @@ const ALERT_FAULT_CODES = new Set([
   'NEVER_CONTACTED',
   'SYNC_STALE',
   'LOW_STORAGE',
+  'DNS_FILTER_MISMATCH',
+  'DNS_RESOLUTION_FAILED',
+  'DNS_PROVIDER_UNREACHABLE',
+  'DNS_FAILSAFE_ACTIVE',
 ]);
 
 /**
  * Reconciles the alerts table with one device's current diagnosis:
  * - a fault newly present (and alert-worthy) opens a new alert, unless one
- *   is already open for that exact deviceId+faultCode (createAlert no-ops
- *   via the DB's own unique index either way, so this is never a duplicate
- *   even under a race between overlapping calls for the same device);
+ *   is already open for that exact deviceId+faultCode;
  * - an alert whose fault is no longer present gets resolved_at set;
- * - a fault that reappears after its alert was resolved opens a fresh
- *   alert (history of the earlier one is never deleted or reused).
- *
- * Never throws in a way a caller must handle specially for it to be safe to
- * ignore - errors from db.js propagate normally, but this function's own
- * logic never leaves alerts half-updated in a way that would need a rollback
- * (each open/resolve is an independent statement).
+ * - a fault that reappears after its alert was resolved opens a fresh alert.
  */
 async function syncAlertsForDevice(device) {
   const faults = diagnostics.diagnose(device);
@@ -52,15 +49,8 @@ async function syncAlertsForDevice(device) {
 }
 
 /**
- * Re-runs syncAlertsForDevice() across the whole fleet. This exists because
- * sync-triggered reconciliation alone can never catch DEVICE_OFFLINE or
- * NEVER_CONTACTED: by definition, a device in either state has stopped
- * syncing, so nothing ever re-invokes syncAlertsForDevice() for it again on
- * its own. Called when the admin loads the alerts panel so those two fault
- * codes still get surfaced - sync-time reconciliation stays the primary,
- * per-device-triggered path for every other fault code; this is the
- * necessary backstop for the two it structurally cannot reach, not a
- * replacement for it. Best-effort per device, like the /sync call site.
+ * Re-runs syncAlertsForDevice() across the whole fleet. This catches offline
+ * devices too, because those devices cannot trigger reconciliation themselves.
  */
 async function reconcileAllDevices() {
   const devices = await db.listDeviceHealth();
@@ -68,7 +58,7 @@ async function reconcileAllDevices() {
     try {
       await syncAlertsForDevice(device);
     } catch (e) {
-      console.warn(`[alerts] reconcile failed for device ${device.deviceId}:`, e.message);
+      console.warn('[alerts] reconcile failed for device %s: %s', device.deviceId, e.message);
     }
   }
 }
