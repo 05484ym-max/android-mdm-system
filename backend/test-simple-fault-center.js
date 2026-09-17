@@ -37,7 +37,7 @@ assert(codes({ dnsFailSafeState: 'ROLLED_BACK' }).includes('DNS_FAILSAFE_ACTIVE'
 assert(!codes({ currentNetworkType: 'NONE', dnsResolutionOk: false }).includes('DNS_RESOLUTION_FAILED'));
 
 const ui = fs.readFileSync(path.join(__dirname, '..', 'admin-panel', 'alerts.js'), 'utf8');
-for (const marker of ['מה קרה?', 'מה זה גורם?', 'מה עושים?', 'מי מטפל?']) {
+for (const marker of ['מה קרה?', 'מה זה גורם?', 'מה עושים?', 'מי מטפל?', 'fleetScopeLabel', 'affectedCount', 'autoHealAllowed']) {
   assert(ui.includes(marker), `missing simple UI marker: ${marker}`);
 }
 for (const code of ['DEVICE_OWNER_LOST', 'UPDATE_FAILED', 'LOW_STORAGE', 'DNS_FILTER_MISMATCH', 'DNS_RESOLUTION_FAILED', 'DNS_PROVIDER_UNREACHABLE', 'DNS_FAILSAFE_ACTIVE']) {
