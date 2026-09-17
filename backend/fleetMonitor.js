@@ -117,6 +117,8 @@ function classifyScope(faultCode, affected, all) {
 }
 
 function analyzeFleet(devices, now = Date.now()) {
+  // For hundreds of devices this is intentionally O(devices × fault-types)
+  // in memory after one DB read; there is no per-device network poll here.
   const active = Array.isArray(devices) ? devices.filter(Boolean) : [];
   const byCode = new Map();
   const faultsByDevice = new Map();
