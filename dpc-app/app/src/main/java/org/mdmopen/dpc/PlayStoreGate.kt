@@ -4,9 +4,7 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -66,12 +64,8 @@ object PlayStoreGate {
         }, REVEAL_WINDOW_MS)
     }
 
-    private fun installedVersionCode(context: Context, packageName: String): Long? = try {
-        val info = context.packageManager.getPackageInfo(packageName, 0)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else {
-            @Suppress("DEPRECATION") info.versionCode.toLong()
-        }
-    } catch (_: PackageManager.NameNotFoundException) { null }
+    private fun installedVersionCode(context: Context, packageName: String): Long? =
+        PlayCatalogUpdateState.installedVersionCode(context, packageName)
 
     private fun pollForInstall(context: Context, packageName: String, sessionId: String, startingVersion: Long?, elapsedMs: Long) {
         if (!PlayInstallGuard.isActive(context, sessionId)) return
@@ -82,7 +76,16 @@ object PlayStoreGate {
             return
         }
         if (elapsedMs >= MAX_WAIT_MS) {
-            failClosed(context, sessionId, "זמן ההתקנה הסתיים. ההרשאה נסגרה אוטומטית")
+            // For an already-installed Play app, public catalog metadata can say
+            // "update" even when Play has no newer build for this exact device.
+            // Do not leave the customer trapped behind a failed full-screen UI:
+            // if the package is still installed, close the guarded window and
+            // acknowledge the version PackageManager actually reports.
+            if (startingVersion != null && currentVersion != null) {
+                completeAlreadyCurrent(context, packageName, sessionId)
+            } else {
+                failClosed(context, sessionId, "זמן ההתקנה הסתיים. ההרשאה נסגרה אוטומטית")
+            }
             return
         }
         Handler(Looper.getMainLooper()).postDelayed({
@@ -101,9 +104,41 @@ object PlayStoreGate {
         if (!PlayInstallGuard.isActive(context, sessionId)) return
         PlayInstallStatusStore.update(context, sessionId, PlayInstallStage.INSTALLING)
         if (!finishSession(context, sessionId)) return
+        PlayCatalogUpdateState.acknowledgeInstalledVersion(context, packageName)
         closePlayUi(context)
         PlayInstallStatusStore.update(context, sessionId, PlayInstallStage.COMPLETED, "$packageName הותקנה בהצלחה")
         launchBlockingActivity(context)
+    }
+
+    private fun completeAlreadyCurrent(context: Context, packageName: String, sessionId: String) {
+        if (!PlayInstallGuard.isActive(context, sessionId)) return
+        if (!finishSession(context, sessionId)) return
+        PlayCatalogUpdateState.acknowledgeInstalledVersion(context, packageName)
+        closePlayUi(context)
+        PlayInstallStatusStore.update(
+            context,
+            sessionId,
+            PlayInstallStage.COMPLETED,
+            "האפליקציה כבר מותקנת בגרסה הזמינה למכשיר זה"
+        )
+        launchBlockingActivity(context)
+    }
+
+    /** Safe escape hatch for the full-screen guard. It never leaves Play open. */
+    fun cancelCurrentInstall(context: Context, message: String = "ההתקנה בוטלה וההרשאה נסגרה") {
+        val appContext = context.applicationContext
+        val snapshot = PlayInstallStatusStore.snapshot(appContext) ?: run {
+            closePlayUi(appContext)
+            return
+        }
+        if (snapshot.stage.terminal) return
+        val session = PlayInstallGuard.abortCurrent(appContext)
+        if (session != null) ManagedInstallWindow.close(appContext)
+        else if (ManagedInstallWindow.isOpen(appContext)) ManagedInstallWindow.forceClose(appContext)
+        Config.setPlayStoreAllowedUntil(appContext, System.currentTimeMillis())
+        cancelHardTimeout(appContext)
+        closePlayUi(appContext)
+        PlayInstallStatusStore.update(appContext, snapshot.sessionId, PlayInstallStage.FAILED, message)
     }
 
     fun abortBecauseUnauthorizedInstall(context: Context, installedPackage: String) {
