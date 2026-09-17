@@ -1,0 +1,46 @@
+name: Apply one-tap fix on PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/one-tap-install-play-kiosk-overlay'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Apply exact feature-branch transformations
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/apply-one-tap-install-fix.yml').read_text()
+          marker = "          python3 <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY\n", start)
+          source = workflow[start:end]
+          lines = source.splitlines()
+          indent = min(len(line) - len(line.lstrip()) for line in lines if line.strip())
+          source = '\n'.join(line[indent:] if line.strip() else '' for line in lines)
+          exec(compile(source, 'apply-one-tap-install-fix.py', 'exec'))
+          PY
+          rm -f .github/workflows/apply-one-tap-install-fix.yml .github/workflows/apply-one-tap-on-pr.yml
+          node backend/test-play-update-watcher-static.js
+          git diff --check
+
+      - name: Commit focused fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix one-tap installs, Play kiosk allowance, and overlay"
+          git push origin HEAD:${{ github.head_ref }}
