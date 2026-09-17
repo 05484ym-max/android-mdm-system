@@ -42,6 +42,7 @@ object PolicySync {
 
             Config.setAllowedApps(context, result.policy.allowedApps)
             Config.setAppCatalog(context, result.catalog)
+            PlayCatalogUpdateState.reapplyAcknowledgements(context)
             Config.setKioskEnabled(context, result.policy.kioskEnabled)
             Config.setSyncIntervalMinutes(context, result.policy.syncIntervalMinutes)
             Config.setCustomerProfile(context, result.policy)
