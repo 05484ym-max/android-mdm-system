@@ -129,12 +129,14 @@ object PlayCatalogUpdateState {
         val lastUpdateTime: Long,
     )
 
-    private fun installedPackageState(context: Context, packageName: String): InstalledPackageState? = try {
-        val info = context.packageManager.getPackageInfo(packageName, 0)
-        val versionName = info.versionName?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        InstalledPackageState(versionName, info.lastUpdateTime)
-    } catch (_: PackageManager.NameNotFoundException) {
-        null
+    private fun installedPackageState(context: Context, packageName: String): InstalledPackageState? {
+        return try {
+            val info = context.packageManager.getPackageInfo(packageName, 0)
+            val versionName = info.versionName?.trim()?.takeIf { it.isNotBlank() } ?: return null
+            InstalledPackageState(versionName, info.lastUpdateTime)
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        }
     }
 
     private fun installedVersionName(context: Context, packageName: String): String? =
