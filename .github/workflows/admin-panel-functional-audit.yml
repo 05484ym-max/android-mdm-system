@@ -38,6 +38,50 @@ jobs:
           end = workflow.index("\n          PY\n", start)
           raw = workflow[start:end]
           source = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines())
+
+          # Replace only the brittle CustomerActivity bootstrap section with a
+          # structural function-boundary edit. The actual product change remains
+          # the same; this merely avoids depending on whitespace in a ~90 KB UI file.
+          customer_start = source.index("customer = 'dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt'")
+          customer_end = source.index("\noverlay = Path(", customer_start)
+          customer_patch = r'''customer = 'dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt'
+p = Path(customer)
+text = p.read_text()
+fn_start = text.index('    private fun installApp(app: CatalogApp) {')
+fn_end = text.index('\n    private fun loadIcon(', fn_start)
+new_fn = ''' + "'''" + r'''    private fun installApp(app: CatalogApp) {
+        if (!Config.storeAccessAllowed(this)) {
+            Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
+            showAppStore()
+            return
+        }
+        val apkUrl = app.apkUrl?.trim()?.takeIf { it.isNotEmpty() }
+        val apkSha256 = app.apkSha256?.trim()?.takeIf { it.isNotEmpty() }
+        if (apkUrl == null || apkSha256 == null) {
+            openPlayStoreForInstall(app.packageName)
+            return
+        }
+
+        // A complete verified APK pair is the managed one-tap path regardless
+        // of catalog source metadata. Google Play is only the fallback.
+        Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
+                runOnUiThread {
+                    Toast.makeText(this@CustomerActivity, "ההתקנה התחילה", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this@CustomerActivity, "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}", Toast.LENGTH_LONG).show()
+                    showAppStore()
+                }
+            }
+        }.start()
+    }
+''' + "'''" + r'''
+p.write_text(text[:fn_start] + new_fn + text[fn_end:])'''
+          source = source[:customer_start] + customer_patch + source[customer_end:]
           exec(compile(source, 'apply-one-tap-install-fix.py', 'exec'))
           PY
           rm -f .github/workflows/apply-one-tap-install-fix.yml .github/workflows/apply-one-tap-on-pr.yml
