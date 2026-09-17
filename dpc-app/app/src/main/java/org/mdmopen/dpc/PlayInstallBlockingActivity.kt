@@ -1,6 +1,7 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -83,7 +84,14 @@ class PlayInstallBlockingActivity : Activity() {
         if (snapshot.stage.terminal) {
             if (finishedAt == null) finishedAt = System.currentTimeMillis()
             if (System.currentTimeMillis() - finishedAt!! >= TERMINAL_HOLD_MS) {
+                val completed = snapshot.stage == PlayInstallStage.COMPLETED
                 PlayInstallStatusStore.clear(this, snapshot.sessionId)
+                if (completed && hasWindowFocus()) {
+                    startActivity(
+                        Intent(this, CustomerActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    )
+                }
                 finish()
             }
         } else finishedAt = null
