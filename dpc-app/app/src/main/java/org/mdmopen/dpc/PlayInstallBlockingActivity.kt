@@ -24,6 +24,7 @@ class PlayInstallBlockingActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var detailView: TextView
     private lateinit var progress: ProgressBar
+    private lateinit var cancelView: TextView
     private var finishedAt: Long? = null
     private var loadedPackage: String? = null
 
@@ -44,7 +45,11 @@ class PlayInstallBlockingActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         val snapshot = PlayInstallStatusStore.snapshot(this)
-        if (snapshot == null || snapshot.stage.terminal) super.onBackPressed()
+        if (snapshot == null || snapshot.stage.terminal) {
+            super.onBackPressed()
+            return
+        }
+        cancelAndReturn(snapshot)
     }
 
     override fun onDestroy() {
@@ -66,7 +71,7 @@ class PlayInstallBlockingActivity : Activity() {
             System.currentTimeMillis() - snapshot.updatedAt >= STALE_UI_TIMEOUT_MS
         ) {
             runCatching { PlayStoreGate.recoverAfterProcessStart(applicationContext) }
-            finish()
+            returnToStore()
             return
         }
 
@@ -81,21 +86,34 @@ class PlayInstallBlockingActivity : Activity() {
             PlayInstallStage.FAILED -> "ההתקנה נסגרה בצורה מאובטחת"
         }
         progress.visibility = if (snapshot.stage.terminal) View.INVISIBLE else View.VISIBLE
+        cancelView.visibility = if (snapshot.stage.terminal) View.GONE else View.VISIBLE
         if (snapshot.stage.terminal) {
             if (finishedAt == null) finishedAt = System.currentTimeMillis()
             if (System.currentTimeMillis() - finishedAt!! >= TERMINAL_HOLD_MS) {
                 val completed = snapshot.stage == PlayInstallStage.COMPLETED
                 PlayInstallStatusStore.clear(this, snapshot.sessionId)
-                if (completed && hasWindowFocus()) {
-                    startActivity(
-                        Intent(this, CustomerActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    )
-                }
-                finish()
+                if (completed) returnToStore() else finish()
             }
         } else finishedAt = null
         loadIconIfPossible(snapshot.packageName)
+    }
+
+    private fun cancelAndReturn(snapshot: PlayInstallUiSnapshot) {
+        runCatching {
+            PlayStoreGate.cancelCurrentInstall(applicationContext, "ההתקנה בוטלה וההרשאה ל-Google Play נסגרה")
+        }
+        PlayInstallStatusStore.clear(this, snapshot.sessionId)
+        returnToStore()
+    }
+
+    private fun returnToStore() {
+        if (!isFinishing) {
+            startActivity(
+                Intent(this, CustomerActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            )
+            finish()
+        }
     }
 
     private fun loadIconIfPossible(packageName: String) {
@@ -156,6 +174,28 @@ class PlayInstallBlockingActivity : Activity() {
                 setPadding(0, dp(18), 0, 0)
             }
             addView(detailView)
+            cancelView = TextView(this@PlayInstallBlockingActivity).apply {
+                text = "סגור וחזור לחנות"
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(Color.parseColor("#245E38"))
+                gravity = Gravity.CENTER
+                setPadding(dp(18), dp(12), dp(18), dp(12))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#EEF2E1"))
+                    cornerRadius = dp(16).toFloat()
+                    setStroke(dp(1), Color.parseColor("#C8D4B8"))
+                }
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    PlayInstallStatusStore.snapshot(this@PlayInstallBlockingActivity)?.let(::cancelAndReturn)
+                        ?: returnToStore()
+                }
+            }
+            addView(cancelView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(20)
+            })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     }
 
