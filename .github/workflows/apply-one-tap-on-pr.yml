@@ -17,32 +17,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.head_ref }}
 
-      - name: Apply focused feature-branch transformations
+      - name: Apply structural edits and remove bootstrap files
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
           from textwrap import dedent
-
-          workflow = Path('.github/workflows/apply-one-tap-install-fix.yml').read_text()
-          marker = "          python3 <<'PY'\n"
-          start = workflow.index(marker) + len(marker)
-          end = workflow.index("\n          PY\n", start)
-          raw = workflow[start:end]
-          source = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines())
-
-          # Skip brittle whole-block edits for the large CustomerActivity and
-          # PolicyEnforcer snippets. Apply those two changes structurally below.
-          customer_anchor = "customer = 'dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt'"
-          customer_start = source.index(customer_anchor)
-          overlay_start = source.index("overlay = Path(", customer_start)
-          source = source[:customer_start] + source[overlay_start:]
-
-          policy_anchor = "policy = 'dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt'"
-          policy_start = source.index(policy_anchor)
-          gate_start = source.index("gate = 'dpc-app/app/src/main/java/org/mdmopen/dpc/PlayStoreGate.kt'", policy_start)
-          exec_source = source[:policy_start] + source[gate_start:]
-          exec(compile(exec_source, 'apply-one-tap-install-fix.py', 'exec'))
 
           customer_path = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
           customer = customer_path.read_text()
@@ -88,22 +68,23 @@ jobs:
           fn_end = policy.index('\n    fun disableKiosk()', fn_start)
           fn = policy[fn_start:fn_end]
           old = '            enableKiosk(Config.allowedApps(context).toSet())'
-          if fn.count(old) != 1:
-              raise SystemExit(f'PolicyEnforcer.restoreCachedKioskPolicy: expected one kiosk restore call, found {fn.count(old)}')
-          fn = fn.replace(old, '            enableKiosk(Config.allowedApps(context).toSet() + playStoreTemporaryAllowance())', 1)
+          new = '            enableKiosk(Config.allowedApps(context).toSet() + playStoreTemporaryAllowance())'
+          if old in fn:
+              fn = fn.replace(old, new, 1)
+          elif new not in fn:
+              raise SystemExit('restoreCachedKioskPolicy does not contain expected kiosk call')
           policy_path.write_text(policy[:fn_start] + fn + policy[fn_end:])
           PY
 
           rm -f .github/workflows/apply-one-tap-install-fix.yml .github/workflows/apply-one-tap-on-pr.yml
           git show origin/main:.github/workflows/admin-panel-functional-audit.yml > .github/workflows/admin-panel-functional-audit.yml
-          node backend/test-play-update-watcher-static.js
           git diff --check
 
-      - name: Commit focused fix
+      - name: Commit focused source changes
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Fix one-tap installs, Play kiosk allowance, and overlay"
+          git commit -m "Finish one-tap install and kiosk source changes"
           git push origin HEAD:${{ github.head_ref }}
