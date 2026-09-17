@@ -17,22 +17,70 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.head_ref }}
 
-      - name: Apply exact feature-branch transformations
+      - name: Apply focused feature-branch transformations
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
+          from textwrap import dedent
+
           workflow = Path('.github/workflows/apply-one-tap-install-fix.yml').read_text()
           marker = "          python3 <<'PY'\n"
           start = workflow.index(marker) + len(marker)
           end = workflow.index("\n          PY\n", start)
-          source = workflow[start:end]
-          lines = source.splitlines()
-          indent = min(len(line) - len(line.lstrip()) for line in lines if line.strip())
-          source = '\n'.join(line[indent:] if line.strip() else '' for line in lines)
-          exec(compile(source, 'apply-one-tap-install-fix.py', 'exec'))
+          raw = workflow[start:end]
+          source = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines())
+
+          # Keep the existing focused transformations, but skip the brittle
+          # whole-block CustomerActivity replacement and edit that function by
+          # structural boundaries instead.
+          customer_anchor = "customer = 'dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt'"
+          customer_start = source.index(customer_anchor)
+          overlay_start = source.index("overlay = Path(", customer_start)
+          exec_source = source[:customer_start] + source[overlay_start:]
+          exec(compile(exec_source, 'apply-one-tap-install-fix.py', 'exec'))
+
+          customer_path = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
+          customer = customer_path.read_text()
+          fn_start = customer.index('    private fun installApp(app: CatalogApp) {')
+          fn_end = customer.index('\n    private fun loadIcon(', fn_start)
+          new_fn = dedent('''\
+              private fun installApp(app: CatalogApp) {
+                  if (!Config.storeAccessAllowed(this)) {
+                      Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
+                      showAppStore()
+                      return
+                  }
+                  val apkUrl = app.apkUrl?.trim()?.takeIf { it.isNotEmpty() }
+                  val apkSha256 = app.apkSha256?.trim()?.takeIf { it.isNotEmpty() }
+                  if (apkUrl == null || apkSha256 == null) {
+                      openPlayStoreForInstall(app.packageName)
+                      return
+                  }
+
+                  // A complete verified APK pair is the managed one-tap path regardless
+                  // of catalog source metadata. Google Play is only the fallback.
+                  Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
+                  Thread {
+                      try {
+                          AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
+                          runOnUiThread {
+                              Toast.makeText(this@CustomerActivity, "ההתקנה התחילה", Toast.LENGTH_SHORT).show()
+                          }
+                      } catch (e: Exception) {
+                          runOnUiThread {
+                              Toast.makeText(this@CustomerActivity, "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}", Toast.LENGTH_LONG).show()
+                              showAppStore()
+                          }
+                      }
+                  }.start()
+              }
+          ''')
+          customer_path.write_text(customer[:fn_start] + new_fn + customer[fn_end:])
           PY
+
           rm -f .github/workflows/apply-one-tap-install-fix.yml .github/workflows/apply-one-tap-on-pr.yml
+          git show origin/main:.github/workflows/admin-panel-functional-audit.yml > .github/workflows/admin-panel-functional-audit.yml
           node backend/test-play-update-watcher-static.js
           git diff --check
 
