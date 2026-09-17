@@ -6,6 +6,8 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.os.Build
+import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -16,19 +18,24 @@ import android.widget.TextView
  * Partial guarded-install overlay shown immediately over the lower part of
  * Google Play. The upper area stays visible and interactive so the customer can
  * see Play's own real installation progress instead of a fake percentage.
- *
- * The lower shield blocks wandering around the rest of Play during the short
- * approved install window and provides an explicit safe exit that always closes
- * the managed install window and re-hides Play Store.
  */
 object InstallOverlay {
+    private const val TAG = "InstallOverlay"
     private var view: LinearLayout? = null
 
     fun show(context: Context, appName: String): Boolean {
         if (view != null) return true
         val appContext = context.applicationContext
-        val windowManager = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
+        // SYSTEM_ALERT_WINDOW is a special app-access permission. Being Device
+        // Owner does not universally grant it, so fail explicitly instead of
+        // silently pretending the partial shield is visible.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(appContext)) {
+            Log.w(TAG, "Partial install overlay unavailable: draw-over-other-apps permission is not granted")
+            return false
+        }
+
+        val windowManager = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val overlay = LinearLayout(appContext).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -104,7 +111,8 @@ object InstallOverlay {
             windowManager.addView(overlay, params)
             view = overlay
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not attach partial install overlay", e)
             false
         }
     }
@@ -115,7 +123,8 @@ object InstallOverlay {
         val windowManager = context.applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         try {
             windowManager.removeView(current)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not remove install overlay cleanly", e)
         }
     }
 }

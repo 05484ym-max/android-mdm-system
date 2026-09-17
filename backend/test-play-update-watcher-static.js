@@ -10,6 +10,7 @@ const playUi = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/md
 const installOverlay = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/InstallOverlay.kt', 'utf8');
 const playCatalogState = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/PlayCatalogUpdateState.kt', 'utf8');
 const policySync = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt', 'utf8');
+const commandExecutor = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/java/org/mdmopen/dpc/CommandExecutor.kt', 'utf8');
 const manifest = fs.readFileSync(__dirname + '/../dpc-app/app/src/main/AndroidManifest.xml', 'utf8');
 
 assert.match(index, /PLAY_METADATA_FRESH_MS = 10 \* 60 \* 1000/);
@@ -27,6 +28,8 @@ assert.match(customer, /updateAvailable -> "עדכון זמין"/);
 assert.match(playGate, /PlayInstallGuard\.begin\(appContext, packageName, deadline\)/);
 assert.match(playGate, /PlayInstallStatusStore\.begin\(appContext, session\.id, packageName, appName\)/);
 assert.match(playGate, /InstallOverlay\.show\(appContext, appName\)/);
+assert.match(playGate, /launchBlockingActivity\(appContext\)/);
+assert.match(playGate, /Partial install overlay unavailable; showing guarded fallback immediately/);
 assert.match(playGate, /PlayInstallStage\.WAITING/);
 assert.doesNotMatch(playGate, /REVEAL_WINDOW_MS/);
 assert.match(playGate, /postDelayed\([\s\S]*500L/);
@@ -39,14 +42,17 @@ assert.match(playGate, /completeAlreadyCurrent\(context, packageName, sessionId\
 assert.match(playGate, /fun cancelCurrentInstall\(/);
 assert.match(playGate, /if \(startingVersion != null && currentVersion != null\)/);
 assert.match(playGate, /Intent\.FLAG_ACTIVITY_CLEAR_TASK/);
-assert.doesNotMatch(playGate, /launchBlockingActivity/);
 
+assert.match(installOverlay, /Settings\.canDrawOverlays\(appContext\)/);
 assert.match(installOverlay, /heightPixels \* 0\.55f/);
 assert.match(installOverlay, /gravity = Gravity\.BOTTOM/);
 assert.match(installOverlay, /isIndeterminate = true/);
 assert.match(installOverlay, /החלק העליון של Google Play נשאר גלוי/);
 assert.match(installOverlay, /PlayStoreGate\.cancelCurrentInstall\(appContext\)/);
 assert.match(installOverlay, /סגור וחזור לחנות/);
+
+assert.match(commandExecutor, /"REBOOT" -> \{[\s\S]*PlayInstallGuard\.activeSession\(context\) == null[\s\S]*dpm\.reboot\(admin\)/);
+assert.match(commandExecutor, /אתחול נדחה: קיימת כרגע התקנת Google Play פעילה/);
 
 assert.match(playGuard, /KEY_TARGET_PACKAGE/);
 assert.match(playGuard, /ManagedInstallWindow\.close\(context\)/);
