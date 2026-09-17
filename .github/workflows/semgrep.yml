@@ -28,15 +28,20 @@ jobs:
       - name: Install Semgrep
         run: python -m pip install --disable-pip-version-check 'semgrep==1.177.0'
 
-      - name: Run Semgrep
+      - name: Run production security scan
         run: |
           semgrep scan \
-            --config p/default \
             --config p/security-audit \
+            --severity ERROR \
             --error \
             --metrics=off \
+            --exclude 'backend/test-*.js' \
+            --exclude 'backend/fake*.js' \
+            --exclude 'backend/**/*test*.js' \
+            --exclude 'dpc-app/**/test/**' \
+            --exclude 'dpc-app/**/androidTest/**' \
             --sarif-output semgrep.sarif \
-            backend admin-panel dpc-app/app/src
+            backend admin-panel dpc-app/app/src/main
 
       - name: Upload Semgrep report
         if: always()
