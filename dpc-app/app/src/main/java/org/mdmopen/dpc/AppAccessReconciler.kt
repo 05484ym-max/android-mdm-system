@@ -39,14 +39,10 @@ class AppAccessReconciler(private val context: Context) {
 
         val failedBlock = mutableSetOf<String>()
         val failedRelease = mutableSetOf<String>()
-        val blocked = mutableSetOf<String>()
-        val released = mutableSetOf<String>()
 
         if (toBlock.isNotEmpty()) {
             try {
-                val failedSuspend = dpm.setPackagesSuspended(admin, toBlock.toTypedArray(), true).toSet()
-                blocked += toBlock - failedSuspend
-                failedBlock += failedSuspend
+                failedBlock += dpm.setPackagesSuspended(admin, toBlock.toTypedArray(), true).toSet()
             } catch (_: Exception) {
                 failedBlock += toBlock
             }
@@ -64,9 +60,7 @@ class AppAccessReconciler(private val context: Context) {
 
         if (toRelease.isNotEmpty()) {
             try {
-                val failedUnsuspend = dpm.setPackagesSuspended(admin, toRelease.toTypedArray(), false).toSet()
-                released += toRelease - failedUnsuspend
-                failedRelease += failedUnsuspend
+                failedRelease += dpm.setPackagesSuspended(admin, toRelease.toTypedArray(), false).toSet()
             } catch (_: Exception) {
                 failedRelease += toRelease
             }
@@ -85,9 +79,12 @@ class AppAccessReconciler(private val context: Context) {
         val failed = failedBlock + failedRelease
         val successfullyBlocked = toBlock - failedBlock
         val successfullyReleased = toRelease - failedRelease
+        // Keep every desired blocked package tracked even if one half of the
+        // hide+suspend operation failed. A later policy change can then safely
+        // retry releasing only packages this DPC attempted to manage.
         Config.setPolicyHiddenApps(
             context,
-            (tracked - successfullyReleased) + successfullyBlocked,
+            (tracked - successfullyReleased) + toBlock,
         )
 
         return EnforcementResult(
