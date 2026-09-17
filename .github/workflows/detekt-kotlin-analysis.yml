@@ -1,0 +1,54 @@
+name: Detekt Kotlin Analysis
+
+on:
+  pull_request:
+    paths:
+      - 'dpc-app/**/*.kt'
+      - '.github/workflows/detekt-kotlin-analysis.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: detekt-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detekt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download detekt 1.23.8
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/detekt.jar" \
+            https://github.com/detekt/detekt/releases/download/v1.23.8/detekt-cli-1.23.8-all.jar
+
+      - name: Run detekt
+        run: |
+          set -euo pipefail
+          mkdir -p build/reports/detekt
+          java -jar "$RUNNER_TEMP/detekt.jar" \
+            --input dpc-app/app/src/main/java,dpc-app/app/src/test/java \
+            --build-upon-default-config \
+            --jvm-target 17 \
+            --report html:build/reports/detekt/detekt.html \
+            --report sarif:build/reports/detekt/detekt.sarif \
+            --report xml:build/reports/detekt/detekt.xml
+
+      - name: Upload detekt reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: detekt-reports
+          path: build/reports/detekt/
+          if-no-files-found: warn
