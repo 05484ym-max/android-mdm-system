@@ -37,6 +37,22 @@
 .alert-severity-badge.critical { background: #F6E1DC; color: var(--danger); }
 .alert-severity-badge.warning { background: #FBEEDD; color: #A5661D; }
 
+.alert-scope {
+  display: grid; gap: 4px; margin-top: 12px; padding: 10px 12px;
+  border-radius: 12px; font-size: 0.8rem; border: 1px solid var(--card-border);
+  background: var(--bg);
+}
+.alert-scope strong { color: var(--text); }
+.alert-scope span, .alert-scope small { color: var(--text-dim); }
+.alert-scope.scope-fleet { border-inline-start: 4px solid var(--danger); }
+.alert-scope.scope-cluster { border-inline-start: 4px solid #A5661D; }
+.alert-scope.scope-limited { border-inline-start: 4px solid var(--accent); }
+.alert-scope.scope-device { border-inline-start: 4px solid var(--ok); }
+.alert-autoheal {
+  margin-top: 3px; padding-top: 6px; border-top: 1px dashed var(--card-border);
+  color: var(--ok); font-weight: 700;
+}
+
 .alert-simple-box {
   margin-top: 14px; border-radius: 14px; background: var(--bg); padding: 12px 14px;
   border: 1px solid var(--card-border);
