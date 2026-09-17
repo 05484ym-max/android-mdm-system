@@ -1205,37 +1205,36 @@ class CustomerActivity : Activity() {
         PlayStoreGate.openForInstall(this, packageName)
     }
 
-    private fun installApp(app: CatalogApp) {
-        if (!Config.storeAccessAllowed(this)) {
-            Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
-            showAppStore()
-            return
-        }
-        if (app.appSource != "APK") {
-            openPlayStoreForInstall(app.packageName)
-            return
-        }
-        val apkUrl = app.apkUrl
-        val apkSha256 = app.apkSha256
-        if (apkUrl.isNullOrBlank() || apkSha256.isNullOrBlank()) {
-            Toast.makeText(this, "קובץ ההתקנה אינו זמין כרגע", Toast.LENGTH_LONG).show()
-            return
-        }
-        Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
-        Thread {
-            try {
-                AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
-                runOnUiThread {
-                    Toast.makeText(this@CustomerActivity, "ההתקנה נשלחה למכשיר", Toast.LENGTH_LONG).show()
-                    showAppStore()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this@CustomerActivity, "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}", Toast.LENGTH_LONG).show()
-                }
-            }
-        }.start()
+private fun installApp(app: CatalogApp) {
+    if (!Config.storeAccessAllowed(this)) {
+        Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
+        showAppStore()
+        return
     }
+    val apkUrl = app.apkUrl?.trim()?.takeIf { it.isNotEmpty() }
+    val apkSha256 = app.apkSha256?.trim()?.takeIf { it.isNotEmpty() }
+    if (apkUrl == null || apkSha256 == null) {
+        openPlayStoreForInstall(app.packageName)
+        return
+    }
+
+    // A complete verified APK pair is the managed one-tap path regardless
+    // of catalog source metadata. Google Play is only the fallback.
+    Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
+    Thread {
+        try {
+            AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
+            runOnUiThread {
+                Toast.makeText(this@CustomerActivity, "ההתקנה התחילה", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            runOnUiThread {
+                Toast.makeText(this@CustomerActivity, "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}", Toast.LENGTH_LONG).show()
+                showAppStore()
+            }
+        }
+    }.start()
+}
 
     private fun loadIcon(app: CatalogApp, installed: Boolean, target: ImageView) {
         if (installed) {

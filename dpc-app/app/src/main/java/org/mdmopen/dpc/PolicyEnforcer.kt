@@ -362,7 +362,7 @@ class PolicyEnforcer(private val context: Context) {
             return
         }
         if (Config.kioskEnabled(context)) {
-            enableKiosk(Config.allowedApps(context).toSet())
+            enableKiosk(Config.allowedApps(context).toSet() + playStoreTemporaryAllowance())
         } else {
             disableKiosk()
         }

@@ -14,92 +14,15 @@ on:
       - '.github/workflows/admin-panel-functional-audit.yml'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.head_ref || github.ref_name }}
-
-      - name: Apply PR 150 focused feature patch
-        if: github.event_name == 'pull_request' && github.head_ref == 'fix/one-tap-install-play-kiosk-overlay'
-        shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          workflow = Path('.github/workflows/apply-one-tap-install-fix.yml').read_text()
-          marker = "          python3 <<'PY'\n"
-          start = workflow.index(marker) + len(marker)
-          end = workflow.index("\n          PY\n", start)
-          raw = workflow[start:end]
-          source = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines())
-
-          # Replace only the brittle CustomerActivity bootstrap section with a
-          # structural function-boundary edit. The actual product change remains
-          # the same; this merely avoids depending on whitespace in a ~90 KB UI file.
-          customer_start = source.index("customer = 'dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt'")
-          customer_end = source.index("\noverlay = Path(", customer_start)
-          customer_patch = r'''customer = 'dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt'
-p = Path(customer)
-text = p.read_text()
-fn_start = text.index('    private fun installApp(app: CatalogApp) {')
-fn_end = text.index('\n    private fun loadIcon(', fn_start)
-new_fn = ''' + "'''" + r'''    private fun installApp(app: CatalogApp) {
-        if (!Config.storeAccessAllowed(this)) {
-            Toast.makeText(this, "המנוי פג — הורדות ועדכונים נעולים עד לחידוש", Toast.LENGTH_LONG).show()
-            showAppStore()
-            return
-        }
-        val apkUrl = app.apkUrl?.trim()?.takeIf { it.isNotEmpty() }
-        val apkSha256 = app.apkSha256?.trim()?.takeIf { it.isNotEmpty() }
-        if (apkUrl == null || apkSha256 == null) {
-            openPlayStoreForInstall(app.packageName)
-            return
-        }
-
-        // A complete verified APK pair is the managed one-tap path regardless
-        // of catalog source metadata. Google Play is only the fallback.
-        Toast.makeText(this, "מתחיל התקנה של ${app.name}", Toast.LENGTH_SHORT).show()
-        Thread {
-            try {
-                AppInstaller(applicationContext).installFromUrl(apkUrl, apkSha256)
-                runOnUiThread {
-                    Toast.makeText(this@CustomerActivity, "ההתקנה התחילה", Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this@CustomerActivity, "ההתקנה נכשלה: ${e.message ?: "שגיאה לא ידועה"}", Toast.LENGTH_LONG).show()
-                    showAppStore()
-                }
-            }
-        }.start()
-    }
-''' + "'''" + r'''
-p.write_text(text[:fn_start] + new_fn + text[fn_end:])'''
-          source = source[:customer_start] + customer_patch + source[customer_end:]
-          exec(compile(source, 'apply-one-tap-install-fix.py', 'exec'))
-          PY
-          rm -f .github/workflows/apply-one-tap-install-fix.yml .github/workflows/apply-one-tap-on-pr.yml
-          git show origin/main:.github/workflows/admin-panel-functional-audit.yml > .github/workflows/admin-panel-functional-audit.yml
-          node backend/test-play-update-watcher-static.js
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Fix one-tap installs, Play kiosk allowance, and overlay"
-          git push origin HEAD:${{ github.head_ref }}
-
       - uses: actions/setup-node@v4
-        if: github.event_name != 'pull_request' || github.head_ref != 'fix/one-tap-install-play-kiosk-overlay'
         with:
           node-version: '22'
       - name: Syntax-check admin scripts
-        if: github.event_name != 'pull_request' || github.head_ref != 'fix/one-tap-install-play-kiosk-overlay'
         run: |
           for f in admin-panel/*.js; do
             echo "Checking $f"
@@ -109,6 +32,5 @@ p.write_text(text[:fn_start] + new_fn + text[fn_end:])'''
           node --check backend/healthPanel.js
           node --check backend/test-admin-panel-functional-audit.js
       - name: Run panel/backend contract and diagnostic consistency audit
-        if: github.event_name != 'pull_request' || github.head_ref != 'fix/one-tap-install-play-kiosk-overlay'
         working-directory: backend
         run: node test-admin-panel-functional-audit.js
