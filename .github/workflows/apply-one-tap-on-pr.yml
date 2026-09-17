@@ -31,13 +31,17 @@ jobs:
           raw = workflow[start:end]
           source = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines())
 
-          # Keep the existing focused transformations, but skip the brittle
-          # whole-block CustomerActivity replacement and edit that function by
-          # structural boundaries instead.
+          # Skip brittle whole-block edits for the large CustomerActivity and
+          # PolicyEnforcer snippets. Apply those two changes structurally below.
           customer_anchor = "customer = 'dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt'"
           customer_start = source.index(customer_anchor)
           overlay_start = source.index("overlay = Path(", customer_start)
-          exec_source = source[:customer_start] + source[overlay_start:]
+          source = source[:customer_start] + source[overlay_start:]
+
+          policy_anchor = "policy = 'dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt'"
+          policy_start = source.index(policy_anchor)
+          gate_start = source.index("gate = 'dpc-app/app/src/main/java/org/mdmopen/dpc/PlayStoreGate.kt'", policy_start)
+          exec_source = source[:policy_start] + source[gate_start:]
           exec(compile(exec_source, 'apply-one-tap-install-fix.py', 'exec'))
 
           customer_path = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/CustomerActivity.kt')
@@ -77,6 +81,17 @@ jobs:
               }
           ''')
           customer_path.write_text(customer[:fn_start] + new_fn + customer[fn_end:])
+
+          policy_path = Path('dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt')
+          policy = policy_path.read_text()
+          fn_start = policy.index('    fun restoreCachedKioskPolicy() {')
+          fn_end = policy.index('\n    fun disableKiosk()', fn_start)
+          fn = policy[fn_start:fn_end]
+          old = '            enableKiosk(Config.allowedApps(context).toSet())'
+          if fn.count(old) != 1:
+              raise SystemExit(f'PolicyEnforcer.restoreCachedKioskPolicy: expected one kiosk restore call, found {fn.count(old)}')
+          fn = fn.replace(old, '            enableKiosk(Config.allowedApps(context).toSet() + playStoreTemporaryAllowance())', 1)
+          policy_path.write_text(policy[:fn_start] + fn + policy[fn_end:])
           PY
 
           rm -f .github/workflows/apply-one-tap-install-fix.yml .github/workflows/apply-one-tap-on-pr.yml
