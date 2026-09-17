@@ -1,10 +1,12 @@
 // Alert lifecycle on top of the existing diagnostics faults - diagnostics.js
 // stays the sole source of truth for what's wrong with a device; this module
-// only decides which fault codes are worth an alert, and opens/resolves rows
-// in the `alerts` table to match. All actual SQL lives in db.js.
+// decides which fault codes deserve alerts and enriches them with fleet-wide
+// scope/correlation from fleetMonitor.js.
 const crypto = require('crypto');
 const db = require('./db');
 const diagnostics = require('./diagnostics');
+const push = require('./push');
+const { createFleetMonitor } = require('./fleetMonitor');
 
 // Alert only on actionable management faults. Informational states such as
 // HEALTH_DATA_MISSING and LOW_BATTERY are intentionally excluded to avoid
@@ -21,6 +23,13 @@ const ALERT_FAULT_CODES = new Set([
   'DNS_PROVIDER_UNREACHABLE',
   'DNS_FAILSAFE_ACTIVE',
 ]);
+
+// One monitor for the whole process. It performs one fleet query per scan,
+// coalesces bursty sync events, and runs a periodic backstop so offline
+// devices are detected even when no device event arrives.
+const fleetMonitor = createFleetMonitor({ db, push });
+const delayedStart = setTimeout(() => fleetMonitor.start(), 5000);
+if (typeof delayedStart.unref === 'function') delayedStart.unref();
 
 /**
  * Reconciles the alerts table with one device's current diagnosis:
@@ -46,6 +55,10 @@ async function syncAlertsForDevice(device) {
       await db.resolveAlert(alert.id);
     }
   }
+
+  // Do not run a full fleet scan for every /sync. Hundreds of devices may
+  // check in together, so fleetMonitor coalesces these triggers into one scan.
+  fleetMonitor.trigger();
 }
 
 /**
@@ -61,10 +74,43 @@ async function reconcileAllDevices() {
       console.warn('[alerts] reconcile failed for device %s: %s', device.deviceId, e.message);
     }
   }
+  await fleetMonitor.runOnce();
 }
 
-function listActiveAlerts() {
-  return db.listActiveAlerts();
+async function listActiveAlerts() {
+  const list = await db.listActiveAlerts();
+  let snapshot = fleetMonitor.getSnapshot();
+  // On a cold start, do not return alerts without scope just because the
+  // first timer has not fired yet. One read computes the initial snapshot.
+  if (!snapshot.generatedAt) {
+    await fleetMonitor.runOnce();
+    snapshot = fleetMonitor.getSnapshot();
+  }
+  const byCode = new Map(snapshot.incidents.map(item => [item.faultCode, item]));
+  return list.map(alert => {
+    const incident = byCode.get(alert.category);
+    if (!incident) return alert;
+    return {
+      ...alert,
+      fleetScope: incident.scope,
+      fleetScopeLabel: incident.label,
+      fleetScopeReason: incident.reason,
+      fleetConfidence: incident.confidence,
+      affectedCount: incident.affectedCount,
+      fleetCount: incident.fleetCount,
+      affectedPercent: incident.affectedPercent,
+      autoHealAllowed: incident.autoHealAllowed,
+    };
+  });
 }
 
-module.exports = { syncAlertsForDevice, reconcileAllDevices, listActiveAlerts };
+function getFleetSnapshot() {
+  return fleetMonitor.getSnapshot();
+}
+
+module.exports = {
+  syncAlertsForDevice,
+  reconcileAllDevices,
+  listActiveAlerts,
+  getFleetSnapshot,
+};
