@@ -134,9 +134,10 @@ expectScenario({}, 'ok', []);
 expectScenario({ isDeviceOwner: false }, 'critical', ['DEVICE_OWNER_LOST']);
 expectScenario({ lastUpdateStatus: 'FAILED', lastUpdateVersion: 101, lastUpdateError: 'install failed' }, 'critical', ['UPDATE_FAILED']);
 expectScenario({ lastSyncAt: '2026-09-14T04:00:00Z' }, 'warning', ['SYNC_STALE']);
-// Battery/storage remain useful facts in the device card, but are not management faults by themselves.
+// Battery is informational, while dangerously low storage is actionable because
+// installs/updates can fail when only ~100MB remains.
 expectScenario({ batteryLevel: 10 }, 'ok', []);
-expectScenario({ freeStorageBytes: 100 * 1024 * 1024 }, 'ok', []);
+expectScenario({ freeStorageBytes: 100 * 1024 * 1024 }, 'ok', ['LOW_STORAGE']);
 expectScenario({ lastSeenAt: '2026-09-12T12:00:00Z', lastSyncAt: '2026-09-12T12:00:00Z' }, 'critical', ['DEVICE_OFFLINE']);
 
 includes(fullOpenUi, '/full-open', 'full-open UI call');
