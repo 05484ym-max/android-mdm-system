@@ -143,8 +143,9 @@ function analyzeFleet(devices, now = Date.now()) {
       detectedAt: now,
       // Only a normal wake/sync is auto-healed. No wipe, reboot, policy
       // relaxation, DNS disable, update rollback, or Device Owner action is
-      // ever executed automatically here.
-      autoHealAllowed: SAFE_AUTO_HEAL_CODES.has(faultCode) && scope.scope !== 'FLEET' && scope.scope !== 'CLUSTER',
+      // ever executed automatically here. Require a high-confidence isolated
+      // device result before touching anything automatically.
+      autoHealAllowed: SAFE_AUTO_HEAL_CODES.has(faultCode) && scope.scope === 'DEVICE' && scope.confidence === 'HIGH',
     });
   }
 
