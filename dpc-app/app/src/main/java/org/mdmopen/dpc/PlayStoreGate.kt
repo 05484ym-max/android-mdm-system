@@ -53,11 +53,13 @@ object PlayStoreGate {
             throw e
         }
 
-        // Protection and visual feedback start immediately. Keep the upper part
-        // of Google Play visible so the customer sees Play's own real progress;
-        // do not invent a percentage that Play does not expose to us.
+        // Prefer the partial lower shield. On devices where Android has not
+        // granted the special draw-over-other-apps access, never fail silently:
+        // show the guarded fallback immediately so the customer always sees an
+        // installation state instead of an unprotected blank Play screen.
         if (!InstallOverlay.show(appContext, appName)) {
-            Log.w(TAG, "Partial install overlay unavailable on this device; guarded package policy remains active")
+            Log.w(TAG, "Partial install overlay unavailable; showing guarded fallback immediately")
+            launchBlockingActivity(appContext)
         }
         PlayInstallStatusStore.update(appContext, session.id, PlayInstallStage.WAITING)
         scheduleHardTimeout(appContext, deadline)
@@ -79,10 +81,6 @@ object PlayStoreGate {
             return
         }
         if (elapsedMs >= MAX_WAIT_MS) {
-            // Public catalog metadata can advertise a rollout that Play does not
-            // offer to this exact device. If the app is already installed,
-            // acknowledge the current device version instead of trapping the
-            // customer behind a false update forever.
             if (startingVersion != null && currentVersion != null) {
                 completeAlreadyCurrent(context, packageName, sessionId)
             } else {
@@ -128,7 +126,6 @@ object PlayStoreGate {
         returnToCustomerStore(context)
     }
 
-    /** Safe escape hatch. It never leaves Google Play exposed. */
     fun cancelCurrentInstall(context: Context, message: String = "ההתקנה בוטלה וההרשאה נסגרה") {
         val appContext = context.applicationContext
         val snapshot = PlayInstallStatusStore.snapshot(appContext) ?: run {
@@ -202,6 +199,15 @@ object PlayStoreGate {
             Log.e(TAG, "Could not hide Play Store while closing guarded install window", e)
         }
         InstallOverlay.hide(context)
+    }
+
+    private fun launchBlockingActivity(context: Context) {
+        runCatching {
+            context.startActivity(
+                Intent(context, PlayInstallBlockingActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            )
+        }.onFailure { Log.e(TAG, "Could not show guarded install fallback", it) }
     }
 
     private fun returnToCustomerStore(context: Context) {
