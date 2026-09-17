@@ -54,10 +54,11 @@ assert.match(packageGuard, /Intent\.ACTION_PACKAGE_ADDED/);
 assert.match(packageGuard, /Intent\.ACTION_PACKAGE_REPLACED/);
 assert.match(packageGuard, /changedPackage == session\.targetPackage/);
 assert.match(packageGuard, /PlayStoreGate\.completeBecauseTargetInstalled\(context, changedPackage\)/);
-assert.doesNotMatch(packageGuard, /getBooleanExtra\(Intent\.EXTRA_REPLACING, false\)\) return/);
+assert.match(packageGuard, /if \(replacing\)[\s\S]*return/);
 assert.match(packageGuard, /setPackagesSuspended\(admin, arrayOf\(changedPackage\), true\)/);
 assert.match(packageGuard, /setApplicationHidden\(admin, changedPackage, true\)/);
-assert.match(packageGuard, /PlayStoreGate\.abortBecauseUnauthorizedInstall\(appContext, changedPackage\)/);
+assert.match(packageGuard, /AppInstaller\(appContext\)\.uninstall\(changedPackage\)/);
+assert.match(packageGuard, /Keep the approved Play[\s\S]*session open/);
 
 assert.match(playUi, /isIndeterminate = true/);
 assert.doesNotMatch(playUi, /progress\s*=\s*\d+/);
