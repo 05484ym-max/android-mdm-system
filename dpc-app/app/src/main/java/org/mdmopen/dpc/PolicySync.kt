@@ -40,6 +40,21 @@ object PolicySync {
             runCatching { api.fetchProtectionTarget(deviceId) }
                 .onSuccess { RequestedProtectionStore.save(context, it) }
 
+            // Read app-access policy through a dedicated authenticated endpoint.
+            // The second read intentionally happens before opening Play installs:
+            // if it fails or races a mode change, this sync aborts closed instead
+            // of opening the device with an unknown/stale blacklist.
+            val appAccess = AppAccessPolicyClient(serverUrl, deviceToken).fetch(deviceId)
+            val expectedMode = if (result.policy.fullOpen) {
+                AppAccessMode.OPEN_WITH_BLACKLIST
+            } else {
+                AppAccessMode.APPROVED_ONLY
+            }
+            check(appAccess.mode == expectedMode) {
+                "App access policy changed during sync; retry required"
+            }
+            AppAccessPolicyStore.setBlockedPackages(context, appAccess.blockedApps)
+
             Config.setAllowedApps(context, result.policy.allowedApps)
             Config.setAppCatalog(context, result.catalog)
             Config.setKioskEnabled(context, result.policy.kioskEnabled)
@@ -55,11 +70,18 @@ object PolicySync {
             )
             Config.setDnsPendingCustomerRequest(context, null)
             Config.setSubscriptionAccess(context, result.subscriptionAccess)
-            ManagedInstallWindow.setDesiredInstallBlocked(context, !result.policy.fullOpen)
+            ManagedInstallWindow.setDesiredInstallBlocked(
+                context,
+                appAccess.mode != AppAccessMode.OPEN_WITH_BLACKLIST,
+            )
 
             val dnsReconcileResult = AdBlockDns.reconcile(context)
             val dnsFailSafeResult = AdBlockDns.runFailSafeCheckCycle(context)
-            val enforcement = enforcer.apply(result.policy)
+            val enforcement = if (appAccess.mode == AppAccessMode.OPEN_WITH_BLACKLIST) {
+                AppAccessReconciler(context).applyOpenWithBlacklist(appAccess.blockedApps)
+            } else {
+                enforcer.apply(result.policy)
+            }
             val whatsappGuardResult = WhatsAppGuardProtection.reconcile(context, result.policy.whatsappGuard)
             WhatsAppGuardWatchdogScheduler.reconcileSchedule(context)
             DeviceHealth.recordNoLauncherDryRun(context, enforcement.wouldHideNoLauncher)
@@ -73,6 +95,9 @@ object PolicySync {
             val summary = buildString {
                 append("רקע: $wallpaperResult")
                 append("\nמותרות ${result.policy.allowedApps.size} · ")
+                if (appAccess.mode == AppAccessMode.OPEN_WITH_BLACKLIST) {
+                    append("חסומות ${appAccess.blockedApps.size} · ")
+                }
                 append("הושעו ${enforcement.suspended.size} · ")
                 append("שוחררו ${enforcement.unsuspended.size} · ")
                 append("נכשלו ${enforcement.failed.size} · ")

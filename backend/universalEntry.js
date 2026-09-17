@@ -12,6 +12,7 @@ const { installReliabilityBridge } = require('./reliabilityBridge');
 const { installUploadMemoryGuard } = require('./uploadMemoryGuard');
 const { installProtectionAdminRoutes } = require('./protectionAdminRoutes');
 const { installProtectionDeviceRoutes } = require('./protectionDeviceRoutes');
+const { installAppAccessRoutes } = require('./appAccessRoutes');
 const { captureExpressApp } = require('./expressAppCapture');
 
 // These wrappers must be installed before index.js requires/constructs the
@@ -27,3 +28,4 @@ installFleetCatalogBridge(db, push);
 const app = captureExpressApp(() => require('./index'));
 installProtectionAdminRoutes(app, { db, protectionPersistence });
 installProtectionDeviceRoutes(app, { db, protectionPersistence });
+installAppAccessRoutes(app, { db, push });
