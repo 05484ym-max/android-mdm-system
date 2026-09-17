@@ -2,7 +2,8 @@ const diagnostics = require('./diagnostics');
 
 const DEFAULT_MONITOR_INTERVAL_MS = 60 * 1000;
 const AUTO_HEAL_COOLDOWN_MS = 30 * 60 * 1000;
-const SAFE_AUTO_HEAL_CODES = new Set(['SYNC_STALE', 'DNS_CONFIG_MISMATCH', 'DNS_RECOVERING']);
+const EVENT_SCAN_DEBOUNCE_MS = 3000;
+const SAFE_AUTO_HEAL_CODES = new Set(['SYNC_STALE', 'DNS_FILTER_MISMATCH']);
 
 function nonEmpty(value, fallback = 'לא ידוע') {
   return value == null || value === '' ? fallback : String(value);
@@ -50,8 +51,9 @@ function classifyScope(faultCode, affected, all) {
   const byManufacturer = concentration(affected, all, 'manufacturer');
   const byModel = concentration(affected, all, 'model');
 
-  // A fleet-wide classification intentionally requires both an absolute and
-  // relative threshold so a tiny lab fleet cannot look like a production outage.
+  // Require both an absolute and relative threshold. That avoids calling a
+  // two-device lab outage a production-wide incident while still detecting a
+  // meaningful spread quickly once the fleet grows into the hundreds.
   if ((count >= 10 && ratio >= 0.20) || (count >= 25 && ratio >= 0.10)) {
     return {
       scope: 'FLEET',
@@ -79,7 +81,7 @@ function classifyScope(faultCode, affected, all) {
     const [name, item] = cluster;
     return {
       scope: 'CLUSTER',
-      label: `תקלה בקבוצה מסוימת`,
+      label: 'תקלה בקבוצה מסוימת',
       confidence: item.ratio >= 0.80 ? 'HIGH' : 'MEDIUM',
       reason: `${item.affected} מתוך ${item.total} מכשירים עם ${name} ${item.key} מציגים את התקלה`,
       affectedCount: count,
@@ -136,7 +138,10 @@ function analyzeFleet(devices, now = Date.now()) {
       severity: entry.fault.severity,
       ...scope,
       deviceIds: entry.devices.map(d => d.deviceId),
-      firstDetectedAt: now,
+      detectedAt: now,
+      // Only a normal wake/sync is auto-healed. No wipe, reboot, policy
+      // relaxation, DNS disable, update rollback, or Device Owner action is
+      // ever executed automatically here.
       autoHealAllowed: SAFE_AUTO_HEAL_CODES.has(faultCode) && scope.scope !== 'FLEET' && scope.scope !== 'CLUSTER',
     });
   }
@@ -153,6 +158,7 @@ function createFleetMonitor({ db, push, logger = console, intervalMs = DEFAULT_M
   const lastHeal = new Map();
   let running = false;
   let timer = null;
+  let debounceTimer = null;
   let snapshot = { generatedAt: 0, fleetCount: 0, incidents: [], faultsByDevice: new Map() };
 
   async function runOnce() {
@@ -186,6 +192,15 @@ function createFleetMonitor({ db, push, logger = console, intervalMs = DEFAULT_M
     }
   }
 
+  function trigger() {
+    if (debounceTimer) return;
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      runOnce();
+    }, EVENT_SCAN_DEBOUNCE_MS);
+    if (typeof debounceTimer.unref === 'function') debounceTimer.unref();
+  }
+
   function start() {
     if (timer) return;
     runOnce();
@@ -201,12 +216,13 @@ function createFleetMonitor({ db, push, logger = console, intervalMs = DEFAULT_M
     };
   }
 
-  return { start, runOnce, getSnapshot };
+  return { start, trigger, runOnce, getSnapshot };
 }
 
 module.exports = {
   DEFAULT_MONITOR_INTERVAL_MS,
   AUTO_HEAL_COOLDOWN_MS,
+  EVENT_SCAN_DEBOUNCE_MS,
   SAFE_AUTO_HEAL_CODES,
   analyzeFleet,
   classifyScope,
