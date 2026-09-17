@@ -1,6 +1,7 @@
 package org.mdmopen.dpc
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -46,18 +47,6 @@ class PlayInstallBlockingActivity : Activity() {
         if (snapshot == null || snapshot.stage.terminal) super.onBackPressed()
     }
 
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        val snapshot = PlayInstallStatusStore.snapshot(this)
-        if (snapshot != null && !snapshot.stage.terminal) {
-            handler.postDelayed({
-                runCatching {
-                    startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
-                }
-            }, 120L)
-        }
-    }
-
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
@@ -72,6 +61,15 @@ class PlayInstallBlockingActivity : Activity() {
 
     private fun render() {
         val snapshot = PlayInstallStatusStore.snapshot(this) ?: run { finish(); return }
+
+        if (!snapshot.stage.terminal && snapshot.updatedAt > 0L &&
+            System.currentTimeMillis() - snapshot.updatedAt >= STALE_UI_TIMEOUT_MS
+        ) {
+            runCatching { PlayStoreGate.recoverAfterProcessStart(applicationContext) }
+            finish()
+            return
+        }
+
         titleView.text = snapshot.displayName
         statusView.text = snapshot.stage.hebrewLabel
         detailView.text = snapshot.message ?: when (snapshot.stage) {
@@ -86,7 +84,14 @@ class PlayInstallBlockingActivity : Activity() {
         if (snapshot.stage.terminal) {
             if (finishedAt == null) finishedAt = System.currentTimeMillis()
             if (System.currentTimeMillis() - finishedAt!! >= TERMINAL_HOLD_MS) {
+                val completed = snapshot.stage == PlayInstallStage.COMPLETED
                 PlayInstallStatusStore.clear(this, snapshot.sessionId)
+                if (completed && hasWindowFocus()) {
+                    startActivity(
+                        Intent(this, CustomerActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    )
+                }
                 finish()
             }
         } else finishedAt = null
@@ -163,5 +168,8 @@ class PlayInstallBlockingActivity : Activity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    companion object { private const val TERMINAL_HOLD_MS = 1_200L }
+    companion object {
+        private const val TERMINAL_HOLD_MS = 1_200L
+        private const val STALE_UI_TIMEOUT_MS = 130_000L
+    }
 }
