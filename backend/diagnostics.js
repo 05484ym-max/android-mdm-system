@@ -20,7 +20,7 @@ function fault(code, severity, title, description, solution, opts = {}) {
     severity,
     title,
     description,
-    solution,
+    solution: solution,
     remoteFixAvailable: Boolean(opts.remoteFixAvailable),
     physicalAccessRequired: Boolean(opts.physicalAccessRequired),
     technicalDetails: opts.technicalDetails || undefined,
