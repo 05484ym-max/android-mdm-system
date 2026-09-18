@@ -1,5 +1,5 @@
 {
   "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "org.mdmopen.dpc/org.mdmopen.dpc.DpcDeviceAdminReceiver",
   "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": "QPtlwLfg3ZEun-g-RgboImsbdrQ2-tryPsRLUiHLv8U=",
-  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://android-mdm-system.onrender.com/downloads/mdm.apk?v=232"
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://android-mdm-system.onrender.com/downloads/mdm.apk?v=233"
 }
