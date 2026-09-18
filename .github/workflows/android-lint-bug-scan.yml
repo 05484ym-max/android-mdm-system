@@ -1,0 +1,83 @@
+name: Android Lint and Bug Scan
+
+on:
+  pull_request:
+    paths:
+      - 'dpc-app/**'
+      - 'backend/**'
+      - '.github/workflows/android-lint-bug-scan.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-lint-bug-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: 8.9
+
+      - name: Run Android unit tests
+        working-directory: dpc-app
+        run: gradle testDebugUnitTest
+
+      - name: Run Android Lint
+        working-directory: dpc-app
+        run: gradle lintDebug
+
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint-reports
+          path: |
+            dpc-app/app/build/reports/lint-results-debug.html
+            dpc-app/app/build/reports/lint-results-debug.xml
+          if-no-files-found: ignore
+
+  backend-scan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run backend tests and syntax checks
+        run: npm test
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
