@@ -21,6 +21,14 @@ object AppIconCache {
     fun save(context: Context, packageName: String, drawable: Drawable) {
         try {
             val bitmap = drawableToBitmap(drawable)
+            saveBitmap(context, packageName, bitmap)
+        } catch (_: Exception) {
+            // Best-effort - a missed cache write just means no fallback later.
+        }
+    }
+
+    fun saveBitmap(context: Context, packageName: String, bitmap: Bitmap) {
+        try {
             val dir = File(context.filesDir, DIR).apply { mkdirs() }
             File(dir, "$packageName.png").outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
