@@ -91,7 +91,8 @@ object InstallOverlay {
             WindowManager.LayoutParams.MATCH_PARENT,
             shieldHeight,
             overlayType,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.OPAQUE,
         ).apply {
             gravity = Gravity.BOTTOM
