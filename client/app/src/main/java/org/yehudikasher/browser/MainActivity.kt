@@ -382,7 +382,7 @@ class MainActivity : AppCompatActivity() {
             classificationInFlight.remove(host)
 
             if (remote.allowed) {
-                policy.rememberRemoteAllow(host)
+                policy.rememberRemoteAllow(host, remote.expiresAtMs)
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         addressBar.setText(candidate)
