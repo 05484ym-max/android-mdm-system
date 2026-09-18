@@ -94,7 +94,8 @@ class MainActivity : AppCompatActivity() {
         webView = WebView(this).apply {
             visibility = View.GONE
         }
-        configureWebView(webView, serviceWorkerSafe)
+        val imageSchemeSafe = ImageSchemeHardening.install(webView)
+        configureWebView(webView, serviceWorkerSafe && imageSchemeSafe)
 
         statePanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -134,6 +135,8 @@ class MainActivity : AppCompatActivity() {
 
         if (!serviceWorkerSafe) {
             showTechnicalError("service_worker_hardening_failed")
+        } else if (!imageSchemeSafe) {
+            showTechnicalError("image_scheme_hardening_unsupported")
         } else if (WebViewFeature.isFeatureSupported(WebViewFeature.START_SAFE_BROWSING)) {
             @Suppress("DEPRECATION")
             WebViewCompat.startSafeBrowsing(applicationContext) { success ->
