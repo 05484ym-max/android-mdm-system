@@ -16,12 +16,13 @@ import android.widget.TextView
 
 /**
  * Partial guarded-install overlay over the lower part of Google Play.
- * The upper Play area remains visible and interactive for Play's own
- * install/update button and real progress UI.
+ * Keep it deliberately below half-ish of the screen so both Play's normal
+ * update button and its newer bottom-sheet install button remain visible and
+ * interactive across layouts, without branching on Android version.
  */
 object InstallOverlay {
     private const val TAG = "InstallOverlay"
-    private const val SHIELD_HEIGHT_RATIO = 0.69f
+    private const val SHIELD_HEIGHT_RATIO = 0.53f
     private var view: LinearLayout? = null
 
     fun show(context: Context, appName: String): Boolean {
