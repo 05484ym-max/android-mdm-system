@@ -14,7 +14,14 @@
   const siteSearchStatus = document.getElementById('browserSiteSearchStatus');
   const siteSearchResults = document.getElementById('browserSiteSearchResults');
   const modeButtons = [...document.querySelectorAll('[data-browser-list-mode]')];
-  if (!list || !summary || !filter || !refresh || !manualWrap || !manualHost || !manualAdd || !note) return;
+  const homeView = document.getElementById('browserHomeView');
+  const pageView = document.getElementById('browserPageView');
+  const pageBackBtn = document.getElementById('browserPageBackBtn');
+  const pageTitle = document.getElementById('browserPageTitle');
+  const pageSubtitle = document.getElementById('browserPageSubtitle');
+  const siteSearchCard = document.getElementById('browserSiteSearchCard');
+  if (!list || !summary || !filter || !refresh || !manualWrap || !manualHost || !manualAdd || !note ||
+      !homeView || !pageView || !pageBackBtn || !pageTitle || !pageSubtitle || !siteSearchCard) return;
 
   let mode = 'requests';
 
@@ -148,20 +155,40 @@
 
   function setMode(next) {
     mode = next;
-    modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.browserListMode === next));
+    homeView.style.display = 'none';
+    pageView.style.display = 'block';
     filter.style.display = next === 'requests' ? '' : 'none';
     manualWrap.style.display = next === 'requests' ? 'none' : 'flex';
+    siteSearchCard.style.display = next === 'requests' ? 'none' : 'block';
     manualHost.value = '';
+    siteSearchStatus.textContent = '';
+    siteSearchResults.innerHTML = '';
+
     if (next === 'requests') {
+      pageTitle.textContent = 'בקשות אתרים';
+      pageSubtitle.textContent = 'אתרים שהגיעו מהלקוחות וממתינים לבדיקה';
       note.textContent = 'אתר לא מוכר שנחסם בדפדפן נכנס לכאן אוטומטית. אישור חל על הדומיין המדויק בלבד ואינו מבטל את סינון התמונות.';
     } else if (next === 'whitelist') {
-      note.textContent = 'הרשימה הלבנה משותפת למכשירים שבמצב “רשימה לבנה”. כל אתר שאישרת נשמר כאן קבוע עד שתסיר אותו.';
+      pageTitle.textContent = 'רשימה לבנה';
+      pageSubtitle.textContent = 'אתרים מאושרים שנפתחים ללקוחות במצב רשימה לבנה';
+      note.textContent = 'כל אתר שאישרת נשמר כאן קבוע עד שתסיר אותו.';
       manualHost.placeholder = 'הוסף דומיין לרשימה הלבנה, למשל example.com';
     } else {
-      note.textContent = 'הרשימה השחורה חלה על מכשירים שבמצב “רשימה שחורה”. כל אתר שמופיע כאן ייחסם גם אם כל שאר האינטרנט פתוח.';
+      pageTitle.textContent = 'רשימה שחורה';
+      pageSubtitle.textContent = 'אתרים חסומים ללקוחות במצב רשימה שחורה';
+      note.textContent = 'כל אתר שמופיע כאן ייחסם גם אם כל שאר האינטרנט פתוח.';
       manualHost.placeholder = 'הוסף דומיין לרשימה השחורה, למשל example.com';
     }
     load();
+  }
+
+  function showBrowserHome() {
+    pageView.style.display = 'none';
+    homeView.style.display = 'block';
+    summary.textContent = '';
+    list.innerHTML = '';
+    siteSearchStatus.textContent = '';
+    siteSearchResults.innerHTML = '';
   }
 
   function renderRequests(entries) {
@@ -320,12 +347,13 @@
   }
 
   modeButtons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.browserListMode)));
+  pageBackBtn.addEventListener('click', showBrowserHome);
   siteSearchBtn.addEventListener('click', searchSiteByName);
   siteSearchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchSiteByName(); });
   filter.addEventListener('change', load);
   refresh.addEventListener('click', load);
   manualAdd.addEventListener('click', addManual);
   manualHost.addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
-  document.querySelectorAll('.nav-btn[data-tab="browser"]').forEach(btn => btn.addEventListener('click', load));
+  document.querySelectorAll('.nav-btn[data-tab="browser"]').forEach(btn => btn.addEventListener('click', showBrowserHome));
   window.loadBrowserReviewRequests = load;
 })();
