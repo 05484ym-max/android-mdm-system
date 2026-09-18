@@ -260,7 +260,8 @@ function bearerToken(req) {
 
 function browserAccessTokenForDevice(device) {
   const material = `browser:${device.deviceId}:${device.authTokenHash}`;
-  return crypto.createHmac('sha256', JWT_SECRET).update(material).digest('base64url');
+  const key = JWT_SECRET || device.authTokenHash;
+  return crypto.createHmac('sha256', key).update(material).digest('base64url');
 }
 
 async function authenticatedBrowserDevice(req) {
@@ -271,6 +272,7 @@ async function authenticatedBrowserDevice(req) {
   const device = await db.getDevice(rawId);
   if (!device || !device.authTokenHash) return false;
   const expected = browserAccessTokenForDevice(device);
+  if (token.length !== expected.length) return false;
   if (!crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return false;
   return device;
 }
