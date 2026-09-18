@@ -11,6 +11,11 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
+    <permission
+        android:name="org.mdmopen.dpc.permission.CONFIGURE_BROWSER"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="org.mdmopen.dpc.permission.CONFIGURE_BROWSER" />
+
     <application
         android:name=".MdmApplication"
         android:allowBackup="false"
