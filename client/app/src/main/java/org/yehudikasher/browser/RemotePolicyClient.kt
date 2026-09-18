@@ -5,7 +5,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.time.Instant
-import java.util.concurrent.ConcurrentHashMap
+import java.util.LinkedHashMap
 
 data class RemotePolicyDecision(
     val allowed: Boolean,
@@ -20,25 +20,43 @@ class RemotePolicyClient(
         val expiresAtMs: Long,
     )
 
-    private val cache = ConcurrentHashMap<String, Cached>()
+    private val cacheLock = Any()
+    private val cache = object : LinkedHashMap<String, Cached>(MAX_MEMORY_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, Cached>?
+        ): Boolean = size > MAX_MEMORY_ENTRIES
+    }
 
     fun checkHost(rawHost: String): RemotePolicyDecision {
         val host = UrlPolicy.normalizeHost(rawHost)
             ?: return RemotePolicyDecision(false, "invalid_host")
 
         val now = System.currentTimeMillis()
-        cache[host]?.let { cached ->
-            if (cached.expiresAtMs > now) return cached.decision
-            cache.remove(host, cached)
+        synchronized(cacheLock) {
+            cache[host]?.let { cached ->
+                if (cached.expiresAtMs > now) {
+                    BrowserPerf.record("host_policy", "memory_cache", 0)
+                    return cached.decision
+                }
+                cache.remove(host)
+            }
         }
 
+        val started = android.os.SystemClock.elapsedRealtime()
         val decision = fetchDecision(host)
+        BrowserPerf.record(
+            "host_policy",
+            if (decision.first.allowed) "network_allow" else "network_non_allow",
+            android.os.SystemClock.elapsedRealtime() - started,
+        )
         // The server normally supplies expiresAt from its shared PostgreSQL
         // cache. For transient errors that don't carry it, keep only a short
         // local cache so a temporary outage is fail-closed without becoming a
         // permanent local block.
         val expiresAt = decision.second ?: (now + TRANSIENT_CACHE_MS)
-        cache[host] = Cached(decision.first, expiresAt)
+        synchronized(cacheLock) {
+            cache[host] = Cached(decision.first, expiresAt)
+        }
         return decision.first
     }
 
@@ -90,5 +108,6 @@ class RemotePolicyClient(
 
     companion object {
         private const val TRANSIENT_CACHE_MS = 5 * 60 * 1000L
+        private const val MAX_MEMORY_ENTRIES = 256
     }
 }
