@@ -25,6 +25,8 @@ class FilteredImageProxy(
     }
 
     fun fetch(rawUrl: String): WebResourceResponse {
+        val started = android.os.SystemClock.elapsedRealtime()
+        var outcome = "blocked"
         val conn = try {
             (URL(baseUrl.trimEnd('/') + "/api/browser/image").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -62,6 +64,7 @@ class FilteredImageProxy(
             val bytes = readBounded(conn.inputStream, MAX_PROXY_RESPONSE_BYTES)
                 ?: return BlockedResponse.imagePlaceholder()
 
+            outcome = "allowed"
             WebResourceResponse(
                 contentType,
                 null,
@@ -77,6 +80,11 @@ class FilteredImageProxy(
             BlockedResponse.imagePlaceholder()
         } finally {
             conn.disconnect()
+            BrowserPerf.record(
+                "image_proxy",
+                outcome,
+                android.os.SystemClock.elapsedRealtime() - started,
+            )
         }
     }
 

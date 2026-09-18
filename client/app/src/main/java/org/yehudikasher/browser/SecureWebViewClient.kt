@@ -59,7 +59,8 @@ class SecureWebViewClient(
             // shouldInterceptRequest runs off the UI thread, so it is safe to
             // perform the remote host classification here.
             val remote = remotePolicy.checkHost(result.normalizedHost)
-            hostAllowed = remote.allowed && policy.rememberRemoteAllow(result.normalizedHost)
+            hostAllowed = remote.allowed &&
+                policy.rememberRemoteAllow(result.normalizedHost, remote.expiresAtMs)
         }
 
         if (!hostAllowed) {

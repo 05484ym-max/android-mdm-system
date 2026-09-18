@@ -21,8 +21,11 @@ data class UrlDecision(
     val reason: String
 )
 
-class UrlPolicy(rules: Collection<LocalPolicyRule>) {
-    private val dynamicAllowedHosts = ConcurrentHashMap.newKeySet<String>()
+class UrlPolicy(
+    rules: Collection<LocalPolicyRule>,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+) {
+    private val dynamicAllowedHosts = ConcurrentHashMap<String, Long>()
 
     private val normalizedRules = rules.mapNotNull { rule ->
         normalizeHost(rule.host)?.let { normalized ->
@@ -87,7 +90,11 @@ class UrlPolicy(rules: Collection<LocalPolicyRule>) {
                     host.length > rule.host.length + 1 &&
                     host.endsWith("." + rule.host))
         }
-        val dynamicallyAllowed = host in dynamicAllowedHosts
+        val dynamicExpiry = dynamicAllowedHosts[host]
+        val dynamicallyAllowed = dynamicExpiry != null && dynamicExpiry > nowMs()
+        if (dynamicExpiry != null && !dynamicallyAllowed) {
+            dynamicAllowedHosts.remove(host, dynamicExpiry)
+        }
 
         return if (matchingRule != null || dynamicallyAllowed) {
             UrlDecision(
@@ -104,10 +111,15 @@ class UrlPolicy(rules: Collection<LocalPolicyRule>) {
         }
     }
 
-    fun rememberRemoteAllow(rawHost: String): Boolean {
+    fun rememberRemoteAllow(rawHost: String, expiresAtMs: Long? = null): Boolean {
         val host = normalizeHost(rawHost) ?: return false
         if (isIpLiteral(host)) return false
-        dynamicAllowedHosts.add(host)
+        val expiry = expiresAtMs ?: (nowMs() + DEFAULT_REMOTE_ALLOW_TTL_MS)
+        if (expiry <= nowMs()) {
+            dynamicAllowedHosts.remove(host)
+            return false
+        }
+        dynamicAllowedHosts[host] = expiry
         return true
     }
 
@@ -120,6 +132,7 @@ class UrlPolicy(rules: Collection<LocalPolicyRule>) {
 
     companion object {
         private const val MAX_URL_LENGTH = 8192
+        private const val DEFAULT_REMOTE_ALLOW_TTL_MS = 5 * 60 * 1000L
 
         private val HOST_RE = Regex(
             "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
