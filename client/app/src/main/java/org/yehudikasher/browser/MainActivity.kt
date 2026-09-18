@@ -252,7 +252,10 @@ class MainActivity : AppCompatActivity() {
         settings.databaseEnabled = false
         settings.setGeolocationEnabled(false)
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        settings.cacheMode = WebSettings.LOAD_NO_CACHE
+        // Keep normal HTTP/WebView caching enabled for already-approved content.
+        // Policy checks and image moderation still run in SecureWebViewClient,
+        // so this does not turn cached content into an authorization source.
+        settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.mediaPlaybackRequiresUserGesture = true
 
         @Suppress("DEPRECATION")
