@@ -2314,6 +2314,19 @@ async function maybePromoteToAllowlist(host, classification) {
   });
 }
 
+async function queueBrowserReview(host, reason) {
+  try {
+    await db.upsertBrowserReviewRequest({
+      id: crypto.randomUUID(),
+      host,
+      url: 'https://' + host + '/',
+      reason: String(reason || 'review_required').slice(0, 500),
+    });
+  } catch (e) {
+    console.error('[browser-review] queue failed:', e.message);
+  }
+}
+
 /** Structured, PII-free timing log - never includes the host, image bytes, or tokens. */
 function logDecisionTiming(event, decisionSource, durMs) {
   console.log(JSON.stringify({ event, decisionSource, durMs: Math.round(durMs) }));
@@ -2353,6 +2366,26 @@ app.get('/api/browser/check', wrap(async (req, res) => {
     });
   }
 
+  const adminBlocked = await db.getBrowserDomainBlockEntry(host);
+  if (adminBlocked) {
+    const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    logDecisionTiming('browser_check', 'admin_block', durMs);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Server-Timing', `total;dur=${durMs.toFixed(1)}`);
+    res.setHeader('X-Filter-Decision-Source', 'admin_block');
+    return res.json({
+      host,
+      allowed: false,
+      reason: 'admin_block',
+      categories: [],
+      source: 'ADMIN_BLOCK',
+      allowlisted: false,
+      cached: true,
+      decisionSource: 'admin_block',
+      checkedAt: adminBlocked.updatedAt,
+    });
+  }
+
   const cached = await db.getBrowserDomainClassification(host);
   if (cached) {
     // A pre-existing cached decision may not have been promoted yet (e.g. it
@@ -2361,6 +2394,7 @@ app.get('/api/browser/check', wrap(async (req, res) => {
     // host: once promoted, later requests hit the allowlist branch above and
     // never reach this path again for that host.
     await maybePromoteToAllowlist(host, cached);
+    if (!cached.allowed) await queueBrowserReview(host, cached.reason);
     const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     logDecisionTiming('browser_check', 'classification_cache', durMs);
     res.setHeader('Cache-Control', 'private, max-age=300');
@@ -2381,6 +2415,7 @@ app.get('/api/browser/check', wrap(async (req, res) => {
   const result = await browserClassifier.classifyHost(host);
   const saved = await db.saveBrowserDomainClassification(result);
   await maybePromoteToAllowlist(host, saved);
+  if (!saved.allowed) await queueBrowserReview(host, saved.reason);
   const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
   logDecisionTiming('browser_check', 'classifier', durMs);
   const status = result.reason === 'classifier_not_configured' ? 503 : 200;
@@ -2436,6 +2471,43 @@ app.delete('/api/browser/allowlist/:host', browserAllowlistAdminRateLimit, requi
     return res.status(404).json({ error: 'not_found' });
   }
   res.json(entry);
+}));
+
+const BROWSER_REVIEW_STATUSES = new Set(['PENDING', 'APPROVED', 'BLOCKED']);
+
+app.get('/api/browser/review-requests', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const rawStatus = typeof req.query.status === 'string' ? req.query.status.toUpperCase() : '';
+  if (rawStatus && !BROWSER_REVIEW_STATUSES.has(rawStatus)) {
+    return res.status(400).json({ error: 'invalid_status' });
+  }
+  res.json({ entries: await db.listBrowserReviewRequests(rawStatus || null) });
+}));
+
+app.post('/api/browser/review-requests/:id/approve', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  if (!UUID_REGEX.test(req.params.id)) return res.status(400).json({ error: 'invalid_id' });
+  const request = await db.getBrowserReviewRequest(req.params.id);
+  if (!request) return res.status(404).json({ error: 'not_found' });
+
+  const allowlistEntry = await db.upsertAdminBrowserDomainAllowlistEntry({
+    host: request.host,
+    reason: 'approved_from_browser_review_queue',
+    categories: [],
+  });
+  const resolved = await db.resolveBrowserReviewRequest(request.id, 'APPROVED');
+  res.json({ request: resolved, allowlistEntry });
+}));
+
+app.post('/api/browser/review-requests/:id/block', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  if (!UUID_REGEX.test(req.params.id)) return res.status(400).json({ error: 'invalid_id' });
+  const request = await db.getBrowserReviewRequest(req.params.id);
+  if (!request) return res.status(404).json({ error: 'not_found' });
+
+  const blockEntry = await db.upsertAdminBrowserDomainBlockEntry({
+    host: request.host,
+    reason: 'blocked_from_browser_review_queue',
+  });
+  const resolved = await db.resolveBrowserReviewRequest(request.id, 'BLOCKED');
+  res.json({ request: resolved, blockEntry });
 }));
 
 // ---------- filtered browser image moderation proxy ----------
