@@ -1753,6 +1753,16 @@ async function getBrowserDomainBlockEntry(host) {
   return rows[0] ? toAllowlistEntry(rows[0]) : null;
 }
 
+async function removeAdminBrowserDomainBlockEntry(host) {
+  const { rows } = await pool.query(
+    `DELETE FROM browser_domain_allowlist
+      WHERE host = $1 AND enabled = false AND source = 'ADMIN_BLOCK'
+      RETURNING host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at`,
+    [host],
+  );
+  return rows[0] ? toAllowlistEntry(rows[0]) : null;
+}
+
 function toBrowserReviewRequest(row) {
   return {
     id: row.id,
@@ -1977,6 +1987,7 @@ module.exports = {
   revokeBrowserDomainAllowlistEntry,
   upsertAdminBrowserDomainBlockEntry,
   getBrowserDomainBlockEntry,
+  removeAdminBrowserDomainBlockEntry,
   upsertBrowserReviewRequest,
   listBrowserReviewRequests,
   getBrowserReviewRequest,
