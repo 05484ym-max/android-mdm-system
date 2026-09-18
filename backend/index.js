@@ -22,6 +22,7 @@ const appCategories = require('./appCategories');
 const apkStorage = require('./apkStorage');
 const apkManifest = require('./apkManifest');
 const browserClassifier = require('./browserClassifier');
+const browserSiteSearch = require('./browserSiteSearch');
 const { publicBaseUrl } = require('./publicUrl');
 const safeRemoteImage = require('./safeRemoteImage');
 const imageModerationCache = require('./imageModerationCache');
@@ -258,20 +259,48 @@ function bearerToken(req) {
   return header.startsWith('Bearer ') ? header.slice(7) : '';
 }
 
+function browserAccessTokenForDevice(device) {
+  const material = `browser:${device.deviceId}:${device.authTokenHash}`;
+  const key = JWT_SECRET || device.authTokenHash;
+  return crypto.createHmac('sha256', key).update(material).digest('base64url');
+}
+
+async function authenticatedBrowserDevice(req) {
+  const rawId = typeof req.query.deviceId === 'string' ? req.query.deviceId.trim() : '';
+  if (!rawId) return null;
+  const token = bearerToken(req);
+  if (!token) return false;
+  const device = await db.getDevice(rawId);
+  if (!device || !device.authTokenHash) return false;
+  const expected = browserAccessTokenForDevice(device);
+  if (token.length !== expected.length) return false;
+  if (!crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return false;
+  return device;
+}
+
 /** Lets async handlers reject into the Express error handler. */
 const wrap = handler => (req, res, next) =>
   Promise.resolve(handler(req, res, next)).catch(next);
 
 const DEFAULT_SYNC_INTERVAL_MINUTES = 60;
+const BROWSER_MODE_WHITELIST = 'WHITELIST';
+const BROWSER_MODE_BLACKLIST = 'BLACKLIST';
+const BROWSER_MODES = new Set([BROWSER_MODE_WHITELIST, BROWSER_MODE_BLACKLIST]);
 
 /** Fills in policy defaults so older records keep working. */
 function normalizePolicy(policy) {
   const whatsappGuard = policy && policy.whatsappGuard;
+  const requestedBrowserMode = policy && typeof policy.browserMode === 'string'
+    ? policy.browserMode.toUpperCase()
+    : BROWSER_MODE_WHITELIST;
   return {
     allowedApps: (policy && policy.allowedApps) || [],
     kioskEnabled: Boolean(policy && policy.kioskEnabled),
     syncIntervalMinutes:
       (policy && policy.syncIntervalMinutes) || DEFAULT_SYNC_INTERVAL_MINUTES,
+    browserMode: BROWSER_MODES.has(requestedBrowserMode)
+      ? requestedBrowserMode
+      : BROWSER_MODE_WHITELIST,
     whatsappGuard: {
       blockStatuses: Boolean(whatsappGuard && whatsappGuard.blockStatuses),
       blockChannels: Boolean(whatsappGuard && whatsappGuard.blockChannels),
@@ -1691,6 +1720,19 @@ app.post('/api/devices/:deviceId/policy/kiosk', requireAdmin, wrap(async (req, r
   res.json(await savePolicyAndWake(device, policy));
 }));
 
+app.post('/api/devices/:deviceId/policy/browser-mode', requireAdmin, wrap(async (req, res) => {
+  const mode = typeof req.body.mode === 'string' ? req.body.mode.toUpperCase() : '';
+  if (!BROWSER_MODES.has(mode)) {
+    return res.status(400).json({ error: 'mode must be WHITELIST or BLACKLIST' });
+  }
+  const device = await db.getDevice(req.params.deviceId);
+  if (!device) return res.status(404).json({ error: 'device not found' });
+
+  const policy = normalizePolicy(device.policy);
+  policy.browserMode = mode;
+  res.json(await savePolicyAndWake(device, policy));
+}));
+
 // WhatsApp Guard is part of the managed DPC policy, but each protection can
 // be controlled independently. The server validates every field instead of
 // trusting the admin UI and wakes the device after the JSON policy is saved.
@@ -2260,7 +2302,12 @@ app.post('/api/devices/:deviceId/sync', requireDevice, wrap(async (req, res) => 
 
   const subscription = subscriptionAccess(req.device);
   if (fullOpen) subscription.allowed = true;
-  res.json({ policy, catalog, commands, dns, subscriptionAccess: subscription });
+  const browserAuth = {
+    deviceId: req.device.deviceId,
+    token: browserAccessTokenForDevice(req.device),
+    mode: policy.browserMode,
+  };
+  res.json({ policy, catalog, commands, dns, subscriptionAccess: subscription, browserAuth });
 }));
 
 // ---------- filtered browser automatic domain classification ----------
@@ -2314,6 +2361,19 @@ async function maybePromoteToAllowlist(host, classification) {
   });
 }
 
+async function queueBrowserReview(host, reason) {
+  try {
+    await db.upsertBrowserReviewRequest({
+      id: crypto.randomUUID(),
+      host,
+      url: 'https://' + host + '/',
+      reason: String(reason || 'review_required').slice(0, 500),
+    });
+  } catch (e) {
+    console.error('[browser-review] queue failed:', e.message);
+  }
+}
+
 /** Structured, PII-free timing log - never includes the host, image bytes, or tokens. */
 function logDecisionTiming(event, decisionSource, durMs) {
   console.log(JSON.stringify({ event, decisionSource, durMs: Math.round(durMs) }));
@@ -2327,6 +2387,14 @@ app.get('/api/browser/check', wrap(async (req, res) => {
   if (!host) {
     return res.status(400).json({ allowed: false, reason: 'invalid_host' });
   }
+
+  const browserDevice = await authenticatedBrowserDevice(req);
+  if (browserDevice === false) {
+    return res.status(401).json({ allowed: false, reason: 'invalid_browser_token' });
+  }
+  const browserMode = browserDevice
+    ? normalizePolicy(browserDevice.policy).browserMode
+    : null;
 
   // Fast path: a persistent, exact-host allowlist entry bypasses the
   // classification cache and the external classifier entirely. This only
@@ -2353,6 +2421,49 @@ app.get('/api/browser/check', wrap(async (req, res) => {
     });
   }
 
+  const adminBlocked = await db.getBrowserDomainBlockEntry(host);
+  if (adminBlocked) {
+    const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    logDecisionTiming('browser_check', 'admin_block', durMs);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Server-Timing', `total;dur=${durMs.toFixed(1)}`);
+    res.setHeader('X-Filter-Decision-Source', 'admin_block');
+    return res.json({
+      host,
+      allowed: false,
+      reason: 'admin_block',
+      categories: [],
+      source: 'ADMIN_BLOCK',
+      allowlisted: false,
+      cached: true,
+      decisionSource: 'admin_block',
+      checkedAt: adminBlocked.updatedAt,
+    });
+  }
+
+  // Per-customer BLACKLIST mode is deliberately simple: after the exact-host
+  // admin deny-list is checked, the site itself is allowed immediately. Image
+  // moderation, HTTPS-only URL policy, Safe Browsing and WebView hardening are
+  // independent layers and remain active in the browser client.
+  if (browserMode === BROWSER_MODE_BLACKLIST) {
+    const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    logDecisionTiming('browser_check', 'blacklist_mode_allow', durMs);
+    res.setHeader('Cache-Control', 'private, max-age=120');
+    res.setHeader('Server-Timing', `total;dur=${durMs.toFixed(1)}`);
+    res.setHeader('X-Filter-Decision-Source', 'blacklist_mode');
+    return res.json({
+      host,
+      allowed: true,
+      reason: 'blacklist_mode_not_blocked',
+      categories: [],
+      source: 'DEVICE_POLICY',
+      allowlisted: false,
+      cached: true,
+      decisionSource: 'blacklist_mode',
+      browserMode,
+    });
+  }
+
   const cached = await db.getBrowserDomainClassification(host);
   if (cached) {
     // A pre-existing cached decision may not have been promoted yet (e.g. it
@@ -2361,6 +2472,7 @@ app.get('/api/browser/check', wrap(async (req, res) => {
     // host: once promoted, later requests hit the allowlist branch above and
     // never reach this path again for that host.
     await maybePromoteToAllowlist(host, cached);
+    if (!cached.allowed) await queueBrowserReview(host, cached.reason);
     const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     logDecisionTiming('browser_check', 'classification_cache', durMs);
     res.setHeader('Cache-Control', 'private, max-age=300');
@@ -2381,6 +2493,7 @@ app.get('/api/browser/check', wrap(async (req, res) => {
   const result = await browserClassifier.classifyHost(host);
   const saved = await db.saveBrowserDomainClassification(result);
   await maybePromoteToAllowlist(host, saved);
+  if (!saved.allowed) await queueBrowserReview(host, saved.reason);
   const durMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
   logDecisionTiming('browser_check', 'classifier', durMs);
   const status = result.reason === 'classifier_not_configured' ? 503 : 200;
@@ -2408,8 +2521,40 @@ const browserAllowlistAdminRateLimit = rateLimit({
   handler: (req, res) => res.status(429).json({ error: 'rate_limited' }),
 });
 
+app.get('/api/browser/site-search', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const query = typeof req.query.q === 'string' ? req.query.q : '';
+  const results = await browserSiteSearch.searchSites(query);
+  res.json({ query: query.trim(), results });
+}));
+
 app.get('/api/browser/allowlist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
   res.json({ entries: await db.listBrowserDomainAllowlist() });
+}));
+
+app.get('/api/browser/blocklist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const entries = (await db.listBrowserDomainAllowlist())
+    .filter(entry => entry.source === 'ADMIN_BLOCK' && entry.enabled === false);
+  res.json({ entries });
+}));
+
+app.post('/api/browser/blocklist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const host = browserClassifier.normalizeHost(
+    req.body && typeof req.body.host === 'string' ? req.body.host : '',
+  );
+  if (!host) return res.status(400).json({ error: 'invalid_host' });
+  const entry = await db.upsertAdminBrowserDomainBlockEntry({
+    host,
+    reason: 'manual_admin_block',
+  });
+  res.json(entry);
+}));
+
+app.delete('/api/browser/blocklist/:host', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const host = browserClassifier.normalizeHost(req.params.host);
+  if (!host) return res.status(400).json({ error: 'invalid_host' });
+  const entry = await db.removeAdminBrowserDomainBlockEntry(host);
+  if (!entry) return res.status(404).json({ error: 'not_found' });
+  res.json(entry);
 }));
 
 app.post('/api/browser/allowlist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
@@ -2436,6 +2581,43 @@ app.delete('/api/browser/allowlist/:host', browserAllowlistAdminRateLimit, requi
     return res.status(404).json({ error: 'not_found' });
   }
   res.json(entry);
+}));
+
+const BROWSER_REVIEW_STATUSES = new Set(['PENDING', 'APPROVED', 'BLOCKED']);
+
+app.get('/api/browser/review-requests', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const rawStatus = typeof req.query.status === 'string' ? req.query.status.toUpperCase() : '';
+  if (rawStatus && !BROWSER_REVIEW_STATUSES.has(rawStatus)) {
+    return res.status(400).json({ error: 'invalid_status' });
+  }
+  res.json({ entries: await db.listBrowserReviewRequests(rawStatus || null) });
+}));
+
+app.post('/api/browser/review-requests/:id/approve', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  if (!UUID_REGEX.test(req.params.id)) return res.status(400).json({ error: 'invalid_id' });
+  const request = await db.getBrowserReviewRequest(req.params.id);
+  if (!request) return res.status(404).json({ error: 'not_found' });
+
+  const allowlistEntry = await db.upsertAdminBrowserDomainAllowlistEntry({
+    host: request.host,
+    reason: 'approved_from_browser_review_queue',
+    categories: [],
+  });
+  const resolved = await db.resolveBrowserReviewRequest(request.id, 'APPROVED');
+  res.json({ request: resolved, allowlistEntry });
+}));
+
+app.post('/api/browser/review-requests/:id/block', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  if (!UUID_REGEX.test(req.params.id)) return res.status(400).json({ error: 'invalid_id' });
+  const request = await db.getBrowserReviewRequest(req.params.id);
+  if (!request) return res.status(404).json({ error: 'not_found' });
+
+  const blockEntry = await db.upsertAdminBrowserDomainBlockEntry({
+    host: request.host,
+    reason: 'blocked_from_browser_review_queue',
+  });
+  const resolved = await db.resolveBrowserReviewRequest(request.id, 'BLOCKED');
+  res.json({ request: resolved, blockEntry });
 }));
 
 // ---------- filtered browser image moderation proxy ----------

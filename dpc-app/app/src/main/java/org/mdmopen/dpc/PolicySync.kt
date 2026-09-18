@@ -56,6 +56,7 @@ object PolicySync {
             )
             Config.setDnsPendingCustomerRequest(context, null)
             Config.setSubscriptionAccess(context, result.subscriptionAccess)
+            BrowserBridge.publish(context, serverUrl, result.browserAuth)
             ManagedInstallWindow.setDesiredInstallBlocked(context, !result.policy.fullOpen)
 
             val dnsReconcileResult = AdBlockDns.reconcile(context)

@@ -13,6 +13,7 @@ data class Policy(
     val allowedApps: List<String>,
     val kioskEnabled: Boolean,
     val syncIntervalMinutes: Int,
+    val browserMode: String = "WHITELIST",
     val fullOpen: Boolean = false,
     val whatsappGuard: WhatsAppGuardPolicy = WhatsAppGuardPolicy(),
     val customerName: String? = null,
@@ -71,12 +72,19 @@ data class SubscriptionAccess(
     val subscriptionPrice: Double?,
 )
 
+data class BrowserAuth(
+    val deviceId: String,
+    val token: String,
+    val mode: String,
+)
+
 data class SyncResult(
     val policy: Policy,
     val catalog: List<CatalogApp>,
     val commands: List<QueuedCommand>,
     val dns: DnsPolicy,
     val subscriptionAccess: SubscriptionAccess,
+    val browserAuth: BrowserAuth? = null,
 )
 
 data class EnrollResult(val deviceId: String, val deviceToken: String)
@@ -157,6 +165,8 @@ class ApiClient(
                 "syncIntervalMinutes",
                 Config.DEFAULT_SYNC_MINUTES,
             ),
+            browserMode = policyJson.optString("browserMode", "WHITELIST")
+                .takeIf { it == "WHITELIST" || it == "BLACKLIST" } ?: "WHITELIST",
             fullOpen = policyJson.optBoolean("fullOpen", false),
             whatsappGuard = WhatsAppGuardPolicy(
                 blockStatuses = whatsappGuardJson?.optBoolean("blockStatuses", false) ?: false,
@@ -227,7 +237,22 @@ class ApiClient(
             subscriptionPrice = accessJson?.let { if (it.isNull("subscriptionPrice")) null else it.optDouble("subscriptionPrice") },
         )
 
-        return SyncResult(policy, catalog, commands, dns, subscriptionAccess)
+        val browserAuth = json.optJSONObject("browserAuth")?.let { item ->
+            val browserDeviceId = item.optString("deviceId", "")
+            val token = item.optString("token", "")
+            val mode = item.optString("mode", "WHITELIST")
+            if (browserDeviceId.isNotBlank() && token.isNotBlank()) {
+                BrowserAuth(
+                    deviceId = browserDeviceId,
+                    token = token,
+                    mode = if (mode == "BLACKLIST") "BLACKLIST" else "WHITELIST",
+                )
+            } else {
+                null
+            }
+        }
+
+        return SyncResult(policy, catalog, commands, dns, subscriptionAccess, browserAuth)
     }
 
     fun reportCommandResult(

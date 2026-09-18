@@ -398,6 +398,7 @@
 <link rel="stylesheet" href="alerts.css">
 <link rel="stylesheet" href="news.css">
 <link rel="stylesheet" href="support.css">
+<link rel="stylesheet" href="browser-review.css">
 <link rel="stylesheet" href="panel-polish.css">
 </head>
 <body>
@@ -450,6 +451,10 @@
     <button class="nav-btn" data-tab="news">
       <span class="nav-icon">📰</span>
       <span class="nav-label">חדשות ועדכונים</span>
+    </button>
+    <button class="nav-btn" data-tab="browser">
+      <span class="nav-icon">🌐</span>
+      <span class="nav-label">בקשות אתרים</span>
     </button>
   </nav>
 </aside>
@@ -620,6 +625,45 @@
     <button class="alerts-refresh-btn" id="newsRefreshBtn">⟳ רענן</button>
   </div>
   <div id="newsList"></div>
+</div>
+
+<div class="tab-content" data-tab-content="browser">
+  <div class="enroll-card">
+    <h2>ניהול אתרים בדפדפן</h2>
+    <div class="sub-tabs browser-list-tabs">
+      <button class="sub-tab-btn active" data-browser-list-mode="requests">בקשות לבדיקה</button>
+      <button class="sub-tab-btn" data-browser-list-mode="whitelist">רשימה לבנה</button>
+      <button class="sub-tab-btn" data-browser-list-mode="blacklist">רשימה שחורה</button>
+    </div>
+    <div class="browser-site-search-card">
+      <div class="browser-site-search-title">חיפוש אתר לפי שם</div>
+      <div class="browser-site-search-row">
+        <input id="browserSiteSearchInput" class="login-input" placeholder="לדוגמה: בנק הפועלים, כללית, ביטוח לאומי" autocomplete="off" />
+        <button class="add-app-btn" id="browserSiteSearchBtn">חפש אתר</button>
+      </div>
+      <div id="browserSiteSearchStatus" class="browser-site-search-status"></div>
+      <div id="browserSiteSearchResults"></div>
+    </div>
+
+    <div class="browser-review-toolbar">
+      <select id="browserReviewStatus" class="login-input browser-review-filter">
+        <option value="PENDING">ממתינים לבדיקה</option>
+        <option value="">כל הבקשות</option>
+        <option value="APPROVED">אושרו</option>
+        <option value="BLOCKED">נחסמו</option>
+      </select>
+      <div id="browserManualEntry" class="browser-manual-entry" style="display:none">
+        <input id="browserManualHost" class="login-input" dir="ltr" placeholder="example.com" />
+        <button class="add-app-btn" id="browserManualAddBtn">הוסף</button>
+      </div>
+      <button class="alerts-refresh-btn" id="browserReviewRefreshBtn">⟳ רענן</button>
+    </div>
+    <div id="browserReviewNote" class="browser-review-note">
+      אתר לא מוכר שנחסם בדפדפן נכנס לכאן אוטומטית. אישור חל על הדומיין המדויק בלבד ואינו מבטל את סינון התמונות.
+    </div>
+    <div id="browserReviewSummary" class="support-summary"></div>
+    <div id="browserReviewList"><div class="empty-state">טוען...</div></div>
+  </div>
 </div>
 
 <div class="tab-content" data-tab-content="enroll">
@@ -1179,6 +1223,23 @@ function renderDeviceDetail(deviceId) {
     </div>
 
     <div class="detail-section">
+      <h3>מצב סינון דפדפן</h3>
+      <div class="browser-mode-picker">
+        <button type="button" class="browser-mode-option ${(!d.policy || d.policy.browserMode !== 'BLACKLIST') ? 'active' : ''}" data-browser-mode="WHITELIST">
+          <strong>רשימה לבנה</strong>
+          <span>רק אתרים שנמצאים ברשימה הלבנה נפתחים.</span>
+        </button>
+        <button type="button" class="browser-mode-option ${(d.policy && d.policy.browserMode === 'BLACKLIST') ? 'active' : ''}" data-browser-mode="BLACKLIST">
+          <strong>רשימה שחורה</strong>
+          <span>כל האתרים נפתחים חוץ מהאתרים שברשימה השחורה.</span>
+        </button>
+      </div>
+      <div class="browser-review-note" style="margin-top:10px;margin-bottom:0;">
+        סינון תמונות, HTTPS והגנות הדפדפן נשארים פעילים בשני המצבים.
+      </div>
+    </div>
+
+    <div class="detail-section">
       <h3>סנכרון וקיוסק</h3>
       <div class="field-row">
         <input type="number" class="package-input" id="detailInterval" min="15" max="1440" value="${(d.policy && d.policy.syncIntervalMinutes) || 60}" style="max-width:110px;" />
@@ -1293,6 +1354,26 @@ function bindDetailHandlers(d) {
       body: JSON.stringify({ enabled }),
     });
     loadDevices();
+  });
+
+  document.querySelectorAll('#detailContent [data-browser-mode]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.getAttribute('data-browser-mode');
+      if (!['WHITELIST', 'BLACKLIST'].includes(mode)) return;
+      btn.disabled = true;
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/policy/browser-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(body.error || 'עדכון מצב הדפדפן נכשל');
+        btn.disabled = false;
+        return;
+      }
+      await loadDevices();
+    });
   });
 
   const recoveryBtn = document.getElementById('detailRecoveryCode');
@@ -1831,6 +1912,7 @@ loadDevices();
 <script src="subscription-unblock.js"></script>
 <script src="full-open.js"></script>
 <script src="permanent-release.js"></script>
+<script src="browser-review.js"></script>
 <script src="/pwa.js" defer></script>
 </body>
 </html>
