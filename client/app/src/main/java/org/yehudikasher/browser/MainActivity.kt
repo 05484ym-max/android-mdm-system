@@ -40,7 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statePanel: LinearLayout
 
     private val policy by lazy { LocalPolicyStore.createPolicy() }
-    private val remotePolicy by lazy { RemotePolicyClient() }
+    private val remotePolicy by lazy { RemotePolicyClient(applicationContext) }
     private val imageProxy by lazy { FilteredImageProxy() }
     private val classificationInFlight = ConcurrentHashMap.newKeySet<String>()
 
