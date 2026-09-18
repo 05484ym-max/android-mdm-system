@@ -77,3 +77,41 @@
   .browser-review-actions { width: 100%; }
   .browser-review-actions button { flex: 1; }
 }
+.browser-list-tabs { margin-bottom: 12px; }
+.browser-manual-entry {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  align-items: center;
+}
+.browser-manual-entry .login-input { margin: 0; min-width: 180px; }
+.browser-mode-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.browser-mode-option {
+  text-align: right;
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.browser-mode-option strong,
+.browser-mode-option span { display: block; }
+.browser-mode-option strong { font-size: 0.95rem; margin-bottom: 5px; }
+.browser-mode-option span { color: var(--text-dim); font-size: 0.76rem; line-height: 1.5; }
+.browser-mode-option.active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.browser-mode-option.active strong { color: var(--accent); }
+@media (max-width: 620px) {
+  .browser-review-toolbar { align-items: stretch; flex-direction: column; }
+  .browser-manual-entry { width: 100%; }
+  .browser-manual-entry .login-input { flex: 1; min-width: 0; }
+  .browser-mode-picker { grid-template-columns: 1fr; }
+}
