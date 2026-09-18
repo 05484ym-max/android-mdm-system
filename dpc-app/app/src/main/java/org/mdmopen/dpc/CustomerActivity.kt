@@ -1259,9 +1259,12 @@ class CustomerActivity : Activity() {
 
         Thread {
             var bitmap: Bitmap? = null
-            repeat(2) { attempt ->
-                bitmap = downloadStoreIcon(url)
-                if (bitmap != null) return@repeat
+            for (attempt in 0..1) {
+                val candidate = downloadStoreIcon(url)
+                if (candidate != null) {
+                    bitmap = candidate
+                    break
+                }
                 if (attempt == 0) {
                     try {
                         Thread.sleep(250)
