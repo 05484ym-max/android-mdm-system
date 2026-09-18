@@ -58,9 +58,10 @@ assert.match(playGate, /private fun closePlayUi[\s\S]*InstallOverlay\.hide\(cont
 const overlayRatioMatch = installOverlay.match(/SHIELD_HEIGHT_RATIO = (0\.\d+)f/);
 assert.ok(overlayRatioMatch, 'InstallOverlay must define SHIELD_HEIGHT_RATIO');
 const overlayRatio = Number(overlayRatioMatch[1]);
-assert.ok(overlayRatio >= 0.68 && overlayRatio <= 0.70, `Install overlay ratio out of range: ${overlayRatio}`);
+assert.ok(overlayRatio >= 0.50 && overlayRatio <= 0.55, `Install overlay ratio out of range: ${overlayRatio}`);
 assert.match(installOverlay, /heightPixels \* SHIELD_HEIGHT_RATIO/);
 assert.match(installOverlay, /gravity = Gravity\.BOTTOM/);
+assert.match(installOverlay, /FLAG_NOT_TOUCH_MODAL/);
 assert.match(installOverlay, /isIndeterminate = true/);
 assert.doesNotMatch(installOverlay, /התקנה מאובטחת פעילה/);
 assert.doesNotMatch(installOverlay, /החלק העליון של Google Play נשאר גלוי כדי שתראה/);
