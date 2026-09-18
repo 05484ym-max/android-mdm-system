@@ -12,7 +12,8 @@
         android:theme="@style/Theme.YehudiKasher.Browser">
         <receiver
             android:name=".BrowserConfigReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="org.mdmopen.dpc.permission.CONFIGURE_BROWSER">
             <intent-filter>
                 <action android:name="org.yehudikasher.browser.CONFIGURE" />
             </intent-filter>
