@@ -168,6 +168,23 @@ class UrlPolicyTest {
     }
 
     @Test
+    fun remoteApprovalExpiresAtServerDeadline() {
+        var now = 1_000L
+        val dynamic = UrlPolicy(emptyList()) { now }
+
+        dynamic.rememberRemoteAllow("safe.example.net", expiresAtMs = 2_000L)
+        assertEquals(
+            LocalDecision.ALLOW,
+            dynamic.evaluate("https://safe.example.net").decision
+        )
+
+        now = 2_001L
+        val expired = dynamic.evaluate("https://safe.example.net")
+        assertEquals(LocalDecision.BLOCK, expired.decision)
+        assertEquals("not_in_local_policy", expired.reason)
+    }
+
+    @Test
     fun overlyLongUrl_isBlocked() {
         val url = "https://example.com/" + "a".repeat(9000)
         assertEquals(LocalDecision.BLOCK, policy.evaluate(url).decision)
