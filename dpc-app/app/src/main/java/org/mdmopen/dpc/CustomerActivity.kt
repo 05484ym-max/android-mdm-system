@@ -1054,7 +1054,9 @@ class CustomerActivity : Activity() {
 
         val icon = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setImageResource(android.R.drawable.sym_def_app_icon)
+            // Branded fallback avoids Android's generic grey placeholder while
+            // the real app icon is resolved from package/cache/network.
+            setImageResource(R.mipmap.ic_launcher)
             setPadding(dp(3), dp(3), dp(3), dp(3))
         }
         loadIcon(app, installed, icon)
@@ -1244,14 +1246,94 @@ class CustomerActivity : Activity() {
                 return
             } catch (_: Exception) {}
         }
+
+        // Show the last known real icon immediately. A network refresh is
+        // allowed to improve it, but a temporary network failure must never
+        // replace a good cached icon with Android's generic grey placeholder.
         AppIconCache.get(this, app.packageName)?.let { target.setImageBitmap(it) }
-        val url = app.iconUrl ?: return
+
+        val url = app.iconUrl?.trim()?.takeIf {
+            it.startsWith("https://", ignoreCase = true) ||
+                it.startsWith("http://", ignoreCase = true)
+        } ?: return
+
         Thread {
-            val bitmap: Bitmap? = try {
-                URL(url).openStream().use { BitmapFactory.decodeStream(it) }
-            } catch (_: Exception) { null }
-            if (bitmap != null && !isFinishing) runOnUiThread { target.setImageBitmap(bitmap) }
+            var bitmap: Bitmap? = null
+            for (attempt in 0..1) {
+                val candidate = downloadStoreIcon(url)
+                if (candidate != null) {
+                    bitmap = candidate
+                    break
+                }
+                if (attempt == 0) {
+                    try {
+                        Thread.sleep(250)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return@Thread
+                    }
+                }
+            }
+
+            val loaded = bitmap ?: return@Thread
+            AppIconCache.saveBitmap(applicationContext, app.packageName, loaded)
+            if (!isFinishing && !isDestroyed) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) target.setImageBitmap(loaded)
+                }
+            }
         }.start()
+    }
+
+    private fun downloadStoreIcon(rawUrl: String): Bitmap? {
+        val connection = try {
+            (URL(rawUrl).openConnection() as? HttpURLConnection)?.apply {
+                requestMethod = "GET"
+                connectTimeout = 5_000
+                readTimeout = 10_000
+                instanceFollowRedirects = true
+                useCaches = true
+                setRequestProperty("Accept", "image/*")
+                setRequestProperty("User-Agent", "YehudiKasher-Android")
+            }
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        return try {
+            val code = connection.responseCode
+            if (code !in 200..299) return null
+
+            val contentType = connection.contentType
+                ?.substringBefore(';')
+                ?.trim()
+                ?.lowercase(Locale.US)
+                .orEmpty()
+            if (!contentType.startsWith("image/")) return null
+
+            val declared = connection.contentLengthLong
+            if (declared > MAX_STORE_ICON_BYTES) return null
+
+            val bytes = connection.inputStream.use { input ->
+                val out = ByteArrayOutputStream()
+                val buffer = ByteArray(8 * 1024)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_STORE_ICON_BYTES) return null
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            }
+
+            if (bytes.isEmpty()) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection.disconnect()
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -2015,6 +2097,10 @@ class CustomerActivity : Activity() {
     }
 
     private fun Int.toHex(): String = String.format("#%06X", 0xFFFFFF and this)
+
+    companion object {
+        private const val MAX_STORE_ICON_BYTES = 3 * 1024 * 1024
+    }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
