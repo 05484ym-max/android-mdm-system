@@ -10,6 +10,14 @@
         android:usesCleartextTraffic="false"
         android:label="דפדפן מסונן"
         android:theme="@style/Theme.YehudiKasher.Browser">
+        <receiver
+            android:name=".BrowserConfigReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.yehudikasher.browser.CONFIGURE" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
