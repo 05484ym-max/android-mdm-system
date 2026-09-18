@@ -398,6 +398,7 @@
 <link rel="stylesheet" href="alerts.css">
 <link rel="stylesheet" href="news.css">
 <link rel="stylesheet" href="support.css">
+<link rel="stylesheet" href="browser-review.css">
 <link rel="stylesheet" href="panel-polish.css">
 </head>
 <body>
@@ -450,6 +451,10 @@
     <button class="nav-btn" data-tab="news">
       <span class="nav-icon">📰</span>
       <span class="nav-label">חדשות ועדכונים</span>
+    </button>
+    <button class="nav-btn" data-tab="browser">
+      <span class="nav-icon">🌐</span>
+      <span class="nav-label">בקשות אתרים</span>
     </button>
   </nav>
 </aside>
@@ -620,6 +625,26 @@
     <button class="alerts-refresh-btn" id="newsRefreshBtn">⟳ רענן</button>
   </div>
   <div id="newsList"></div>
+</div>
+
+<div class="tab-content" data-tab-content="browser">
+  <div class="enroll-card">
+    <h2>בקשות אתרים מהדפדפן</h2>
+    <div class="browser-review-toolbar">
+      <select id="browserReviewStatus" class="login-input browser-review-filter">
+        <option value="PENDING">ממתינים לבדיקה</option>
+        <option value="">הכול</option>
+        <option value="APPROVED">אושרו</option>
+        <option value="BLOCKED">נחסמו</option>
+      </select>
+      <button class="alerts-refresh-btn" id="browserReviewRefreshBtn">⟳ רענן</button>
+    </div>
+    <div class="browser-review-note">
+      אתר לא מוכר שנחסם בדפדפן נכנס לכאן אוטומטית. אישור חל על הדומיין המדויק בלבד ואינו מבטל את סינון התמונות.
+    </div>
+    <div id="browserReviewSummary" class="support-summary"></div>
+    <div id="browserReviewList"><div class="empty-state">טוען...</div></div>
+  </div>
 </div>
 
 <div class="tab-content" data-tab-content="enroll">
@@ -1831,6 +1856,7 @@ loadDevices();
 <script src="subscription-unblock.js"></script>
 <script src="full-open.js"></script>
 <script src="permanent-release.js"></script>
+<script src="browser-review.js"></script>
 <script src="/pwa.js" defer></script>
 </body>
 </html>
