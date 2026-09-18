@@ -10,6 +10,7 @@ import java.util.LinkedHashMap
 data class RemotePolicyDecision(
     val allowed: Boolean,
     val reason: String,
+    val expiresAtMs: Long? = null,
 )
 
 class RemotePolicyClient(
@@ -54,10 +55,11 @@ class RemotePolicyClient(
         // local cache so a temporary outage is fail-closed without becoming a
         // permanent local block.
         val expiresAt = decision.second ?: (now + TRANSIENT_CACHE_MS)
+        val expiringDecision = decision.first.copy(expiresAtMs = expiresAt)
         synchronized(cacheLock) {
-            cache[host] = Cached(decision.first, expiresAt)
+            cache[host] = Cached(expiringDecision, expiresAt)
         }
-        return decision.first
+        return expiringDecision
     }
 
     private fun fetchDecision(host: String): Pair<RemotePolicyDecision, Long?> {
