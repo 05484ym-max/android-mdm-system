@@ -301,6 +301,26 @@ CREATE TABLE IF NOT EXISTS browser_domain_allowlist (
 CREATE INDEX IF NOT EXISTS browser_domain_allowlist_enabled_idx
   ON browser_domain_allowlist (enabled);
 
+-- Browser review queue. Unknown/blocked hosts seen by the filtered browser are
+-- recorded once per exact host and surfaced to the admin panel for a human
+-- allow/block decision. The queue stores only a sanitized origin URL, never
+-- query strings, fragments, credentials, or page content.
+CREATE TABLE IF NOT EXISTS browser_review_requests (
+  id            UUID PRIMARY KEY,
+  host          TEXT NOT NULL UNIQUE,
+  url           TEXT NOT NULL,
+  reason        TEXT,
+  status        TEXT NOT NULL DEFAULT 'PENDING'
+                CHECK (status IN ('PENDING','APPROVED','BLOCKED')),
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen_count    INTEGER NOT NULL DEFAULT 1,
+  resolved_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS browser_review_requests_status_idx
+  ON browser_review_requests (status, last_seen_at DESC);
+
 -- Image moderation is cached by the image bytes (SHA-256), not by URL:
 -- the same bytes reused across multiple sites are moderated once, while a
 -- changed image at the same URL cannot inherit a stale allow decision.
@@ -1702,6 +1722,105 @@ async function revokeBrowserDomainAllowlistEntry(host) {
   return rows[0] ? toAllowlistEntry(rows[0]) : null;
 }
 
+/** Exact admin block. Unlike a normal allowlist revoke, this is a durable
+ * deny decision and /api/browser/check must stop before classifier fallback. */
+async function upsertAdminBrowserDomainBlockEntry({ host, reason }) {
+  const { rows } = await pool.query(
+    `INSERT INTO browser_domain_allowlist
+       (host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at)
+     VALUES ($1, false, 'ADMIN_BLOCK', $2, '[]'::jsonb, now(), now(), now(), now())
+     ON CONFLICT (host) DO UPDATE SET
+       enabled = false,
+       source = 'ADMIN_BLOCK',
+       reason = EXCLUDED.reason,
+       categories = '[]'::jsonb,
+       updated_at = now(),
+       last_verified_at = now(),
+       revoked_at = now()
+     RETURNING host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at`,
+    [host, reason || 'manual_admin_block'],
+  );
+  return toAllowlistEntry(rows[0]);
+}
+
+async function getBrowserDomainBlockEntry(host) {
+  const { rows } = await pool.query(
+    `SELECT host, enabled, source, reason, categories, created_at, updated_at, last_verified_at, revoked_at
+       FROM browser_domain_allowlist
+      WHERE host = $1 AND enabled = false AND source = 'ADMIN_BLOCK'`,
+    [host],
+  );
+  return rows[0] ? toAllowlistEntry(rows[0]) : null;
+}
+
+function toBrowserReviewRequest(row) {
+  return {
+    id: row.id,
+    host: row.host,
+    url: row.url,
+    reason: row.reason,
+    status: row.status,
+    firstSeenAt: row.first_seen_at.toISOString(),
+    lastSeenAt: row.last_seen_at.toISOString(),
+    seenCount: row.seen_count,
+    resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
+  };
+}
+
+async function upsertBrowserReviewRequest({ id, host, url, reason }) {
+  const { rows } = await pool.query(
+    `INSERT INTO browser_review_requests
+       (id, host, url, reason, status, first_seen_at, last_seen_at, seen_count)
+     VALUES ($1, $2, $3, $4, 'PENDING', now(), now(), 1)
+     ON CONFLICT (host) DO UPDATE SET
+       last_seen_at = now(),
+       seen_count = browser_review_requests.seen_count + 1,
+       url = CASE WHEN browser_review_requests.status = 'PENDING' THEN EXCLUDED.url ELSE browser_review_requests.url END,
+       reason = CASE WHEN browser_review_requests.status = 'PENDING' THEN EXCLUDED.reason ELSE browser_review_requests.reason END
+     RETURNING id, host, url, reason, status, first_seen_at, last_seen_at, seen_count, resolved_at`,
+    [id, host, url, reason || null],
+  );
+  return toBrowserReviewRequest(rows[0]);
+}
+
+async function listBrowserReviewRequests(status) {
+  const params = [];
+  let where = '';
+  if (status) {
+    params.push(status);
+    where = 'WHERE status = $1';
+  }
+  const { rows } = await pool.query(
+    `SELECT id, host, url, reason, status, first_seen_at, last_seen_at, seen_count, resolved_at
+       FROM browser_review_requests
+       ${where}
+      ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, last_seen_at DESC
+      LIMIT 500`,
+    params,
+  );
+  return rows.map(toBrowserReviewRequest);
+}
+
+async function getBrowserReviewRequest(id) {
+  const { rows } = await pool.query(
+    `SELECT id, host, url, reason, status, first_seen_at, last_seen_at, seen_count, resolved_at
+       FROM browser_review_requests WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ? toBrowserReviewRequest(rows[0]) : null;
+}
+
+async function resolveBrowserReviewRequest(id, status) {
+  const { rows } = await pool.query(
+    `UPDATE browser_review_requests
+        SET status = $2, resolved_at = now(), last_seen_at = now()
+      WHERE id = $1
+      RETURNING id, host, url, reason, status, first_seen_at, last_seen_at, seen_count, resolved_at`,
+    [id, status],
+  );
+  return rows[0] ? toBrowserReviewRequest(rows[0]) : null;
+}
+
 
 // ---------- filtered browser image moderation cache ----------
 
@@ -1856,6 +1975,12 @@ module.exports = {
   upsertAutoBrowserDomainAllowlistEntry,
   upsertAdminBrowserDomainAllowlistEntry,
   revokeBrowserDomainAllowlistEntry,
+  upsertAdminBrowserDomainBlockEntry,
+  getBrowserDomainBlockEntry,
+  upsertBrowserReviewRequest,
+  listBrowserReviewRequests,
+  getBrowserReviewRequest,
+  resolveBrowserReviewRequest,
   getBrowserImageModeration,
   saveBrowserImageModeration,
 };
