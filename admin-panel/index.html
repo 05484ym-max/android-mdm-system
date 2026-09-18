@@ -635,6 +635,16 @@
       <button class="sub-tab-btn" data-browser-list-mode="whitelist">רשימה לבנה</button>
       <button class="sub-tab-btn" data-browser-list-mode="blacklist">רשימה שחורה</button>
     </div>
+    <div class="browser-site-search-card">
+      <div class="browser-site-search-title">חיפוש אתר לפי שם</div>
+      <div class="browser-site-search-row">
+        <input id="browserSiteSearchInput" class="login-input" placeholder="לדוגמה: בנק הפועלים, כללית, ביטוח לאומי" autocomplete="off" />
+        <button class="add-app-btn" id="browserSiteSearchBtn">חפש אתר</button>
+      </div>
+      <div id="browserSiteSearchStatus" class="browser-site-search-status"></div>
+      <div id="browserSiteSearchResults"></div>
+    </div>
+
     <div class="browser-review-toolbar">
       <select id="browserReviewStatus" class="login-input browser-review-filter">
         <option value="PENDING">ממתינים לבדיקה</option>
