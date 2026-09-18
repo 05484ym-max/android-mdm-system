@@ -9,6 +9,10 @@
   const manualHost = document.getElementById('browserManualHost');
   const manualAdd = document.getElementById('browserManualAddBtn');
   const note = document.getElementById('browserReviewNote');
+  const siteSearchInput = document.getElementById('browserSiteSearchInput');
+  const siteSearchBtn = document.getElementById('browserSiteSearchBtn');
+  const siteSearchStatus = document.getElementById('browserSiteSearchStatus');
+  const siteSearchResults = document.getElementById('browserSiteSearchResults');
   const modeButtons = [...document.querySelectorAll('[data-browser-list-mode]')];
   if (!list || !summary || !filter || !refresh || !manualWrap || !manualHost || !manualAdd || !note) return;
 
@@ -39,6 +43,108 @@
     blocked_from_browser_review_queue: 'נחסם ידנית מהתור',
     manual_admin_block: 'נוסף ידנית לרשימה השחורה',
   }[reason] || reason || 'נדרש אישור מנהל');
+
+  async function copyText(value, button) {
+    try {
+      await navigator.clipboard.writeText(value);
+      const original = button.textContent;
+      button.textContent = '✓ הועתק';
+      setTimeout(() => { if (button.isConnected) button.textContent = original; }, 1200);
+    } catch (_) {
+      alert('לא ניתן להעתיק אוטומטית. אפשר לסמן ולהעתיק את הקישור.');
+    }
+  }
+
+  async function addSearchResult(host, targetList, button) {
+    const endpoint = targetList === 'whitelist' ? '/api/browser/allowlist' : '/api/browser/blocklist';
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'מוסיף...';
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host,
+          reason: targetList === 'whitelist' ? 'manual_admin_allow' : 'manual_admin_block',
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'הוספת האתר נכשלה');
+      button.textContent = targetList === 'whitelist' ? '✓ נוסף ללבן' : '✓ נוסף לשחור';
+      await load();
+    } catch (e) {
+      alert(e.message || 'שגיאת תקשורת');
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  function renderSiteSearchResults(results) {
+    if (!results.length) {
+      siteSearchResults.innerHTML = '<div class="empty-state">לא נמצאו תוצאות מתאימות</div>';
+      return;
+    }
+    siteSearchResults.innerHTML = results.map((item, index) => `
+      <div class="browser-site-result">
+        <div class="browser-site-result-main">
+          <div class="browser-site-result-title">${escapeHtml(item.title || item.host)}</div>
+          <div class="browser-site-result-host">${escapeHtml(item.host)}</div>
+          <input class="browser-site-result-url" value="${escapeHtml(item.url)}" readonly aria-label="קישור לאתר" />
+        </div>
+        <div class="browser-site-result-actions">
+          <button class="toggle-btn" data-search-copy="${index}">העתק קישור</button>
+          <a class="toggle-btn browser-open-site-btn" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">פתח אתר</a>
+          <button class="add-app-btn" data-search-white="${index}">הוסף ללבן</button>
+          <button class="browser-block-btn" data-search-black="${index}">הוסף לשחור</button>
+        </div>
+      </div>
+    `).join('');
+
+    document.querySelectorAll('[data-search-copy]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = results[Number(btn.dataset.searchCopy)];
+        if (item) copyText(item.url, btn);
+      });
+    });
+    document.querySelectorAll('[data-search-white]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = results[Number(btn.dataset.searchWhite)];
+        if (item) addSearchResult(item.host, 'whitelist', btn);
+      });
+    });
+    document.querySelectorAll('[data-search-black]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = results[Number(btn.dataset.searchBlack)];
+        if (item) addSearchResult(item.host, 'blacklist', btn);
+      });
+    });
+  }
+
+  async function searchSiteByName() {
+    const query = siteSearchInput.value.trim();
+    if (!query) {
+      siteSearchStatus.textContent = 'נא להזין שם אתר';
+      return;
+    }
+    siteSearchBtn.disabled = true;
+    siteSearchStatus.textContent = 'מחפש...';
+    siteSearchResults.innerHTML = '';
+    try {
+      const res = await fetch('/api/browser/site-search?q=' + encodeURIComponent(query));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'חיפוש האתר נכשל');
+      const results = Array.isArray(body.results) ? body.results : [];
+      siteSearchStatus.textContent = results.length
+        ? 'בחר את האתר הנכון, פתח אותו לבדיקה ואז הוסף לרשימה הרצויה.'
+        : 'לא נמצאה תוצאה. אפשר להזין דומיין ידנית למטה.';
+      renderSiteSearchResults(results);
+    } catch (e) {
+      siteSearchStatus.textContent = e.message || 'לא ניתן לבצע חיפוש כרגע';
+    } finally {
+      siteSearchBtn.disabled = false;
+    }
+  }
 
   function setMode(next) {
     mode = next;
@@ -214,6 +320,8 @@
   }
 
   modeButtons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.browserListMode)));
+  siteSearchBtn.addEventListener('click', searchSiteByName);
+  siteSearchInput.addEventListener('keydown', e => { if (e.key === 'Enter') searchSiteByName(); });
   filter.addEventListener('change', load);
   refresh.addEventListener('click', load);
   manualAdd.addEventListener('click', addManual);
