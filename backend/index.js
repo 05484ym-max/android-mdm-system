@@ -22,6 +22,7 @@ const appCategories = require('./appCategories');
 const apkStorage = require('./apkStorage');
 const apkManifest = require('./apkManifest');
 const browserClassifier = require('./browserClassifier');
+const browserSiteSearch = require('./browserSiteSearch');
 const { publicBaseUrl } = require('./publicUrl');
 const safeRemoteImage = require('./safeRemoteImage');
 const imageModerationCache = require('./imageModerationCache');
@@ -2519,6 +2520,12 @@ const browserAllowlistAdminRateLimit = rateLimit({
   keyGenerator: req => String(req.ip || 'unknown'),
   handler: (req, res) => res.status(429).json({ error: 'rate_limited' }),
 });
+
+app.get('/api/browser/site-search', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
+  const query = typeof req.query.q === 'string' ? req.query.q : '';
+  const results = await browserSiteSearch.searchSites(query);
+  res.json({ query: query.trim(), results });
+}));
 
 app.get('/api/browser/allowlist', browserAllowlistAdminRateLimit, requireAdmin, wrap(async (req, res) => {
   res.json({ entries: await db.listBrowserDomainAllowlist() });
