@@ -1,5 +1,6 @@
 package org.yehudikasher.browser
 
+import android.content.Context
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -14,7 +15,8 @@ data class RemotePolicyDecision(
 )
 
 class RemotePolicyClient(
-    private val baseUrl: String = BuildConfig.FILTER_API_BASE_URL,
+    private val context: Context,
+    private val fallbackBaseUrl: String = BuildConfig.FILTER_API_BASE_URL,
 ) {
     private data class Cached(
         val decision: RemotePolicyDecision,
@@ -64,13 +66,19 @@ class RemotePolicyClient(
 
     private fun fetchDecision(host: String): Pair<RemotePolicyDecision, Long?> {
         val encoded = URLEncoder.encode(host, "UTF-8").replace("+", "%20")
-        val conn = (URL(baseUrl.trimEnd('/') + "/api/browser/check?host=" + encoded)
+        val deviceConfig = BrowserDeviceConfigStore.load(context.applicationContext)
+        val baseUrl = deviceConfig?.serverUrl ?: fallbackBaseUrl
+        val deviceQuery = deviceConfig?.let {
+            "&deviceId=" + URLEncoder.encode(it.deviceId, "UTF-8").replace("+", "%20")
+        }.orEmpty()
+        val conn = (URL(baseUrl.trimEnd('/') + "/api/browser/check?host=" + encoded + deviceQuery)
             .openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5_000
             readTimeout = 12_000
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "YehudiKasherFilteredBrowser/1")
+            deviceConfig?.browserToken?.let { setRequestProperty("Authorization", "Bearer $it") }
             instanceFollowRedirects = false
         }
 
