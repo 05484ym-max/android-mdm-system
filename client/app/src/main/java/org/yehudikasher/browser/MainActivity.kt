@@ -3,6 +3,7 @@ package org.yehudikasher.browser
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -23,6 +24,7 @@ import android.webkit.WebView
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -31,6 +33,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,6 +47,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var forwardButton: Button
     private lateinit var refreshButton: Button
     private lateinit var pageTitle: TextView
+    private lateinit var faviconView: ImageView
+    private lateinit var tabButton: Button
+    private val tabs = CopyOnWriteArrayList<BrowserTab>()
+    private var activeTabId: Long = 1L
+    private var nextTabId: Long = 2L
+
+    private data class BrowserTab(
+        val id: Long,
+        var title: String = "כרטיסייה חדשה",
+        var url: String = "",
+    )
 
     private val policy by lazy { LocalPolicyStore.createPolicy() }
     private val remotePolicy by lazy { RemotePolicyClient(applicationContext) }
@@ -167,6 +181,13 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(4), 0, dp(4), dp(6))
         }
 
+        faviconView = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_search)
+            adjustViewBounds = true
+            alpha = 0.72f
+            contentDescription = "סמל האתר"
+        }
+
         pageTitle = TextView(this).apply {
             text = "דפדפן כשר"
             textSize = 12.5f
@@ -176,12 +197,10 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val tabButton = createNavButton("□ 1") {
-            // One protected WebView tab is intentionally kept as the default.
-            // The control is present in the browser chrome so multi-tab support
-            // can be added without changing navigation layout.
+        tabButton = createNavButton("□ 1") { anchor ->
+            showTabsMenu(anchor)
         }.apply {
-            contentDescription = "כרטיסייה נוכחית"
+            contentDescription = "כרטיסיות"
         }
 
         val menuButton = createNavButton("⋮") { anchor ->
@@ -190,6 +209,10 @@ class MainActivity : AppCompatActivity() {
             contentDescription = "תפריט דפדפן"
         }
 
+        titleRow.addView(
+            faviconView,
+            LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(8) }
+        )
         titleRow.addView(
             pageTitle,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -302,6 +325,8 @@ class MainActivity : AppCompatActivity() {
         shell.addView(titleRow)
         shell.addView(addressContainer)
         shell.addView(navRow)
+        tabs.add(BrowserTab(id = activeTabId))
+        updateTabButton()
         return shell
     }
 
@@ -319,6 +344,94 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(10), dp(6), dp(10), dp(6))
             setOnClickListener { onClick(it) }
         }
+
+    private fun showTabsMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        tabs.forEach { tab ->
+            val prefix = if (tab.id == activeTabId) "✓ " else ""
+            val label = tab.title.take(34).ifBlank { "כרטיסייה חדשה" }
+            popup.menu.add(prefix + label).setOnMenuItemClickListener {
+                switchToTab(tab.id)
+                true
+            }
+        }
+        popup.menu.add("+ כרטיסייה חדשה").setOnMenuItemClickListener {
+            createNewTab()
+            true
+        }
+        if (tabs.size > 1) {
+            popup.menu.add("סגור כרטיסייה נוכחית").setOnMenuItemClickListener {
+                closeCurrentTab()
+                true
+            }
+        }
+        popup.show()
+    }
+
+    private fun createNewTab() {
+        saveActiveTab()
+        val tab = BrowserTab(id = nextTabId++)
+        tabs.add(tab)
+        activeTabId = tab.id
+        BrowserTrustState.clear()
+        webView.loadUrl("about:blank")
+        webView.clearHistory()
+        addressBar.setText("")
+        pageTitle.text = "כרטיסייה חדשה"
+        faviconView.setImageResource(android.R.drawable.ic_menu_search)
+        showHome()
+        updateTabButton()
+    }
+
+    private fun switchToTab(id: Long) {
+        if (id == activeTabId) return
+        saveActiveTab()
+        val tab = tabs.firstOrNull { it.id == id } ?: return
+        activeTabId = id
+        BrowserTrustState.clear()
+        webView.clearHistory()
+        if (tab.url.isBlank()) {
+            addressBar.setText("")
+            pageTitle.text = tab.title
+            showHome()
+        } else {
+            addressBar.setText(tab.url)
+            pageTitle.text = tab.title
+            navigateToCandidate(tab.url)
+        }
+        updateTabButton()
+    }
+
+    private fun closeCurrentTab() {
+        if (tabs.size <= 1) return
+        val index = tabs.indexOfFirst { it.id == activeTabId }.coerceAtLeast(0)
+        tabs.removeAll { it.id == activeTabId }
+        val next = tabs.getOrNull(index.coerceAtMost(tabs.lastIndex)) ?: tabs.first()
+        activeTabId = next.id
+        BrowserTrustState.clear()
+        webView.clearHistory()
+        if (next.url.isBlank()) {
+            addressBar.setText("")
+            pageTitle.text = next.title
+            showHome()
+        } else {
+            addressBar.setText(next.url)
+            pageTitle.text = next.title
+            navigateToCandidate(next.url)
+        }
+        updateTabButton()
+    }
+
+    private fun saveActiveTab() {
+        val tab = tabs.firstOrNull { it.id == activeTabId } ?: return
+        val current = webView.url
+        tab.url = if (!current.isNullOrBlank() && current != "about:blank") current else addressBar.text?.toString().orEmpty()
+        tab.title = pageTitle.text?.toString()?.takeIf { it.isNotBlank() } ?: "כרטיסייה חדשה"
+    }
+
+    private fun updateTabButton() {
+        if (::tabButton.isInitialized) tabButton.text = "□ " + tabs.size
+    }
 
     private fun showBrowserMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
@@ -340,6 +453,18 @@ class MainActivity : AppCompatActivity() {
             if (webView.canGoForward()) webView.goForward()
             true
         }
+        popup.menu.add("כרטיסייה חדשה").setOnMenuItemClickListener {
+            createNewTab()
+            true
+        }
+        popup.menu.add("העתק כתובת").setOnMenuItemClickListener {
+            val url = webView.url?.takeIf { it != "about:blank" } ?: addressBar.text?.toString().orEmpty()
+            if (url.isNotBlank()) {
+                val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("URL", url))
+            }
+            true
+        }
         popup.show()
     }
 
@@ -353,6 +478,8 @@ class MainActivity : AppCompatActivity() {
         if (!current.isNullOrBlank() && current != "about:blank" && !addressBar.hasFocus()) {
             addressBar.setText(current)
         }
+        saveActiveTab()
+        updateTabButton()
     }
 
     override fun onDestroy() {
@@ -406,6 +533,18 @@ class MainActivity : AppCompatActivity() {
         view.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 super.onProgressChanged(view, newProgress)
+                progressBar.isIndeterminate = false
+                progressBar.progress = newProgress
+                if (newProgress in 1..99 && webView.visibility == View.VISIBLE) {
+                    progressBar.visibility = View.VISIBLE
+                    refreshButton.text = "✕"
+                    refreshButton.setOnClickListener { webView.stopLoading() }
+                } else if (newProgress >= 100) {
+                    refreshButton.text = "↻"
+                    refreshButton.setOnClickListener {
+                        if (webView.visibility == View.VISIBLE) webView.reload()
+                    }
+                }
                 updateBrowserChrome()
                 if (newProgress >= 100 && webView.visibility == View.VISIBLE) {
                     progressBar.visibility = View.GONE
@@ -415,8 +554,14 @@ class MainActivity : AppCompatActivity() {
 
             override fun onReceivedTitle(view: WebView?, title: String?) {
                 super.onReceivedTitle(view, title)
-                pageTitle.text = title?.takeIf { it.isNotBlank() } ?: "דפדפן כשר"
+                pageTitle.text = title?.takeIf { it.isNotBlank() } ?: displayHost(view?.url.orEmpty()) ?: "דפדפן כשר"
+                saveActiveTab()
                 updateBrowserChrome()
+            }
+
+            override fun onReceivedIcon(view: WebView?, icon: Bitmap?) {
+                super.onReceivedIcon(view, icon)
+                if (icon != null) faviconView.setImageBitmap(icon)
             }
 
             override fun onCreateWindow(
@@ -576,7 +721,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showHome() {
         BrowserTrustState.clear()
-        if (::pageTitle.isInitialized) pageTitle.text = "דפדפן כשר"
+        if (::pageTitle.isInitialized) pageTitle.text = "כרטיסייה חדשה"
+        if (::faviconView.isInitialized) faviconView.setImageResource(android.R.drawable.ic_menu_search)
         if (::backButton.isInitialized && ::webView.isInitialized) updateBrowserChrome()
         progressBar.visibility = View.GONE
         webView.visibility = View.GONE
@@ -593,7 +739,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "דפדפן כשר"
+            text = "חיפוש באינטרנט"
             textSize = 18f
             setTextColor(textColor)
             typeface = Typeface.create("sans-serif-black", Typeface.NORMAL)
@@ -601,7 +747,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val body = TextView(this).apply {
-            text = "כל אתר נבדק ומאושר לפני שהוא נפתח אצלך"
+            text = "הקלד כתובת אתר או חיפוש בשורת הכתובת למעלה"
             textSize = 13.5f
             setTextColor(textDimColor)
             gravity = Gravity.CENTER
