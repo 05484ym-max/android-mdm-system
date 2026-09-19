@@ -12,6 +12,17 @@ object StrictImageHardening {
     // images without passing through the native moderation proxy.
     private val script = """
         (() => {
+          const fullTrust = () => {
+            try {
+              return typeof YkTrustedPage !== 'undefined' &&
+                YkTrustedPage.isFullTrust() === true;
+            } catch (_) {
+              return false;
+            }
+          };
+
+          if (fullTrust()) return;
+
           const blockedScheme = value => {
             const s = String(value || '').trim().toLowerCase();
             return s.startsWith('blob:') || s.startsWith('data:');

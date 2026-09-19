@@ -12,7 +12,29 @@ data class RemotePolicyDecision(
     val allowed: Boolean,
     val reason: String,
     val expiresAtMs: Long? = null,
+    val fullTrust: Boolean = false,
 )
+
+object BrowserTrustState {
+    @Volatile private var trustedHost: String? = null
+
+    fun setTrustedHost(rawHost: String?) {
+        trustedHost = UrlPolicy.normalizeHost(rawHost)
+    }
+
+    fun clear() {
+        trustedHost = null
+    }
+
+    fun clearIfDifferent(rawHost: String?) {
+        val normalized = UrlPolicy.normalizeHost(rawHost)
+        if (normalized == null || normalized != trustedHost) trustedHost = null
+    }
+
+    fun isActive(): Boolean = trustedHost != null
+    fun isTrustedHost(rawHost: String?): Boolean =
+        UrlPolicy.normalizeHost(rawHost)?.let { it == trustedHost } == true
+}
 
 class RemotePolicyClient(
     private val context: Context,
@@ -64,6 +86,19 @@ class RemotePolicyClient(
         return expiringDecision
     }
 
+    fun peekCachedDecision(rawHost: String): RemotePolicyDecision? {
+        val host = UrlPolicy.normalizeHost(rawHost) ?: return null
+        val now = System.currentTimeMillis()
+        synchronized(cacheLock) {
+            val cached = cache[host] ?: return null
+            if (cached.expiresAtMs <= now) {
+                cache.remove(host)
+                return null
+            }
+            return cached.decision
+        }
+    }
+
     private fun fetchDecision(host: String): Pair<RemotePolicyDecision, Long?> {
         val encoded = URLEncoder.encode(host, "UTF-8").replace("+", "%20")
         val deviceConfig = BrowserDeviceConfigStore.load(context.applicationContext)
@@ -108,7 +143,8 @@ class RemotePolicyClient(
                     }
                 }
 
-            RemotePolicyDecision(allowed, reason) to expiresAt
+            val fullTrust = allowed && json?.optBoolean("allowlisted", false) == true
+            RemotePolicyDecision(allowed, reason, fullTrust = fullTrust) to expiresAt
         } catch (_: Exception) {
             RemotePolicyDecision(false, "classifier_unreachable") to null
         } finally {

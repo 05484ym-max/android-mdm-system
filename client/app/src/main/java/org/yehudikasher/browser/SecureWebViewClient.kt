@@ -32,6 +32,7 @@ class SecureWebViewClient(
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         val result = policy.evaluate(url)
+        BrowserTrustState.clearIfDifferent(result.normalizedHost)
         if (result.decision != LocalDecision.ALLOW) {
             view?.stopLoading()
             if (result.reason == "not_in_local_policy" && result.normalizedHost != null) {
@@ -49,6 +50,15 @@ class SecureWebViewClient(
         request: WebResourceRequest?
     ): WebResourceResponse? {
         val rawUrl = request?.url?.toString()
+
+        // A site explicitly approved by the administrator is a full-trust
+        // page: its subresources and images are not filtered. Browser-level
+        // transport protections (HTTPS/mixed-content policy, SSL errors and
+        // Safe Browsing) remain enforced outside this interception path.
+        if (BrowserTrustState.isActive()) {
+            return super.shouldInterceptRequest(view, request)
+        }
+
         val result = policy.evaluate(rawUrl)
 
         var hostAllowed = result.decision == LocalDecision.ALLOW
@@ -151,7 +161,14 @@ class SecureWebViewClient(
 
     private fun enforceNavigation(view: WebView?, rawUrl: String?): Boolean {
         val result = policy.evaluate(rawUrl)
+        BrowserTrustState.clearIfDifferent(result.normalizedHost)
+
         if (result.decision == LocalDecision.ALLOW) {
+            val host = result.normalizedHost
+            val cached = host?.let { remotePolicy.peekCachedDecision(it) }
+            if (cached?.allowed == true && cached.fullTrust) {
+                BrowserTrustState.setTrustedHost(host)
+            }
             return false
         }
 
