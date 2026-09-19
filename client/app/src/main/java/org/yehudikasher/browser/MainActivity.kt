@@ -26,6 +26,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.PopupMenu
 import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -39,6 +40,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progressBar: ProgressBar
     private lateinit var contentFrame: FrameLayout
     private lateinit var statePanel: LinearLayout
+    private lateinit var backButton: Button
+    private lateinit var forwardButton: Button
+    private lateinit var refreshButton: Button
+    private lateinit var pageTitle: TextView
 
     private val policy by lazy { LocalPolicyStore.createPolicy() }
     private val remotePolicy by lazy { RemotePolicyClient(applicationContext) }
@@ -73,7 +78,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(14), dp(18), dp(14), dp(14))
         }
 
-        root.addView(createAddressBar())
+        root.addView(createBrowserChrome())
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             isIndeterminate = true
@@ -149,46 +154,91 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createAddressBar(): View {
-        val container = LinearLayout(this).apply {
+    private fun createBrowserChrome(): View {
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+
+        val titleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            setPadding(dp(10), dp(7), dp(10), dp(7))
-            background = roundedBackground(cardColor, dp(14).toFloat(), borderColor, dp(1))
+            setPadding(dp(4), 0, dp(4), dp(6))
+        }
+
+        pageTitle = TextView(this).apply {
+            text = "דפדפן כשר"
+            textSize = 12.5f
+            setTextColor(textDimColor)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val tabButton = createNavButton("□ 1") {
+            // One protected WebView tab is intentionally kept as the default.
+            // The control is present in the browser chrome so multi-tab support
+            // can be added without changing navigation layout.
+        }.apply {
+            contentDescription = "כרטיסייה נוכחית"
+        }
+
+        val menuButton = createNavButton("⋮") { anchor ->
+            showBrowserMenu(anchor)
+        }.apply {
+            contentDescription = "תפריט דפדפן"
+        }
+
+        titleRow.addView(
+            pageTitle,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        titleRow.addView(tabButton)
+        titleRow.addView(menuButton)
+
+        val addressContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = roundedBackground(cardColor, dp(22).toFloat(), borderColor, dp(1))
         }
 
         val goButton = Button(this).apply {
-            text = "פתח"
-            textSize = 14.5f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            text = "➜"
+            textSize = 17f
             setTextColor(Color.WHITE)
-            background = roundedBackground(accentColor, dp(12).toFloat())
+            background = roundedBackground(accentColor, dp(18).toFloat())
             setOnClickListener { navigateFromAddressBar() }
             isAllCaps = false
             minHeight = 0
             minimumHeight = 0
-            setPadding(dp(14), dp(9), dp(14), dp(9))
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            contentDescription = "פתח כתובת"
         }
 
         statusChip = TextView(this).apply {
             visibility = View.GONE
-            textSize = 11f
+            textSize = 10.5f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             gravity = Gravity.CENTER
-            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
         }
 
         addressBar = EditText(this).apply {
-            hint = "חיפוש או כתובת אתר..."
+            hint = "חיפוש או הקלדת כתובת"
             setHintTextColor(textDimColor)
             setTextColor(textColor)
-            textSize = 13.5f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_NORMAL
+            textSize = 14f
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             textDirection = View.TEXT_DIRECTION_FIRST_STRONG
             setSingleLine(true)
+            setSelectAllOnFocus(true)
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_GO ||
                     actionId == EditorInfo.IME_ACTION_SEARCH ||
@@ -204,26 +254,105 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(8), 0, dp(8), 0)
         }
 
-        container.addView(goButton)
-        container.addView(
+        addressContainer.addView(goButton)
+        addressContainer.addView(
             statusChip,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginStart = dp(8)
-            }
+            ).apply { marginStart = dp(6) }
         )
-        container.addView(
+        addressContainer.addView(
             addressBar,
-            LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            )
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
 
-        return container
+        val navRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            setPadding(0, dp(7), 0, 0)
+        }
+
+        backButton = createNavButton("‹") {
+            if (::webView.isInitialized && webView.canGoBack()) webView.goBack()
+        }.apply { contentDescription = "חזרה" }
+
+        forwardButton = createNavButton("›") {
+            if (::webView.isInitialized && webView.canGoForward()) webView.goForward()
+        }.apply { contentDescription = "קדימה" }
+
+        refreshButton = createNavButton("↻") {
+            if (::webView.isInitialized && webView.visibility == View.VISIBLE) webView.reload()
+        }.apply { contentDescription = "רענון" }
+
+        val homeButton = createNavButton("⌂") {
+            addressBar.setText("")
+            if (::webView.isInitialized) webView.loadUrl("about:blank")
+            showHome()
+        }.apply { contentDescription = "דף הבית" }
+
+        listOf(backButton, forwardButton, refreshButton, homeButton).forEach { button ->
+            navRow.addView(
+                button,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            )
+        }
+
+        shell.addView(titleRow)
+        shell.addView(addressContainer)
+        shell.addView(navRow)
+        return shell
+    }
+
+    private fun createNavButton(label: String, onClick: (View) -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = 18f
+            setTextColor(textColor)
+            background = roundedBackground(Color.TRANSPARENT, dp(14).toFloat())
+            isAllCaps = false
+            minHeight = 0
+            minimumHeight = 0
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener { onClick(it) }
+        }
+
+    private fun showBrowserMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menu.add("דף הבית").setOnMenuItemClickListener {
+            addressBar.setText("")
+            webView.loadUrl("about:blank")
+            showHome()
+            true
+        }
+        popup.menu.add("רענן").setOnMenuItemClickListener {
+            if (webView.visibility == View.VISIBLE) webView.reload()
+            true
+        }
+        popup.menu.add("חזרה").setOnMenuItemClickListener {
+            if (webView.canGoBack()) webView.goBack()
+            true
+        }
+        popup.menu.add("קדימה").setOnMenuItemClickListener {
+            if (webView.canGoForward()) webView.goForward()
+            true
+        }
+        popup.show()
+    }
+
+    private fun updateBrowserChrome() {
+        if (!::webView.isInitialized) return
+        backButton.isEnabled = webView.canGoBack()
+        forwardButton.isEnabled = webView.canGoForward()
+        backButton.alpha = if (backButton.isEnabled) 1f else 0.35f
+        forwardButton.alpha = if (forwardButton.isEnabled) 1f else 0.35f
+        val current = webView.url
+        if (!current.isNullOrBlank() && current != "about:blank" && !addressBar.hasFocus()) {
+            addressBar.setText(current)
+        }
     }
 
     override fun onDestroy() {
@@ -277,10 +406,17 @@ class MainActivity : AppCompatActivity() {
         view.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 super.onProgressChanged(view, newProgress)
+                updateBrowserChrome()
                 if (newProgress >= 100 && webView.visibility == View.VISIBLE) {
                     progressBar.visibility = View.GONE
                     setAllowedChip()
                 }
+            }
+
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                super.onReceivedTitle(view, title)
+                pageTitle.text = title?.takeIf { it.isNotBlank() } ?: "דפדפן כשר"
+                updateBrowserChrome()
             }
 
             override fun onCreateWindow(
@@ -440,6 +576,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showHome() {
         BrowserTrustState.clear()
+        if (::pageTitle.isInitialized) pageTitle.text = "דפדפן כשר"
+        if (::backButton.isInitialized && ::webView.isInitialized) updateBrowserChrome()
         progressBar.visibility = View.GONE
         webView.visibility = View.GONE
         statusChip.visibility = View.GONE
