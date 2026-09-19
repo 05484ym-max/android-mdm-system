@@ -14,6 +14,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -236,6 +237,13 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView(view: WebView, serviceWorkerSafe: Boolean) {
+        // Expose only a boolean trust signal. It carries no device identity,
+        // token, policy data or mutation capability.
+        view.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun isFullTrust(): Boolean = BrowserTrustState.isActive()
+        }, "YkTrustedPage")
+
         // Install document-start hardening before JavaScript is enabled and
         // before any page is loaded. If this WebView cannot guarantee the
         // pre-page hook, keep JavaScript disabled rather than allowing blob:
@@ -344,6 +352,7 @@ class MainActivity : AppCompatActivity() {
         val result = policy.evaluate(candidate)
         when {
             result.decision == LocalDecision.ALLOW -> {
+                applyTrustForHost(result.normalizedHost)
                 addressBar.setText(candidate)
                 showLoading()
                 webView.loadUrl(candidate)
@@ -358,6 +367,7 @@ class MainActivity : AppCompatActivity() {
         val local = policy.evaluate(candidate)
         val host = local.normalizedHost
         if (local.decision == LocalDecision.ALLOW) {
+            applyTrustForHost(host)
             runOnUiThread {
                 if (!isFinishing && !isDestroyed) {
                     addressBar.setText(candidate)
@@ -383,6 +393,8 @@ class MainActivity : AppCompatActivity() {
 
             if (remote.allowed) {
                 policy.rememberRemoteAllow(host, remote.expiresAtMs)
+                if (remote.fullTrust) BrowserTrustState.setTrustedHost(host)
+                else BrowserTrustState.clear()
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         addressBar.setText(candidate)
@@ -397,6 +409,19 @@ class MainActivity : AppCompatActivity() {
                 else showBlocked(candidate, remote.reason)
             }
         }.start()
+    }
+
+    private fun applyTrustForHost(host: String?) {
+        if (host == null) {
+            BrowserTrustState.clear()
+            return
+        }
+        val cached = remotePolicy.peekCachedDecision(host)
+        if (cached?.allowed == true && cached.fullTrust) {
+            BrowserTrustState.setTrustedHost(host)
+        } else {
+            BrowserTrustState.clear()
+        }
     }
 
     private fun showChecking(host: String) {
@@ -414,6 +439,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showHome() {
+        BrowserTrustState.clear()
         progressBar.visibility = View.GONE
         webView.visibility = View.GONE
         statusChip.visibility = View.GONE
@@ -457,6 +483,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showBlocked(url: String, reason: String) {
+        BrowserTrustState.clear()
         runOnUiThread {
             webView.stopLoading()
             webView.visibility = View.GONE
@@ -488,6 +515,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTechnicalError(reason: String) {
+        BrowserTrustState.clear()
         runOnUiThread {
             webView.stopLoading()
             webView.visibility = View.GONE
