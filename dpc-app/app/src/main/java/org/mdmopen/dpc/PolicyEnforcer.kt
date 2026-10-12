@@ -225,7 +225,6 @@ class PolicyEnforcer(private val context: Context) {
 
         val failed = mutableSetOf<String>()
         val recovered = mutableSetOf<String>()
-        val previouslyHidden = Config.policyHiddenApps(context)
 
         // Restore hidden packages FIRST, so PackageManager can inspect their suspension.
         for (pkg in installed) {
