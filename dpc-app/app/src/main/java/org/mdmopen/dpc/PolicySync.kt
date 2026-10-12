@@ -11,6 +11,7 @@ object PolicySync {
     private const val PACKAGE_ATTEMPT_TIMEOUT_MS = 20L * 60L * 1000L
     private val syncLock = Any()
     private val commandLock = Any()
+    @Volatile private var releaseInProgress = false
     private val asyncPackageCommands = setOf("INSTALL_APP", "UNINSTALL_APP")
 
     private data class PreparedSync(
@@ -21,7 +22,9 @@ object PolicySync {
     )
 
     fun run(context: Context): String {
+        if (releaseInProgress) return "שחרור ניהול מתבצע; סנכרון רגיל נדחה"
         val prepared = synchronized(syncLock) {
+            if (releaseInProgress) return@synchronized null
             val serverUrl = Config.serverUrl(context)
             require(serverUrl.isNotEmpty()) { "לא הוגדרה כתובת שרת" }
 
@@ -36,6 +39,21 @@ object PolicySync {
                 deviceId,
                 DeviceHealth.collect(context, enforcer.isDeviceOwner()),
             )
+
+            // A release is irreversible. Do not reapply the old restrictive policy
+            // or start an unrelated queued action before executing it.
+            val release = result.commands.firstOrNull { it.command == "RELEASE_DEVICE_OWNER" }
+            if (release != null) {
+                releaseInProgress = true
+                return@synchronized PreparedSync(
+                    api, deviceId, listOf(release), "שחרור Device Owner בעדיפות על סנכרון מדיניות",
+                )
+            }
+            if (!enforcer.isDeviceOwner()) {
+                return@synchronized PreparedSync(
+                    api, deviceId, emptyList(), "המכשיר כבר אינו Device Owner; אין אכיפת מדיניות",
+                )
+            }
 
             runCatching { api.fetchProtectionTarget(deviceId) }
                 .onSuccess { RequestedProtectionStore.save(context, it) }
@@ -89,10 +107,17 @@ object PolicySync {
             PreparedSync(api, deviceId, result.commands, summary)
         }
 
-        val outcomes = synchronized(commandLock) {
-            val executor = CommandExecutor(context)
-            prepared.commands.map { queued ->
-                executeCommandIdempotently(context, prepared.api, prepared.deviceId, executor, queued)
+        if (prepared == null) return "שחרור ניהול מתבצע; סנכרון רגיל נדחה"
+        val outcomes = try {
+            synchronized(commandLock) {
+                val executor = CommandExecutor(context)
+                prepared.commands.map { queued ->
+                    executeCommandIdempotently(context, prepared.api, prepared.deviceId, executor, queued)
+                }
+            }
+        } finally {
+            if (prepared.commands.any { it.command == "RELEASE_DEVICE_OWNER" }) {
+                releaseInProgress = false
             }
         }
 
@@ -111,7 +136,10 @@ object PolicySync {
     ): String {
         val previous = CommandJournal.get(context, queued.id)
         if (previous?.terminal == true) {
-            safeReport(api, deviceId, queued.id, previous.status, previous.message)
+            val acknowledged = safeReport(api, deviceId, queued.id, previous.status, previous.message)
+            if (queued.command == "RELEASE_DEVICE_OWNER" && previous.status == "SUCCESS" && acknowledged) {
+                executor.requestSelfUninstall()
+            }
             return "פקודה ${queued.command} כבר הושלמה בעבר (${previous.status})"
         }
 
@@ -135,7 +163,8 @@ object PolicySync {
                     if (!PolicyEnforcer(context).isDeviceOwner()) {
                         val message = "הסרת Device Owner אומתה לאחר הפקודה"
                         CommandJournal.markTerminal(context, queued.id, "SUCCESS", message)
-                        safeReport(api, deviceId, queued.id, "SUCCESS", message)
+                        val acknowledged = safeReport(api, deviceId, queued.id, "SUCCESS", message)
+                        if (acknowledged) executor.requestSelfUninstall()
                         return message
                     }
                 }
@@ -164,7 +193,10 @@ object PolicySync {
                 message
             } else {
                 CommandJournal.markTerminal(context, queued.id, "SUCCESS", message)
-                safeReport(api, deviceId, queued.id, "SUCCESS", message)
+                val acknowledged = safeReport(api, deviceId, queued.id, "SUCCESS", message)
+                if (queued.command == "RELEASE_DEVICE_OWNER" && acknowledged) {
+                    executor.requestSelfUninstall()
+                }
                 message
             }
         } catch (e: Exception) {
@@ -185,11 +217,11 @@ object PolicySync {
         commandId: String,
         status: String,
         message: String?,
-    ) {
-        try {
-            api.reportCommandResult(deviceId, commandId, status, message)
-        } catch (e: Exception) {
-            Log.w(TAG, "Command result report failed; leased redelivery will retry", e)
-        }
+    ): Boolean = try {
+        api.reportCommandResult(deviceId, commandId, status, message)
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "Command result report failed; leased redelivery will retry", e)
+        false
     }
 }

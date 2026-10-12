@@ -19,6 +19,9 @@ const newsUi = read('admin-panel/news.js');
 const fullOpenUi = read('admin-panel/full-open.js');
 const subscriptionUi = read('admin-panel/subscription-unblock.js');
 const releaseUi = read('admin-panel/permanent-release.js');
+const dbSource = read('backend/db.js');
+const syncSource = read('dpc-app/app/src/main/java/org/mdmopen/dpc/PolicySync.kt');
+const enforcerSource = read('dpc-app/app/src/main/java/org/mdmopen/dpc/PolicyEnforcer.kt');
 const appImportUi = read('admin-panel/app-import.js');
 const apkUploadUi = read('admin-panel/apk-upload.js');
 const playStoreSearch = read('backend/playStoreSearch.js');
@@ -53,6 +56,22 @@ function excludes(source, text, label) {
 includes(releaseUi, 'adminPassword', 'release password prompt');
 includes(index, "command === 'WIPE' || command === 'RELEASE_DEVICE_OWNER'", 'irreversible command re-auth gate');
 includes(index, 'bcrypt.compareSync(adminPassword, ADMIN_PASSWORD_HASH)', 'server password verification');
+
+// A release is only successful when the device finishes cleanup and reports it.
+// Lost command acknowledgements must be retried without replaying WIPE.
+includes(dbSource, "command = 'RELEASE_DEVICE_OWNER'", 'release-only retry scope');
+includes(dbSource, "delivered_at < now() - interval '2 minutes'", 'release delivery lease');
+includes(dbSource, 'FOR UPDATE SKIP LOCKED', 'atomic release claim');
+includes(dbSource, 'result_status, result_message, completed_at', 'reported command outcome');
+includes(index, 'hasActiveReleaseCommand', 'reject duplicate pending release');
+includes(panelHtml, "c.resultStatus === 'SUCCESS'", 'confirmed release success status');
+includes(panelHtml, "c.resultStatus === 'FAILED'", 'confirmed release failure status');
+includes(releaseUi, 'עדיין לא אושרה על ידי המכשיר', 'no optimistic release completion');
+includes(syncSource, 'val release = result.commands.firstOrNull', 'release before policy application');
+includes(syncSource, 'if (releaseInProgress)', 'concurrent sync suppression during release');
+includes(syncSource, 'executor.requestSelfUninstall()', 'uninstall only after acknowledgement');
+includes(enforcerSource, 'pm.isPackageSuspended(pkg)', 'verify actual app suspension');
+includes(enforcerSource, 'WhatsAppGuardConfig.save(context, WhatsAppGuardPolicy())', 'disable standalone guard during release');
 
 excludes(customerSearch, 'WhatsApp יישאר נעול עד אז', 'stale WhatsApp fail-closed status');
 includes(customerSearch, 'מצב חסימת WhatsApp במכשיר:', 'actual WhatsApp block status');

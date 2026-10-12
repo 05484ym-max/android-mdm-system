@@ -68,11 +68,9 @@ class CommandExecutor(private val context: Context) {
             // enterprise recovery credentials.
             FactoryResetProtectionManager(context).clearManagedPolicyForRelease()
             PolicyEnforcer(context).releaseDeviceOwner()
-            if (requestSelfUninstall()) {
-                "ניהול המכשיר הוסר; Android פתח את תהליך מחיקת אפליקציית הניהול"
-            } else {
-                "ניהול המכשיר הוסר; לא ניתן היה לפתוח אוטומטית את מסך מחיקת אפליקציית הניהול"
-            }
+            // Launch uninstall only AFTER the server has acknowledged success.
+            // Otherwise Android might kill this process before the result is reported.
+            "ניהול Device Owner והגבלות המערכת הוסרו; ממתין לאישור השרת לפני פתיחת המחיקה"
         }
         "ENABLE_DNS_FILTERING" -> AdBlockDns.enable(
             context,
@@ -82,7 +80,7 @@ class CommandExecutor(private val context: Context) {
         else -> throw IllegalArgumentException("פקודה לא מוכרת: ${queued.command}")
     }
 
-    private fun requestSelfUninstall(): Boolean = try {
+    fun requestSelfUninstall(): Boolean = try {
         val intent = Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}")).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }

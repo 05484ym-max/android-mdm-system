@@ -815,6 +815,7 @@ function escapeHtml(str) {
 function commandLabel(cmd) {
   return {
     LOCK: 'נעילה', SYNC_POLICY: 'סנכרון מדיניות', REBOOT: 'הפעלה מחדש',
+    RELEASE_DEVICE_OWNER: 'שחרור מכשיר מניהול',
     WIPE: 'מחיקת מכשיר', INSTALL_APP: 'התקנת אפליקציה', UNINSTALL_APP: 'הסרת אפליקציה',
     OPEN_PLAY_STORE_INSTALL: 'התקנה דרך Play Store',
     OPEN_PLAY_STORE_SYSTEM_COMPONENT: 'עדכון רכיב מערכת (Google Play Services)',
@@ -1202,7 +1203,7 @@ function renderDeviceDetail(deviceId) {
 
   const cmdLog =
     (pending.length ? '<div class="cmd-log-title">ממתינות לשליחה:</div>' + pending.map(c => `<div class="cmd-log-item cmd-pending">${escapeHtml(commandLabel(c.command))} · ${escapeHtml(new Date(c.queuedAt).toLocaleString('he-IL'))}</div>`).join('') : '') +
-    (history.length ? '<div class="cmd-log-title">היסטוריה:</div>' + history.slice(-5).reverse().map(c => `<div class="cmd-log-item">${escapeHtml(commandLabel(c.command))} · נשלח ${escapeHtml(new Date(c.deliveredAt).toLocaleString('he-IL'))}</div>`).join('') : '') +
+    (history.length ? '<div class="cmd-log-title">היסטוריה:</div>' + history.slice(-5).reverse().map(c => `<div class="cmd-log-item">${escapeHtml(commandLabel(c.command))} · ${escapeHtml(c.resultStatus === 'SUCCESS' ? '✓ בוצעה בהצלחה' : c.resultStatus === 'FAILED' ? '✕ נכשלה' : '⌛ נשלחה, ממתינה לאישור')} · ${escapeHtml(new Date(c.deliveredAt).toLocaleString('he-IL'))}${c.resultMessage ? ' · ' + escapeHtml(c.resultMessage) : ''}</div>`).join('') : '') +
     (!pending.length && !history.length ? '<div class="no-apps">אין פקודות עדיין</div>' : '');
 
   document.getElementById('detailContent').innerHTML = `
