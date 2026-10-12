@@ -2073,6 +2073,11 @@ app.post('/api/devices/:deviceId/commands', requireAdmin, wrap(async (req, res) 
   if (command === 'DISABLE_DNS_FILTERING') {
     await db.setDnsDesiredState(req.params.deviceId, null, false);
   }
+  if (command === 'RELEASE_DEVICE_OWNER' && await db.hasActiveReleaseCommand(req.params.deviceId)) {
+    return res.status(409).json({
+      error: 'פקודת שחרור כבר ממתינה לאישור ביצוע מהמכשיר. אין לשלוח שחרור נוסף.',
+    });
+  }
   await db.queueCommand(req.params.deviceId, crypto.randomUUID(), command, params);
   await push.wake(device.pushToken);
   const refreshed = await db.getDevice(req.params.deviceId);
