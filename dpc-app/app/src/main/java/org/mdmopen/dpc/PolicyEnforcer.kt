@@ -408,6 +408,12 @@ class PolicyEnforcer(private val context: Context) {
 
     fun releaseDeviceOwner() {
         check(isDeviceOwner()) { "Not device owner" }
+        // Close any guarded Play install before unhiding packages: its receiver
+        // could otherwise quarantine a restored package as a new installation.
+        PlayStoreGate.cancelCurrentInstall(context, "חלון ההתקנה נסגר לפני שחרור המכשיר")
+        PlayInstallGuard.abortCurrent(context)
+        ManagedInstallWindow.forceClose(context)
+        Config.setPlayStoreAllowedUntil(context, System.currentTimeMillis())
         val recovery = applyFullOpen()
         check(recovery.failed.isEmpty()) {
             "Cannot safely release device owner; failed to recover: ${recovery.failed.joinToString(",")}" 
@@ -433,7 +439,6 @@ class PolicyEnforcer(private val context: Context) {
             "Cannot disable WhatsApp Guard before releasing Device Owner"
         }
 
-        ManagedInstallWindow.forceClose(context)
         disableKiosk()
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
