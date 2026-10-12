@@ -1214,6 +1214,18 @@ async function completeCommand(deviceId, commandId, status, message) {
       [commandId, deviceId, status, message || null],
     );
     if (rows.length && rows[0].command === 'RELEASE_DEVICE_OWNER' && status === 'SUCCESS') {
+      // The server must also stop describing the former owner as managed or
+      // requesting DNS filtering after the device confirms release.
+      await client.query(
+        `UPDATE devices
+            SET is_device_owner = false,
+                dns_filtering_requested = false,
+                dns_desired_provider_host = NULL,
+                status = jsonb_set(COALESCE(status, '{}'::jsonb),
+                                   '{isDeviceOwner}', 'false'::jsonb, true)
+          WHERE device_id = $1`,
+        [deviceId],
+      );
       // Commands not yet completed cannot run after ownership is relinquished.
       await client.query(
         `UPDATE commands
