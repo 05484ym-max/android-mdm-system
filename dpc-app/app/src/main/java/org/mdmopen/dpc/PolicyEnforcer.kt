@@ -208,16 +208,20 @@ class PolicyEnforcer(private val context: Context) {
         try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
         disableKiosk()
 
-        // MATCH_UNINSTALLED_PACKAGES also returns packages that are no longer installed.
-        // Never treat those or non-suspendable system apps as failed recovery.
+        // Include packages that the device owner marked hidden without treating
+        // genuinely removed packages as a release failure.
         val pm = context.packageManager
-        val installed = (
-            pm.getInstalledApplications(0) +
-                pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
-            ).filter { (it.flags and ApplicationInfo.FLAG_INSTALLED) != 0 }
+        val previouslyHidden = Config.policyHiddenApps(context)
+        val normalPackages = pm.getInstalledApplications(0).map { it.packageName }.toSet()
+        val additionalPackages = pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
             .map { it.packageName }
-            .filter { it != context.packageName }
-            .distinct()
+        val installed = (normalPackages + additionalPackages + previouslyHidden)
+            .filter { pkg ->
+                pkg != context.packageName && (
+                    pkg in normalPackages ||
+                    runCatching { dpm.isApplicationHidden(admin, pkg) }.getOrDefault(false)
+                )
+            }.distinct()
 
         val failed = mutableSetOf<String>()
         val recovered = mutableSetOf<String>()
