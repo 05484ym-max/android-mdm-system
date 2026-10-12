@@ -208,40 +208,69 @@ class PolicyEnforcer(private val context: Context) {
         try { dpm.setPermittedAccessibilityServices(admin, null) } catch (_: Exception) {}
         disableKiosk()
 
-        val recovered = mutableListOf<String>()
-        val failed = mutableListOf<String>()
-        val normallyVisible = context.packageManager.getInstalledApplications(0).map { it.packageName }
-        val hiddenVisible = try {
-            context.packageManager.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
-                .map { it.packageName }
-        } catch (_: Exception) { emptyList() }
-        val installed = (normallyVisible + hiddenVisible + Config.policyHiddenApps(context))
+        // MATCH_UNINSTALLED_PACKAGES also returns packages that are no longer installed.
+        // Never treat those or non-suspendable system apps as failed recovery.
+        val pm = context.packageManager
+        val installed = (
+            pm.getInstalledApplications(0) +
+                pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
+            ).filter { (it.flags and ApplicationInfo.FLAG_INSTALLED) != 0 }
+            .map { it.packageName }
             .filter { it != context.packageName }
             .distinct()
 
-        if (installed.isNotEmpty()) {
-            try {
-                val failedSuspended = dpm.setPackagesSuspended(admin, installed.toTypedArray(), false).toSet()
-                recovered += installed.filter { it !in failedSuspended }
-                failed += failedSuspended
-            } catch (_: Exception) {
-            }
-        }
+        val failed = mutableSetOf<String>()
+        val recovered = mutableSetOf<String>()
+        val previouslyHidden = Config.policyHiddenApps(context)
+
+        // Restore hidden packages FIRST, so PackageManager can inspect their suspension.
         for (pkg in installed) {
             try {
-                if (dpm.isApplicationHidden(admin, pkg) && !dpm.setApplicationHidden(admin, pkg, false)) {
-                    failed += pkg
+                if (dpm.isApplicationHidden(admin, pkg)) {
+                    if (dpm.setApplicationHidden(admin, pkg, false)) recovered += pkg
+                    else failed += pkg
                 }
             } catch (_: Exception) {
-                failed += pkg
+                if (pkg in previouslyHidden) failed += pkg
             }
         }
-        val failedSet = failed.toSet()
-        Config.setPolicyHiddenApps(context, Config.policyHiddenApps(context).intersect(failedSet))
+
+        // Unsuspend only packages Android reports as suspended, not every system package.
+        // Android can legitimately refuse setPackagesSuspended(false) for non-suspendable
+        // system packages, even when they were never blocked.
+        val suspended = installed.filter { pkg ->
+            try {
+                pm.isPackageSuspended(pkg)
+            } catch (_: Exception) {
+                if (pkg in previouslyHidden) failed += pkg
+                false
+            }
+        }
+        if (suspended.isNotEmpty()) {
+            try {
+                dpm.setPackagesSuspended(admin, suspended.toTypedArray(), false)
+            } catch (_: Exception) {
+                failed += suspended
+            }
+        }
+
+        // The platform state, not the setter return value, determines release safety.
+        for (pkg in installed) {
+            try {
+                if (dpm.isApplicationHidden(admin, pkg) || pm.isPackageSuspended(pkg)) {
+                    failed += pkg
+                } else if (pkg in suspended || pkg in previouslyHidden) {
+                    recovered += pkg
+                }
+            } catch (_: Exception) {
+                if (pkg in suspended || pkg in previouslyHidden) failed += pkg
+            }
+        }
+        Config.setPolicyHiddenApps(context, previouslyHidden.intersect(failed))
         return EnforcementResult(
             suspended = emptyList(),
-            unsuspended = recovered.distinct() - failedSet,
-            failed = failed.distinct(),
+            unsuspended = (recovered - failed).toList(),
+            failed = failed.toList(),
             systemAppsSkipped = 0,
             kioskEnabled = false,
         )
@@ -393,6 +422,14 @@ class PolicyEnforcer(private val context: Context) {
             "Cannot safely release device owner; managed DNS did not clear ($dnsModeAfterDisable): $dnsMessage"
         }
 
+        // Release is irreversible: turn off the independently running accessibility
+        // guard and its watchdog before giving up Device Owner privileges.
+        WhatsAppGuardConfig.save(context, WhatsAppGuardPolicy())
+        WhatsAppGuardWatchdogScheduler.reconcileSchedule(context)
+        check(WhatsAppGuardProtection.reconcile(context, WhatsAppGuardPolicy()) == "DISABLED") {
+            "Cannot disable WhatsApp Guard before releasing Device Owner"
+        }
+
         ManagedInstallWindow.forceClose(context)
         disableKiosk()
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
@@ -407,5 +444,6 @@ class PolicyEnforcer(private val context: Context) {
         }
 
         dpm.clearDeviceOwnerApp(context.packageName)
+        check(!isDeviceOwner()) { "Device Owner still active after release" }
     }
 }
