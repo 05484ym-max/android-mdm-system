@@ -355,6 +355,9 @@ function toCommand(row) {
   if (row.delivered_at) {
     entry.deliveredAt = row.delivered_at.toISOString();
   }
+  if (row.result_status) entry.resultStatus = row.result_status;
+  if (row.result_message) entry.resultMessage = row.result_message;
+  if (row.completed_at) entry.completedAt = row.completed_at.toISOString();
   return entry;
 }
 
@@ -424,7 +427,8 @@ async function listDevices() {
 
   // Every pending command, plus the five most recent delivered ones per device.
   const { rows: commandRows } = await pool.query(
-    `SELECT device_id, id, command, params, queued_at, delivered_at
+    `SELECT device_id, id, command, params, queued_at, delivered_at,
+            result_status, result_message, completed_at
        FROM (
          SELECT *, row_number() OVER (
                      PARTITION BY device_id, (delivered_at IS NULL)
@@ -1149,29 +1153,88 @@ async function queueCommand(deviceId, id, command, params) {
 
 /** Atomically hands the pending commands to the device and marks them delivered. */
 async function takePendingCommands(deviceId) {
+  // Retry only unacknowledged owner releases after a delivery lease.
+  // Never automatically replay WIPE, installation, or other commands.
   const { rows } = await pool.query(
-    `UPDATE commands
-        SET delivered_at = now()
-      WHERE device_id = $1 AND delivered_at IS NULL
-      RETURNING id, command, params, queued_at, delivered_at`,
+    `WITH eligible AS (
+       SELECT id, command, queued_at
+         FROM commands
+        WHERE device_id = $1
+          AND (
+            delivered_at IS NULL
+            OR (
+              command = 'RELEASE_DEVICE_OWNER'
+              AND result_status IS NULL
+              AND delivered_at < now() - interval '2 minutes'
+            )
+          )
+        FOR UPDATE SKIP LOCKED
+     ), selected_release AS (
+       SELECT id FROM eligible WHERE command = 'RELEASE_DEVICE_OWNER'
+       ORDER BY queued_at LIMIT 1
+     ), selected AS (
+       SELECT id FROM selected_release
+       UNION ALL
+       SELECT id FROM eligible WHERE NOT EXISTS (SELECT 1 FROM selected_release)
+     )
+     UPDATE commands AS c SET delivered_at = now()
+       WHERE c.id IN (SELECT id FROM selected)
+       RETURNING c.id, c.command, c.params, c.queued_at, c.delivered_at,
+                 c.result_status, c.result_message, c.completed_at`,
     [deviceId],
   );
   return rows.map(toCommand);
 }
 
-async function completeCommand(deviceId, commandId, status, message) {
+async function hasActiveReleaseCommand(deviceId) {
   const { rowCount } = await pool.query(
-    `UPDATE commands
-        SET result_status = $3,
-            result_message = $4,
-            completed_at = now()
-      WHERE id = $1
-        AND device_id = $2
-        AND delivered_at IS NOT NULL`,
-    [commandId, deviceId, status, message || null],
+    `SELECT 1 FROM commands
+      WHERE device_id = $1
+        AND command = 'RELEASE_DEVICE_OWNER'
+        AND result_status IS NULL
+      LIMIT 1`,
+    [deviceId],
   );
-
   return rowCount > 0;
+}
+
+async function completeCommand(deviceId, commandId, status, message) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `UPDATE commands
+          SET result_status = $3,
+              result_message = $4,
+              completed_at = now()
+        WHERE id = $1
+          AND device_id = $2
+          AND delivered_at IS NOT NULL
+        RETURNING command`,
+      [commandId, deviceId, status, message || null],
+    );
+    if (rows.length && rows[0].command === 'RELEASE_DEVICE_OWNER' && status === 'SUCCESS') {
+      // Commands not yet completed cannot run after ownership is relinquished.
+      await client.query(
+        `UPDATE commands
+            SET delivered_at = COALESCE(delivered_at, now()),
+                result_status = 'FAILED',
+                result_message = 'Cancelled: device management was released',
+                completed_at = now()
+          WHERE device_id = $1
+            AND id <> $2
+            AND result_status IS NULL`,
+        [deviceId, commandId],
+      );
+    }
+    await client.query('COMMIT');
+    return rows.length > 0;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // ---------- enrollments ----------
@@ -1943,6 +2006,7 @@ module.exports = {
   listDeviceHealth,
   getDeviceHealth,
   queueCommand,
+  hasActiveReleaseCommand,
   takePendingCommands,
   completeCommand,
   createEnrollment,
