@@ -694,9 +694,18 @@
 <div class="tab-content" data-tab-content="enroll">
   <div class="enroll-card">
     <h2>רישום מכשיר חדש</h2>
-    <button class="renew-btn" id="genCodeBtn">צור קוד רישום</button>
+    <button class="renew-btn" id="genCodeBtn">צור QR להתקנת מכשיר חדש</button>
     <div id="codeBox" class="code-box" style="display:none;"></div>
     <div class="enroll-code-actions"><button class="toggle-btn" id="copyEnrollCodeBtn" style="display:none;">העתק קוד</button></div>
+    <div id="provisioningQrSection" style="display:none; margin-top:18px; text-align:center;">
+      <div id="provisioningQrDetails" style="font-size:.88rem; margin:8px 0 12px; color:var(--text-dim);"></div>
+      <img id="provisioningQrImage" alt="QR להגדרת Device Owner במכשיר חדש" style="width:min(100%,380px); background:white; padding:8px; border:1px solid var(--card-border); border-radius:12px; image-rendering:pixelated;">
+      <div style="font-size:.8rem; margin:10px 0; color:var(--text-dim);">סרוק באמצעות אשף ההגדרה של Android. ה-QR כולל קוד רישום זמני — אין לשתף אותו בפומבי.</div>
+      <div class="enroll-code-actions" style="flex-wrap:wrap; gap:8px;">
+        <a class="toggle-btn" id="downloadProvisioningQrLink" download="yehudi-kasher-provisioning.png">שמור תמונת QR</a>
+        <button class="toggle-btn" id="copyProvisioningJsonBtn">העתק JSON</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -756,6 +765,7 @@
   </div>
 </div>
 
+<script src="/vendor/qrcode.js"></script>
 <script>
 let currentDetailDeviceId = null;
 
@@ -1494,15 +1504,89 @@ document.getElementById('copyEnrollCodeBtn').addEventListener('click', async () 
   }
 });
 
+// The server creates the token and validates the versioned APK metadata
+// together. Render locally: never send the enrollment token to a QR service.
+let currentProvisioningJson = '';
+
+function renderProvisioningQr(payload) {
+  if (typeof qrcode !== 'function') throw new Error('QR library unavailable');
+  const qr = qrcode(0, 'M');
+  qr.addData(payload, 'Byte');
+  qr.make();
+
+  const quietZone = 4;
+  const scale = 8;
+  const count = qr.getModuleCount();
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = (count + quietZone * 2) * scale;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas unavailable');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000000';
+  for (let row = 0; row < count; row++) {
+    for (let col = 0; col < count; col++) {
+      if (qr.isDark(row, col)) {
+        ctx.fillRect((col + quietZone) * scale, (row + quietZone) * scale, scale, scale);
+      }
+    }
+  }
+  return canvas.toDataURL('image/png');
+}
+
+document.getElementById('copyProvisioningJsonBtn').addEventListener('click', async () => {
+  if (!currentProvisioningJson) return;
+  try {
+    await navigator.clipboard.writeText(currentProvisioningJson);
+    alert('ה-JSON הועתק');
+  } catch (_) {
+    alert('לא ניתן להעתיק את הנתונים במכשיר הזה');
+  }
+});
+
 document.getElementById('genCodeBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('genCodeBtn');
   const box = document.getElementById('codeBox');
-  const res = await fetch('/api/enrollments', { method: 'POST' });
+  const section = document.getElementById('provisioningQrSection');
+  const copyCode = document.getElementById('copyEnrollCodeBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
   box.style.display = 'block';
-  if (!res.ok) { box.textContent = 'שגיאה'; return; }
-  const data = await res.json();
-  box.textContent = data.token;
-  box.dataset.rawToken = data.token;
-  document.getElementById('copyEnrollCodeBtn').style.display = 'inline-block';
+  box.textContent = 'מכין QR מעודכן...';
+  delete box.dataset.rawToken;
+  section.style.display = 'none';
+  copyCode.style.display = 'none';
+  currentProvisioningJson = '';
+
+  try {
+    const res = await fetch('/api/enrollments/provisioning', {
+      method: 'POST',
+      cache: 'no-store',
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.token || !data.provisioning || !data.expiresAt) {
+      throw new Error('Missing QR enrollment data');
+    }
+
+    const json = JSON.stringify(data.provisioning);
+    const image = renderProvisioningQr(json);
+    document.getElementById('provisioningQrImage').src = image;
+    document.getElementById('downloadProvisioningQrLink').href = image;
+    document.getElementById('provisioningQrDetails').textContent =
+      'גרסת APK: ' + data.versionCode +
+      ' | תוקף הקוד: ' + new Date(data.expiresAt).toLocaleString('he-IL');
+    box.textContent = data.token;
+    box.dataset.rawToken = data.token;
+    copyCode.style.display = 'inline-block';
+    currentProvisioningJson = json;
+    section.style.display = 'block';
+  } catch (err) {
+    box.textContent = 'יצירת QR נכשלה. ודא שקובץ ההתקנה והנתונים המעודכנים פורסמו בשרת.';
+    console.error('[provisioning-qr]', err);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 let allCategories = [];
