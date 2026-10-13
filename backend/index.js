@@ -26,6 +26,7 @@ const browserSiteSearch = require('./browserSiteSearch');
 const { publicBaseUrl } = require('./publicUrl');
 const safeRemoteImage = require('./safeRemoteImage');
 const imageModerationCache = require('./imageModerationCache');
+const { readLiveProvisioning, buildProvisioningPayload } = require('./provisioningQr');
 
 const app = express();
 app.use(express.json());
@@ -517,6 +518,35 @@ app.post('/api/enrollments', requireAdmin, wrap(async (req, res) => {
   const expiresAt = new Date(Date.now() + ENROLLMENT_TTL_MS);
   await db.createEnrollment(crypto.randomUUID(), sha256(token), expiresAt);
   res.json({ token, expiresAt: expiresAt.toISOString() });
+}));
+
+// Creates a single-use, time-limited enrollment token and the matching QR
+// payload from the APK metadata deployed on THIS server (not a stale panel).
+app.post('/api/enrollments/provisioning', requireAdmin, wrap(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!isSameOriginAdminMutation(req)) {
+    return res.status(403).json({ error: 'cross-site admin request rejected' });
+  }
+
+  let template;
+  try {
+    template = readLiveProvisioning();
+  } catch (err) {
+    console.error('[provisioning-qr] Could not validate live APK metadata:', err.message);
+    return res.status(503).json({ error: 'provisioning APK metadata unavailable or inconsistent' });
+  }
+
+  const token = generateEnrollmentCode();
+  const expiresAt = new Date(Date.now() + ENROLLMENT_TTL_MS);
+  const provisioning = buildProvisioningPayload(template, token);
+  await db.createEnrollment(crypto.randomUUID(), sha256(token), expiresAt);
+
+  res.json({
+    token,
+    expiresAt: expiresAt.toISOString(),
+    versionCode: template.versionCode,
+    provisioning,
+  });
 }));
 
 app.get('/api/enrollments', requireAdmin, wrap(async (req, res) => {
